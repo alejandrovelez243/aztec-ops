@@ -523,6 +523,55 @@ detail timeline appends live.
 }
 ```
 
+### `clock.ticked`
+
+The only topic that is not caused by a person. It exists because two prioritization signals —
+`deadline_pressure` and `staleness` — are functions of *now*, not of any mutation. A project
+crosses its target date, or goes stale, without anybody touching it, and a purely
+change-driven system never notices. The clock therefore has to be an explicit participant
+rather than an assumption.
+
+**Emitted by** the `ticker` compose service, on a fixed interval (`TICKER_INTERVAL_SECONDS`,
+default 300) and once at the local day boundary. It writes to the outbox like every other
+producer; it does not publish to Redis directly.
+
+**Payload**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `tick_at` | ISO-8601 | yes | The instant the tick represents. Consumers use this, never their own wall clock, so a replayed tick is deterministic. |
+| `kind` | `"interval"` \| `"day_boundary"` | yes | A day boundary additionally re-evaluates calendar-derived flags such as `IS_OVERDUE`. |
+
+`entity` is `{"type": "clock", "id": "system"}`. There is no project in scope: the consumer
+decides which projects a tick affects.
+
+**Consumed by** `priority-recalculator` and `risk-evaluator`. **SSE**: no. A tick itself is not
+a fact a view renders; the `project.priority.recalculated` and `project.risk.changed` events it
+produces are, and those reach the browser normally.
+
+**What the consumer does with it.** Recomputing all 22 projects on every tick would work at this
+size and would be the wrong shape at any other. Each `PriorityScore` persists `valid_until`: the
+earliest future instant at which a time-dependent signal changes bucket — the target date, the
+start of the final week, or the staleness threshold, whichever comes first. On a tick the
+consumer selects only `WHERE valid_until <= tick_at` and recomputes those. A quiet tick costs one
+index scan and emits nothing.
+
+```json
+{
+  "id": "0f2c9e5a-8d41-4a77-9c0e-7b2f3a51d6c4",
+  "topic": "clock.ticked",
+  "occurred_at": "2026-07-29T00:00:00Z",
+  "actor": "system",
+  "correlation_id": "0f2c9e5a-8d41-4a77-9c0e-7b2f3a51d6c4",
+  "entity": {"type": "clock", "id": "system"},
+  "payload": {"tick_at": "2026-07-29T00:00:00Z", "kind": "day_boundary"},
+  "version": 1
+}
+```
+
+The cost accepted: a score can be at most one tick stale with respect to time. Data changes,
+which are the ones a human just made and is watching for, still propagate immediately.
+
 ## 5. Consumer groups
 
 All four read the single stream `aztec.events` with `XREADGROUP`. One group per reason to react:
@@ -530,8 +579,8 @@ a group that fails does not stop the others, and no group is ever shared across 
 
 | Group | Subscribes to | What it does | Emits | Idempotency key |
 |---|---|---|---|---|
-| `priority-recalculator` | `project.created`, `project.updated`, `project.state_changed`, `task.created`, `task.state_changed`, `blocker.raised`, `blocker.resolved`, `note.added` | Recomputes `PriorityScore` for the affected project under the active `PriorityPolicy`, persisting `value`, `policy_version` and `breakdown` | `project.priority.recalculated`, only when value or breakdown changed | `(event.id, "priority-recalculator")` |
-| `risk-evaluator` | same set as above | Re-runs the risk specifications and rewrites the project's `RiskFlag` set; derives health from the flags | `project.risk.changed`, only when the flag set or health changed | `(event.id, "risk-evaluator")` |
+| `priority-recalculator` | `project.created`, `project.updated`, `project.state_changed`, `task.created`, `task.state_changed`, `blocker.raised`, `blocker.resolved`, `note.added`, `clock.ticked` | Recomputes `PriorityScore` for the affected project under the active `PriorityPolicy`, persisting `value`, `policy_version` and `breakdown` | `project.priority.recalculated`, only when value or breakdown changed | `(event.id, "priority-recalculator")` |
+| `risk-evaluator` | same set as above, including `clock.ticked` | Re-runs the risk specifications and rewrites the project's `RiskFlag` set; derives health from the flags | `project.risk.changed`, only when the flag set or health changed | `(event.id, "risk-evaluator")` |
 | `snapshot-builder` | every topic (§8 read model) | Rebuilds the `ProjectSnapshot` row for the project named by `entity.id` or `payload.project_code`: score, flags, owner load, task counts | nothing | `(event.id, "snapshot-builder")` |
 | `sse-fanout` | every topic on the allowlist | `PUBLISH aztec.sse` with the envelope unchanged, for `GET /api/stream` to frame | nothing | `(event.id, "sse-fanout")` |
 
@@ -542,8 +591,9 @@ Notes:
 - `priority-recalculator` and `risk-evaluator` do not consume the topics they emit. Derived
   topics feed only `snapshot-builder` and `sse-fanout`, which emit nothing — the graph has no
   cycle by construction.
-- Every topic is on the `sse-fanout` allowlist today, because all ten change something a view
-  renders. The allowlist still exists and defaults to off: a topic that only triggers internal
+- Every topic except `clock.ticked` is on the `sse-fanout` allowlist, because each of those ten
+  changes something a view renders. `clock.ticked` is the standing example of the opposite case: it
+  triggers recomputation and is never forwarded, since a browser has its own clock. The allowlist still exists and defaults to off: a topic that only triggers internal
   recomputation must not be forwarded, and a topic added to the fanout without being added to
   `frontend/src/lib/stream/topics.ts` is published, received and silently discarded.
 - Adding a group means adding a row here. A group that is not in this table is not deployed.
@@ -590,8 +640,8 @@ are seeing the newest fact.
    types and required flags, consumer groups, SSE, example payload using real dataset values.
    An undocumented topic does not exist — refuse to publish one.
 2. Add the line to the topic list in `docs/ARCHITECTURE.md` §6 and point it here.
-3. Declare the payload as a typed dataclass in `backend/apps/<context>/domain/events.py` — pure, no
-   Django import. `version` starts at 1.
+3. Declare the payload as a `pydantic.BaseModel` in `backend/apps/<context>/domain/events.py` — pure,
+   no Django import. `version` starts at 1.
 4. Emit it from `backend/apps/<context>/services/`, inside the same `transaction.atomic()` as the
    aggregate mutation and the `ActivityRecord`, reusing the request's `correlation_id`. If a
    module under `services/` imports `redis`, stop and fix that instead.

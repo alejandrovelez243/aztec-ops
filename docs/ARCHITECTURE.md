@@ -145,7 +145,42 @@ Every `PriorityScore` persists `value`, `policy_version`, `breakdown` (JSONB: ea
 raw value, its weight and its human-readable reason) and `computed_at`. The UI shows the "why"
 next to the number. That is what makes the ranking defensible.
 
-### 4.2 Manual override
+### 4.2 When scores are recomputed
+
+Recomputation is automatic. `make recompute` exists only for two bootstrap cases: right after
+seeding, and after activating a new `PriorityPolicy` version, when every score must be rebuilt
+against new weights. It is never part of normal operation.
+
+There are two triggers, because there are two ways a score can go stale.
+
+**Data changed.** Any project mutation writes an `OutboxEvent`; the `priority-recalculator`
+consumer group picks it up and recomputes that one project, then emits
+`project.priority.recalculated`, which reaches the browser through `sse-fanout`. This path is
+covered by the event flow in §6 and needs nothing extra.
+
+**Time passed.** `deadline_pressure` and `staleness` are functions of *now*, not of any event. A
+project can cross its target date, or go stale, without a single mutation. Nothing in an
+event-driven system notices that on its own, so a clock has to be an explicit participant:
+
+- A `ticker` service publishes `clock.ticked` on a fixed interval (default 5 minutes) and once at
+  the local day boundary. It is a compose service like the relay, not a cron on someone's laptop.
+- Recomputing all 22 projects on every tick would work at this size and would be the wrong shape
+  at any other. Instead each `PriorityScore` persists `valid_until`: the earliest future instant
+  at which any time-dependent signal would change bucket — the target date itself, the start of
+  the final week, or the staleness threshold, whichever comes first.
+- The `priority-recalculator` consumer reacts to `clock.ticked` by selecting only the projects
+  where `valid_until <= now`, and recomputing those. On a quiet tick that query returns nothing
+  and the tick costs one index scan.
+
+So a project that becomes overdue at midnight is re-scored, re-flagged, and pushed to any open
+browser within one tick, with no one running a command and no page refresh.
+
+The cost accepted: a score can be at most one tick out of date with respect to time. For a
+board read once a morning to decide a day's work, five minutes of clock drift is not a
+decision-changing error. Data changes, which are the ones a human just made and is watching for,
+propagate immediately rather than on the tick.
+
+### 4.3 Manual override
 
 `PriorityOverride(project, position | boost, reason, actor, expires_at)`. Reason is mandatory.
 It emits an `ActivityRecord` with verb `PRIORITY_CHANGED` and origin `MANUAL`, and the UI

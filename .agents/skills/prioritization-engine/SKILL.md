@@ -131,6 +131,36 @@ two or three, then the modifiers and flags. For example:
 Never justify a rank from the model fields directly. If the breakdown does not explain the
 number, the breakdown is the bug.
 
+## Code standards that bind here
+
+Normative: `docs/standards/BACKEND.md` and `docs/standards/PATTERNS_BACKEND.md` (§4 Strategy +
+Registry, §5 Specification, §9 Value Object). The three rules that bite hardest in this area:
+
+- **A new signal or risk criterion is a class plus a registry line, never a branch.**
+  `PATTERNS_BACKEND.md` §4 and `BACKEND.md` §4 (OCP): the evaluator iterates the registry and never
+  learns a signal's name. Checkable: the diff that adds a signal touches one new file under
+  `domain/signals/` plus one `PriorityPolicy` fixture row — `grep -n "signal_code ==" ` and
+  `grep -n "flag_code ==" ` over `backend/apps/prioritization/` must stay empty.
+- **No number that the operation may want to change lives in code.** `BACKEND.md` §3: weights come
+  from the active `PriorityPolicy.weights`, keyed by registered signal code. Structural thresholds
+  are `Final` named constants in `domain/` (`AGE_SATURATION_DAYS: Final[int] = 21`), never inline
+  literals. Checkable: no float literal outside a constant or a fixture in a strategy body.
+- **`domain/` is pure and strictly typed.** No Django import, no ORM access, no `datetime.now()`,
+  no `dict[str, Any]` crossing into a strategy — the input is the `SignalInput` /
+  `ProjectRiskInput` frozen Pydantic model, `SignalResult` is frozen too
+  (`PATTERNS_BACKEND.md` §9). `BaseModel` rather than a plain container because it is the same
+  type system django-ninja uses, so these objects reach the API without a parallel schema and are
+  validated at construction instead of at the boundary.
+  mypy strict covers `apps.*.domain.*`; a `cast()` here must be justified by a check in the same
+  function (`BACKEND.md` §1). `OwnerOverloaded` reads `subject.owner_load_points`, it does not
+  count tasks.
+
+Docstrings on every strategy and specification state the fact measured and the boundary values
+(`BACKEND.md` §2): "Overdue returns 1.0; a null `target_date` returns 0.5 and raises
+`NO_TARGET_DATE`." Tests in `tests/domain/` carry no `pytest.mark.django_db` and no factory, are
+named after the behaviour, and assert the `reason` / `detail` string as well as the number
+(`BACKEND.md` §7).
+
 ## Common mistakes
 
 - Hardcoding a weight inside a strategy, or reading it from a module constant instead of the
@@ -146,7 +176,7 @@ number, the breakdown is the bug.
   Compare against `priority.code` and `workflow_state.category`. Labels are Spanish data and
   are admin-editable.
 - Importing Django or a `Project` model instance into `domain/`. Strategies take a plain
-  dataclass input that already includes `now`.
+  Pydantic input model that already includes `now`.
 - Calling `datetime.now()` inside a strategy, which makes the test non-deterministic and the
   score non-reproducible.
 - Lowering the score for an overloaded owner, or decaying `blockage` with age. Both hide the
@@ -156,3 +186,21 @@ number, the breakdown is the bug.
   operation; after a seed or a policy change run `make recompute` explicitly.
 - Writing an override into `PriorityScore.value` "so the sorting is simpler". It destroys the
   audit trail and the UI can no longer label it as an override.
+- An unnamed numeric literal inside a strategy — `21`, `0.5`, `40` written inline. It becomes a
+  `Final` constant in `domain/` when it is structural, or a `PriorityPolicy` weight when the
+  operation must be able to change it (`BACKEND.md` §3).
+- Passing a `dict[str, Any]` into a strategy or specification instead of `SignalInput` /
+  `ProjectRiskInput`, or returning a bare `(float, str)` tuple where a frozen `SignalResult` with
+  its clamping invariant is expected (`BACKEND.md` §1, `PATTERNS_BACKEND.md` §9).
+- A specification that reaches for the ORM to get the fact it needs — `Task.objects.filter(...)`
+  inside `is_satisfied_by`. It breaks composition, LSP and every database-free test
+  (`BACKEND.md` §4). The caller loads the facts; the specification only decides.
+- A docstring on a strategy that paraphrases the signature ("Evaluates the signal.") instead of
+  naming the measured fact and its boundary values (`BACKEND.md` §2). Ruff `D` passes; review does
+  not.
+- Marking a domain test `@pytest.mark.django_db` or reaching for a factory to build a
+  `SignalInput`. The database belongs to integration tests: recompute, consumer idempotency,
+  policy load (`BACKEND.md` §7, `PATTERNS_BACKEND.md` §10).
+- Introducing a `BaseSignalEvaluator` ABC or a second `Protocol` layer over the registry. The
+  registry plus the existing protocol is the abstraction; anything above it is the premature
+  abstraction banned in `PATTERNS_BACKEND.md` §11.

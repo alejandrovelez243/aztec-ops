@@ -21,6 +21,10 @@ is wrong, this agent diagnoses it, reports the exact file and error, and hands b
 - `CLAUDE.md` — the `make` command list is normative.
 - Existing `docker-compose.yml`, `Dockerfile*`, `Makefile`, `.env.example`, `pyproject.toml`,
   `frontend/package.json` before editing any of them.
+- `docs/standards/BACKEND.md` §8 (the mechanical gate) — the exact `ruff`, `ruff format --check`
+  and `mypy` commands `make lint` must run, and §7 for what `make test` has to cover.
+- `docs/standards/PATTERNS_BACKEND.md` §1 (outbox) and §7 (consumer groups) — the process
+  split between `relay` and `worker` comes from those patterns, not from taste.
 
 ## Rules
 
@@ -49,6 +53,23 @@ is wrong, this agent diagnoses it, reports the exact file and error, and hands b
    must not be required for the image to run.
 10. Every Makefile target is idempotent or clearly destructive, and destructive ones say so in
     their name (`make down` stops; anything wiping volumes is a separate, explicit target).
+11. Dependencies are added by the tool's own CLI, never by hand-editing a manifest — `uv add` /
+    `uv add --dev` for Python, `npm install` or `npx astro add` for the frontend, run on the host
+    so the lockfile is written and committed. A Dockerfile installs from the committed lockfile
+    only (`uv sync --frozen`, `npm ci`); a `RUN pip install <pkg>`, a `RUN npm install <pkg>`, an
+    apt-installed Python package, or a version string typed into `pyproject.toml` or
+    `package.json` inside an image build is a defect, because the lockfile no longer describes
+    what ships. If a build needs a package that is not in the lockfile, stop and add it with the
+    CLI first.
+12. No Makefile target hides a non-zero exit code. No leading `-` on a recipe line, no
+    `|| true`, no `; exit 0`, no piping the real command into something whose status wins.
+    Multi-step recipes run under `set -e` semantics — one command per line, or `&&` between
+    them, never `;`. `make lint` runs `ruff check`, `ruff format --check` and `mypy apps` from
+    BACKEND.md §8 and fails if any of the three fails; `make test` fails if pytest fails.
+13. `make lint` and `make test` run the same commands in the container that CI and the developer
+    run, with no relaxed flags — no `--exit-zero`, no `--no-strict`, no ruff or mypy selection
+    narrowed in the Makefile. Configuration for those tools lives in `backend/pyproject.toml`;
+    a Makefile that overrides it lets code land that the gate would have rejected.
 
 ## Procedure
 
@@ -82,6 +103,14 @@ is wrong, this agent diagnoses it, reports the exact file and error, and hands b
 - [ ] `.env` is gitignored, `.env.example` is complete, `grep` finds no real credential.
 - [ ] No `platform:` pin and no amd64-only base image.
 - [ ] All eight Makefile targets exist and run.
+- [ ] No dependency was added by editing a manifest: `git diff` on `pyproject.toml`,
+      `uv.lock`, `frontend/package.json` and `package-lock.json` shows only CLI-generated
+      changes, and `uv lock --check` passes.
+- [ ] `grep -nE '^\t-|\|\| true|; *exit 0' Makefile` returns nothing; every recipe line is a
+      single command or an `&&` chain.
+- [ ] `make lint` runs `ruff check`, `ruff format --check` and `mypy apps` with no relaxing
+      flags; forcing one of the three to fail makes `make lint` exit non-zero, verified.
+- [ ] A deliberately failing test makes `make test` exit non-zero, verified.
 - [ ] Only infrastructure and documentation files were modified.
 
 ## Returns

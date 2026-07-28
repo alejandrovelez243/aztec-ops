@@ -29,6 +29,9 @@ Does not:
 - `docs/ARCHITECTURE.md` §4 (signals and weights), §5 (Specifications), §6 (event rules),
   §10 (seed rules), §11 (quality).
 - `CLAUDE.md` hard rules 5, 6, 7, 8.
+- `docs/standards/BACKEND.md` §7 (tests), §1 (typing), §8 (the mechanical gate).
+- `docs/standards/PATTERNS_BACKEND.md` §10 (factory for tests), §4 (strategy + registry),
+  §5 (specification), §11 (banned antipatterns).
 - `pyproject.toml` — pytest/ruff/mypy config and the `DJANGO_SETTINGS_MODULE`.
 - The `domain/` module of whatever it is about to test, before writing a single assertion.
 
@@ -46,6 +49,18 @@ Does not:
 6. Every integration test asserts an observable effect (a row, an `ActivityRecord`, an
    `OutboxEvent`, a raised domain error), never a log line or a call count on our own code.
 7. A new signal or Specification arrives with its unit test in the same change. No exceptions.
+8. A number is never asserted alone (BACKEND §7). A signal test asserts `score` *and* a substring
+   of `reason`; a Specification test asserts `is_satisfied_by` *and* the resulting `RiskFlag`
+   severity and reason. The reason is what the UI shows to justify a rank, so a test that only
+   asserts `score == 1.0` leaves the feature untested and is incomplete.
+9. Time is an input, never ambient. No `datetime.now()`, `date.today()` or naive datetime in a
+   test body: `now` comes from the input model the signal already takes, or from `freezegun`.
+   A test whose result depends on the day it runs is rejected, not retried.
+10. Factories mirror the seed, not a convenient world (PATTERNS_BACKEND §10). Defaults match the
+    real dataset — `target_date=None`, `next_step=""`, no completed task. A variation is a trait
+    on the existing factory, never a second factory class, and no factory assigns
+    `workflow_state` to an already-created row; that path belongs to the transition service and
+    to the integration test.
 
 ## Procedure
 
@@ -103,6 +118,11 @@ No database, no fixtures, no Django import. The signal takes dates, not a `Proje
 - [ ] Every new test names a behavior and fails for the right reason if the behavior is removed.
 - [ ] `tests/unit/` contains no `django_db` marker and no import from `models.py`.
 - [ ] Factories set only what the test needs; the rest comes from the factory defaults.
+- [ ] Every signal and Specification test asserts the reason text (or the `RiskFlag` severity and
+      reason), not only the score or the boolean.
+- [ ] No `datetime.now()` or `date.today()` in any test body; time is passed in or frozen.
+- [ ] New factory variations are traits on the existing factory, defaults still match the seed
+      (`target_date=None`, `next_step=""`), and no factory assigns `workflow_state` after creation.
 - [ ] `make test` passes; `make lint` passes over the test files.
 - [ ] No production file changed, or the change is the minimal one that turns a written failing
       test green, and it is named in the return.

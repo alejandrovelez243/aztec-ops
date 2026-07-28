@@ -7,6 +7,30 @@ description: How to lay out and write code inside an Aztec Ops Django app (domai
 
 Normative source: `docs/ARCHITECTURE.md` §6, §7, §8. This skill is the operational version of it.
 
+## Standards that bite when you cut the layers
+
+Binding: `docs/standards/BACKEND.md` and `docs/standards/PATTERNS_BACKEND.md`. Three rules decide
+whether a layering change is correct or only looks correct.
+
+1. **Repository return types are materialized and annotated** (BACKEND §1). Every repository
+   function has parameter and return annotations. A function annotated `-> list[Blocker]` returns
+   `list(...)`, never the lazy `QuerySet` — otherwise the query runs in the caller's layer and the
+   annotation is false. Never return a `QuerySet` a service can extend; that moves the query back
+   out of `repositories.py` (PATTERNS §2).
+2. **A service protects an invariant or it should not exist** (PATTERNS §11). One public function
+   per module, `@transaction.atomic`, keyword-only args, `now` and `correlation_id` passed in, and
+   at minimum one of: a typed domain error raised, an `ActivityRecord`, an `OutboxEvent`. A function
+   that only forwards fields to `Model.objects.update()` is an ORM passthrough — delete the layer or
+   find the missing rule.
+3. **`domain/` is importable with Django uninstalled** (BACKEND §4 DIP). No `import django`, no
+   `apps.*` import outside its own package, no `.objects`, no `timezone.now()`. mypy runs strict
+   over `domain/` and `services/`: no bare `Any` without an adjacent reason comment, no `cast()`
+   asserting something the surrounding code has not established.
+
+Checkable before you commit: `uv run --project backend mypy apps` passes; the §7 grep table below
+returns nothing; every new `services/` module exports exactly one public function; every new
+`repositories.py` function has a return annotation matching what it actually returns.
+
 ## App layout
 
 ```
@@ -26,9 +50,12 @@ What goes where:
 
 - `domain/` — pure Python. Risk specifications (`IsBlocked`, `HasNoNextStep`), prioritization
   signal strategies, `PriorityPolicy` weight math, typed errors (`TransitionNotAllowed`,
-  `ReasonRequired`), event topic constants. Takes plain values or dataclasses, never model
+  `ReasonRequired`), event topic constants. Takes plain values or Pydantic models, never model
   instances that it queries through. No `import django`, no `.objects`, no `timezone.now()` —
-  pass `now` in.
+  pass `now` in. Value objects are `BaseModel` (frozen ones with
+  `model_config = ConfigDict(frozen=True)`) because django-ninja already speaks that type system:
+  a domain object reaches the API without a parallel schema restating its fields, and it is
+  validated at construction rather than at the boundary.
 - `models.py` — fields, `Meta`, `__str__`, `constraints`, `indexes`. A `@property` that reads
   already-loaded fields is fine (`Blocker.is_open`). A method that hits the database or decides
   business outcomes is not.
@@ -179,7 +206,8 @@ from — not from a mock repository.
   Use `ninja.Schema` with plain fields; if you need the shape of a model, describe it explicitly.
 - **`domain/` importing Django.** `from django.utils import timezone` inside a specification, or a
   strategy that receives a `Project` model and calls `project.tasks.filter(...)`. Pass an already
-  materialized dataclass / plain values in; the domain must run under `pytest` with no database.
+  materialized Pydantic model / plain values in; the domain must run under `pytest` with no
+  database.
 - **Django signals as an event bus.** `post_save` on `Project` that publishes or recalculates.
   Signals fire outside the use case's intent, run inside someone else's transaction, and are
   invisible in the outbox. Every event is written explicitly by the service.
@@ -193,3 +221,25 @@ from — not from a mock repository.
   `ProcessedEvent` and returns early if it was already processed.
 - **Comparing against labels.** `if state.label == "Bloqueado"`. Compare `state.category` or
   `code`; labels are Spanish data edited from the admin.
+- **A repository that returns a lazy queryset behind a `list` annotation.**
+  `def open_blockers(...) -> list[Blocker]: return Blocker.objects.filter(...)`. The type checker is
+  satisfied and the query still executes in the service, the router or the template. Wrap in
+  `list(...)` (BACKEND §1), or annotate `QuerySet[Blocker]` and accept that the caller can extend
+  it — which is itself banned by PATTERNS §2.
+- **A service that is an ORM passthrough.** `def update_project(code, **fields)` calling
+  `.update(**fields)`. No validation, no `ActivityRecord`, no outbox row: the layer enforces nothing
+  and the audit trail loses the change (PATTERNS §11).
+- **`timezone.now()` or `datetime.now()` inside a service body.** `now` is a keyword parameter, so
+  the use case is deterministic under test and under replay (PATTERNS §3). The same rule kills
+  `date.today()` in a value object.
+- **Missing annotations in the layer you just created.** `ANN` is on: every argument and every
+  return, including `-> None`, in `domain/`, `repositories.py`, `services/`, `api/`, `consumers/`
+  and test helpers. A bare `Any` needs an adjacent comment naming the reason (JSONB payload,
+  stub gap, `**kwargs`).
+- **A `Protocol` or ABC for a repository with one implementation.** Services import
+  `apps.<context>.repositories` as a module. The interface is the method set; extract an abstraction
+  when the second implementation exists, not before (PATTERNS §11).
+- **A docstring that paraphrases the signature.** Public service functions, repository functions,
+  specifications, signal strategies and consumer handlers need Google-style docstrings stating the
+  invariant, the failure mode and the `Raises:` list — not "Transitions a project. Args: project_code:
+  The project code." (BACKEND §2).

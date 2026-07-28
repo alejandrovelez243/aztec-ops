@@ -6,6 +6,9 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    "django-stubs>=6.0.7",
+    "django-stubs-ext>=6.0.7",
+    "mypy>=2.3.0",
     "pre-commit>=4.6.1",
     "ruff>=0.16.0",
 ]
@@ -26,13 +29,61 @@ select = [
     "DJ",       # flake8-django
     "SIM",      # simplify
     "TC",       # type-checking blocks
+    "ANN",      # every function annotated, return type included
+    "D",        # docstrings
+    "S",        # security (bandit)
+    "PT",       # pytest style
+    "RET",      # return / guard-clause hygiene
+    "ARG",      # unused arguments
+    "ERA",      # commented-out code
+    "PL",       # pylint subset: too many args / branches / statements
+    "TRY",      # exception antipatterns
     "RUF",
 ]
-ignore = ["E501"]  # line length is enforced by the formatter, not the linter
+ignore = [
+    "E501",          # line length is the formatter's job, not the linter's
+    "ANN401",        # Any is allowed where a comment justifies it
+    "D107",          # __init__ is documented on the class, not the method
+    "D203", "D213",  # incompatible with the chosen docstring layout
+]
 
 [tool.ruff.lint.per-file-ignores]
-"*/migrations/*" = ["E501", "RUF012"]
-"*/tests/*" = ["S101"]
+# Generated code is not ours to document or format-police.
+"*/migrations/*" = ["E501", "RUF012", "D", "ANN", "ARG"]
+# In tests, assert is the point and the test name documents the behaviour better than a docstring.
+"*/tests/*" = ["S101", "D103", "PLR2004"]
+"conftest.py" = ["D"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = ["django.db.models.Model", "ninja.Schema", "pydantic.BaseModel"]
+
+[tool.ruff.lint.pylint]
+max-args = 6
 
 [tool.ruff.lint.isort]
 known-first-party = ["apps", "config"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+show_error_codes = true
+plugins = ["mypy_django_plugin.main"]
+exclude = ["migrations/"]
+
+# domain/ and services/ are what the strictness is for. The rest is still checked, but in these
+# two an untyped escape hatch is a defect rather than a shortcut.
+[[tool.mypy.overrides]]
+module = ["apps.*.domain.*", "apps.*.services.*"]
+disallow_any_explicit = true
+disallow_any_generics = true
+
+[[tool.mypy.overrides]]
+module = ["*.migrations.*", "*.tests.*"]
+ignore_errors = true
+
+[tool.django-stubs]
+django_settings_module = "config.settings.local"

@@ -73,7 +73,7 @@ Then bring the system up:
 ```bash
 cp .env.example .env
 
-make up                                             # postgres, redis, api, relay, worker, frontend
+make up                                             # postgres, redis, api, relay, worker, ticker, frontend
 docker compose exec api python manage.py migrate
 make seed                                           # loaddata fixtures + recompute scores
 docker compose exec api python manage.py createsuperuser
@@ -252,8 +252,8 @@ ones above it. Owning skill: `.agents/skills/django-clean-arch/`. Worked example
 1. **`backend/apps/<context>/domain/errors.py`** — the typed error the use case can raise
    (`BlockerAlreadyResolved(DomainError)`). Pure Python, no Django import. It is mapped to HTTP
    later by the central handler, never caught in a view.
-2. **`backend/apps/<context>/domain/events.py`** — the topic constant, and the typed payload dataclass if
-   the topic is new. Reuse the spellings listed in `ARCHITECTURE.md` §6; do not invent a variant.
+2. **`backend/apps/<context>/domain/events.py`** — the topic constant, and the typed payload model (a
+   `pydantic.BaseModel`) if the topic is new. Reuse the spellings listed in `ARCHITECTURE.md` §6; do not invent a variant.
 3. **`backend/apps/<context>/models.py` + migration** — only if the use case needs a field that does not
    exist. Fields, constraints, indexes. No business rules on the model.
 4. **`backend/apps/<context>/repositories.py`** — the query the service needs, with its
@@ -336,7 +336,7 @@ Owning skill: `.agents/skills/event-driven-flow/`.
 1. Name the topic `<entity>.<event>` or `<entity>.<aspect>.<event>` — lowercase, dot-separated,
    past tense — and add it to the topic list in `docs/ARCHITECTURE.md` §6 **in the same commit**.
    An undocumented topic is invisible to whoever writes the next consumer.
-2. Declare the payload as a typed dataclass in `backend/apps/<context>/domain/events.py`, `version: 1`.
+2. Declare the payload as a `pydantic.BaseModel` in `backend/apps/<context>/domain/events.py`, `version: 1`.
    `entity.id` is the business code (`PRJ-01`), never a primary key. Adding an optional field
    keeps the version; removing or retyping one means `version: 2` and a consumer that handles
    both until nothing emits 1.

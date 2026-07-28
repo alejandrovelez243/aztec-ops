@@ -24,6 +24,33 @@ a separate process that reads unpublished rows with `SELECT ... FOR UPDATE SKIP 
 publishes them. If it crashes mid-publish the row is still unpublished and gets republished —
 which is exactly why delivery is at-least-once and consumers must be idempotent.
 
+## Standards that bind here
+
+`docs/standards/BACKEND.md` and `docs/standards/PATTERNS_BACKEND.md` are normative for every file
+touched in this flow: `domain/events.py`, `services/`, `consumers/`, the relay and the DLQ. Three
+rules bite hardest here.
+
+**Typed envelope, not loose dicts** (BACKEND §1, PATTERNS §1). The envelope and each topic payload
+are frozen Pydantic models (`model_config = ConfigDict(frozen=True)`) in
+`backend/apps/<context>/domain/events.py`, annotated end to end. The only `dict[str, Any]` allowed
+is the `OutboxEvent.payload` JSONB column itself, and a consumer parses it into the topic's model
+at the first line that reads it — no `envelope["payload"]["from"]` reaching into a handler body, no
+`Any` without an adjacent comment naming the JSONB reason. `BaseModel` is the same type system
+django-ninja already uses, so an envelope or payload crosses to the API without a parallel schema
+restating its fields, and a malformed payload fails at construction rather than at the boundary.
+
+**No bare `except`, nothing swallowed** (BACKEND §5, `BLE` in ruff). Services and repositories never
+catch `Exception`. The consumer boundary is the one permitted catch-all, and only in the full shape:
+log with `event_id` and consumer group, publish to `aztec.events.dlq`, `XACK` in `finally`.
+`except IntegrityError` on the `ProcessedEvent` claim is the only silent path, and only after a
+debug log plus the ack. `except: pass` and `except: return None` fail review anywhere in this flow.
+
+**The docstring states the idempotency key** (BACKEND §2). Every consumer handler is a public
+symbol, so the docstring is mandatory and must say what the signature cannot: the topic consumed,
+the dedup key `(event_id, consumer_group)`, what the effect is, and what happens on the duplicate
+path. A docstring that says "Handles the event" is a missing docstring. Payload models state
+their `version` and what a bump means.
+
 ## Checklist
 
 ### 1. Name the topic and document it
@@ -58,8 +85,8 @@ The envelope is fixed; only `payload` changes per topic.
 }
 ```
 
-Declare the payload as a typed dataclass in `backend/apps/<context>/domain/events.py` (pure, no Django
-import). `version` starts at 1. Adding an optional field keeps the version; removing or
+Declare the payload as a typed Pydantic model in `backend/apps/<context>/domain/events.py` (pure, no
+Django import). `version` starts at 1. Adding an optional field keeps the version; removing or
 retyping a field means `version: 2` and a consumer that handles both until nothing emits 1.
 `entity.id` is the business code (`PRJ-01`), not the database primary key — consumers in other
 contexts must not need a FK into your models.
@@ -178,3 +205,12 @@ that payload. Everything empty and the UI still stale → the service never wrot
 - Using the primary key in `entity.id` instead of the business code, coupling contexts.
 - Adding a topic to `sse-fanout` without adding it to the frontend store — published, received,
   ignored.
+- **Untyped envelope.** A payload passed around as `dict[str, Any]` past the layer that reads the
+  JSONB column, or a handler indexing `envelope["payload"]["from"]` instead of a model field.
+  The field names are then invisible to the next consumer and to mypy (BACKEND §1).
+- **`except Exception` outside the consumer boundary** — in a service, a repository, the relay's
+  claim query. And at the boundary, a catch-all that skips one of log, DLQ, `XACK`: each omission
+  loses the failure, the evidence or the slot (BACKEND §5).
+- **Handler docstring that paraphrases the signature.** No topic named, no `(event_id,
+  consumer_group)` key stated, no duplicate-path behaviour. `ruff D` passes on it and a reviewer
+  still cannot tell whether the handler is idempotent (BACKEND §2).

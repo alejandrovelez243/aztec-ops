@@ -60,8 +60,10 @@ strategy returning `(score_0_1, reason)`:
   contribution and human-readable reason) next to `value` and `computed_at`. The UI renders the
   number and its breakdown in the same glance.
 - No LLM, no randomness, no `datetime.now()` inside a strategy. Time enters as an explicit `now`
-  on the input dataclass. Strategies import neither Django nor another app and are unit-tested
-  with no database.
+  on the input model. Strategies import neither Django nor another app and are unit-tested
+  with no database. `SignalInput` and `SignalResult` are Pydantic models — the same type system
+  django-ninja uses, so a breakdown reaches the API without a parallel schema restating its
+  fields, and it is validated when it is constructed rather than at the boundary.
 - A manual `PriorityOverride` requires a reason, is recorded as `PRIORITY_CHANGED` with origin
   `MANUAL`, and is labelled as an override in the UI. It is never written into
   `PriorityScore.value` and never styled like a computed score.

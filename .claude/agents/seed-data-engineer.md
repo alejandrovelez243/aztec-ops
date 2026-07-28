@@ -23,6 +23,9 @@ change required — do not invent a field in the fixture.
 ## Read first
 
 - `docs/ARCHITECTURE.md` §3 (domain model), §10 (seed data), §11 (quality).
+- `docs/standards/BACKEND.md` — §1 typing, §3 naming/comments/magic numbers, §5 error handling.
+- `docs/standards/PATTERNS_BACKEND.md` — §9 value object, §10 factory for tests,
+  §11 banned antipatterns (god `utils` module).
 - `CLAUDE.md` hard rules 1, 3 and 9.
 - The `models.py` of every app you emit fixtures for, to confirm field names and FKs.
 - The source `.xlsx` (read-only) to confirm column values before mapping them.
@@ -67,6 +70,25 @@ change required — do not invent a field in the fixture.
     stored.
 12. Fixture JSON is committed. The generator's output is reviewed as a diff — never a blob
     regenerated blindly.
+13. The generator is annotated like application code (`BACKEND.md` §1): every function has
+    parameter and return types including `-> None`, and `ruff` `ANN` runs over
+    `backend/scripts/`. A parsed sheet row crosses between the two passes as a frozen Pydantic
+    model (`class ParsedRow(BaseModel)` with `model_config = ConfigDict(frozen=True)`,
+    `PATTERNS_BACKEND.md` §9), not as a `dict[str, Any]` or a tuple. Pydantic because it is the
+    same type system the rest of the backend uses and the row is validated the moment it is
+    built, so a bad cell fails at the sheet it came from. `Any` appears only on the raw
+    openpyxl cell value, with the adjacent comment §1 requires.
+14. No magic column indices and no magic literals. Columns are addressed by a named constant
+    or by header name resolved once into a `Final[dict[str, int]]` — `row[7]` is banned.
+    The blocker-keyword table, the null-token set (`'None'`, `''`, `'N/A'`, `'-'`), the fixed
+    SEEDED `occurred_at` and every separator string are module-level `Final` constants with
+    intent-revealing names (`BACKEND.md` §3), declared once at the top of the script.
+15. Every coercion that silently changes a source value carries a `why` comment naming the
+    spreadsheet quirk it works around — which sheet, which column, which observed value —
+    per `BACKEND.md` §3 ("comments explain why"). A coercion with no such comment is deleted
+    or promoted to a hard error. No `except Exception`, no `except ...: pass`, no
+    `try: parse_date(x) except: None` (`BACKEND.md` §5): an unparseable or unmapped value
+    raises with sheet, row number, column name and the verbatim value.
 
 ## Procedure
 
@@ -104,6 +126,17 @@ change required — do not invent a field in the fixture.
 - [ ] Every seeded entity has exactly one `ActivityRecord` with `verb: SEEDED`.
 - [ ] The coverage checklist from step 5 is satisfied, or the gaps are named.
 - [ ] `make lint` passes on the generator; the generator is not imported by any app module.
+- [ ] `ruff check` with `ANN` and `mypy` pass on `backend/scripts/xlsx_to_fixtures.py`: no
+      unannotated function, no bare `Any` without its reason comment.
+- [ ] Parsed rows travel as frozen Pydantic models; `grep` for `dict[str, Any]` in the generator
+      returns nothing outside the raw-cell read.
+- [ ] `grep -nE 'row\[[0-9]+\]|\[[0-9]+\]\s*#?' ` finds no positional column access; every
+      column is reached through a named constant or the header map.
+- [ ] The keyword table, null tokens, separators and the fixed `occurred_at` are `Final`
+      module constants, each used at least once and defined exactly once.
+- [ ] Every coercion site has a comment naming the sheet, column and source value it handles.
+- [ ] No `except Exception`, no bare `except`, no `except ...: pass` in the generator; an
+      unmapped or unparseable value raises with sheet, row, column and the raw value.
 
 ## Returns
 

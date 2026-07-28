@@ -23,7 +23,11 @@ Not in scope, hand back instead:
 
 1. `docs/ARCHITECTURE.md` §6 (event flow, envelope, topic list, rules), §7 (layers), §8 (read side).
 2. `CLAUDE.md` hard rules 4 and 5.
-3. Existing code before touching it: the outbox app's `models.py`, the relay entry point, and
+3. `docs/standards/BACKEND.md` §1 (typing, Pydantic models across boundaries), §2 (docstrings),
+   §5 (error handling, the consumer-boundary exception).
+4. `docs/standards/PATTERNS_BACKEND.md` §1 (transactional outbox), §7 (pub/sub with consumer
+   groups, idempotency, DLQ), §11 (banned antipatterns — Django signals as an event bus).
+5. Existing code before touching it: the outbox app's `models.py`, the relay entry point, and
    every `consumers/` package under `backend/apps/`.
 
 ## Rules
@@ -48,6 +52,24 @@ Not in scope, hand back instead:
 9. The envelope shape is fixed. New fields go inside `payload`. Changing the top level means
    bumping `version` and handling both versions in consumers.
 10. `entity.id` carries the business identifier (`PRJ-01`), not the database primary key.
+11. `except Exception` exists in exactly one place on this path: the consumer boundary shown in
+    the loop below, and only in the form `logger.exception(...)` + DLQ route + `XACK`
+    (`BACKEND.md` §5). Anywhere else on the path — the relay claim loop, `decode_envelope`,
+    `retry_or_dlq`, the SSE fanout publisher — catch the specific exception. Never
+    `except ...: pass` and never `except ...: return None`. A handler error that neither reaches
+    `aztec.events.dlq` nor stays unacked has been swallowed; that is a defect, not a retry.
+12. The envelope crosses the relay/consumer boundary as a frozen Pydantic model (`Envelope`, with
+    `model_config = ConfigDict(frozen=True)`), never as `dict[str, Any]`. `decode_envelope` is the
+    only place the raw mapping exists and it returns `Envelope`; `payload` stays `dict[str, Any]`
+    because it is the JSONB column, and the handler parses it into a typed value object before
+    using it (`BACKEND.md` §1). A handler signature typed
+    `def handle(event: dict[str, Any]) -> None` is rejected. `BaseModel` rather than a plain
+    container because it is the same type system django-ninja already uses — the envelope reaches
+    the API without a parallel schema restating its fields, and a malformed envelope fails at
+    construction instead of deep inside a handler.
+13. Every consumer handler carries a Google-style docstring naming its consumer group, the topics
+    it consumes, its idempotency key (`(event_id, consumer_group)`) and what happens on the DLQ
+    path. "Handles the event" is not a docstring (`BACKEND.md` §2).
 
 ## Envelope
 
@@ -113,6 +135,15 @@ the event has been pushed to `aztec.events.dlq` and may be acked.
       `aztec.events.dlq` after the retry budget.
 - [ ] Every failure path logs topic, `event.id` and exception. Nothing returns silently.
 - [ ] Any new topic appears in `docs/ARCHITECTURE.md` §6 in this change.
+- [ ] `grep -rn "except Exception" backend/apps/*/consumers backend/apps/events` returns only
+      consumer-boundary catches that log with `event_id` and group, route to the DLQ and ack.
+      No `except ...: pass`, no `except ...: return None` anywhere on the path.
+- [ ] Every failure branch either reaches `aztec.events.dlq` or leaves the entry unacked for
+      redelivery. Named which one, per branch touched.
+- [ ] Handler and relay signatures take `Envelope`, not `dict[str, Any]`; only `payload` is a
+      mapping, and it is converted before use.
+- [ ] Each consumer touched has a docstring stating group, topics, idempotency key and DLQ
+      behaviour.
 - [ ] Idempotency test present and passing; `make test` and `make lint` clean.
 
 ## Returns

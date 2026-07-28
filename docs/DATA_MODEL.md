@@ -350,6 +350,14 @@ silently rewrites the meaning of every score already persisted against it.
 | `modifier_total` | `numeric(4,2)` | no | `1.00` | — | Product of the applied modifiers, so `value` is reconstructible from `breakdown`. |
 | `computed_at` | `timestamptz` | no | — | — | Set by the recalculator, not `auto_now`, so a replay does not invent a new time. |
 | `input_hash` | `varchar(64)` | no | `''` | — | Hash of the `SignalInput` that produced the value. Equal hash plus equal `policy_version` means recomputation is a no-op — this is what makes the recalculator cheap under at-least-once delivery. |
+| `valid_until` | `timestamptz` | yes | `null` | `(valid_until)` | The earliest future instant at which a time-dependent signal changes bucket — the target date, the start of the final week, or the staleness threshold, whichever comes first. Null means no time signal can move on its own. This is what `clock.ticked` selects on. |
+
+**Why `valid_until` exists.** `deadline_pressure` and `staleness` are functions of *now*, so a
+score can go stale with no event to trigger a recompute. The `ticker` service emits `clock.ticked`
+on an interval and the recalculator selects `WHERE valid_until <= tick_at`, recomputing only the
+projects whose clock actually moved. Recomputing all 22 rows every tick would also work at this
+size and would be the wrong shape at any other; the index on `valid_until` makes a quiet tick cost
+one scan and produce nothing.
 
 **Score history is not kept here.** One row per project, overwritten on recompute. Every change is
 already appended to `ActivityRecord` with verb `PRIORITY_CHANGED`, `from_value`, `to_value` and the

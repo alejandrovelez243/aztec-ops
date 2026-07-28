@@ -27,6 +27,10 @@ exist, ask for it via the `frontend-craft` skill instead of inventing a look.
 - `CLAUDE.md` — language and conventions.
 - `docs/DESIGN_BRIEF.md` plus the token file it points to.
 - `frontend/src/lib/api/types.ts` and the ninja schemas the client mirrors, before adding any call.
+- `docs/standards/FRONTEND.md` — TS strict flags, generated API types, view-state unions, JSDoc,
+  component/prop rules, hydration table, tokens, a11y.
+- `docs/standards/PATTERNS_FRONTEND.md` — islands, observable store, API adapter, view-state
+  machine, container/presentational split, SSR plus live patch, data-driven rendering.
 
 ## Rules
 
@@ -55,6 +59,25 @@ exist, ask for it via the `frontend-craft` skill instead of inventing a look.
    connection status and, after reconnect, refetches the affected resource because SSE is
    at-least-once and the client may have missed events while offline.
 9. TypeScript strict. No `any` in `frontend/src/lib/`. Every API response has a declared type.
+10. **View state is one discriminated union, never independent booleans.** The four mandatory
+    states of rule 4 live in `frontend/src/lib/view-state.ts` as
+    `{ kind: "loading" | "ready" | "empty" | "error" | "disconnected" }`, switched exhaustively
+    with an `assertNever` default. `isLoading` next to `hasError`, or `disconnected` folded into
+    `error`, is a rejection. `disconnected` carries the last known data plus its timestamp — the
+    board stays on screen marked stale, it does not blank (FRONTEND.md §1, PATTERNS_FRONTEND.md §4).
+11. **API types are generated, never hand-written, and never asserted away.** Domain aliases
+    derive from `components["schemas"][...]` in the generated `frontend/src/lib/api/types.ts`;
+    a local `interface QueueItem` duplicating a generated shape is a rejection, and a missing
+    field is a backend schema change handed to `api-engineer`. No `any`, no `as` to silence the
+    compiler, no `!`. `noUncheckedIndexedAccess` makes `items[0]`, `breakdown[0]` and
+    `transitions[0]` possibly `undefined` — narrow to the empty view state instead of asserting
+    (FRONTEND.md §1, PATTERNS_FRONTEND.md §3).
+12. **Containers fetch, presentational components render.** Nothing in
+    `frontend/src/components/` imports `lib/api/client` or `lib/stream/store`; pages fetch in
+    frontmatter for first paint, islands patch. An island never refetches what the server already
+    rendered — it reads the DOM and applies field-level patches, dropping any envelope whose
+    `occurred_at` is not newer than the row's rendered `updated_at`. Props are the narrowest data
+    used, not the whole `QueueItem` (FRONTEND.md §3, PATTERNS_FRONTEND.md §5, §6).
 
 ## Procedure
 
@@ -131,6 +154,20 @@ export function reconnectNow() { attempt = 0; connect(); }
       working retry.
 - [ ] Only live regions carry a `client:*` directive.
 - [ ] No hardcoded state names, colors or labels.
+- [ ] Every view state is an arm of a `kind` union, switched exhaustively with an `assertNever`
+      default; no `isLoading`/`hasError` pair; `disconnected` keeps its data and is a separate arm
+      from `error`.
+- [ ] No hand-written response interface: every API type resolves to `lib/api/types.ts`, and
+      `npm run gen:api && git diff --exit-code src/lib/api/types.ts` is clean.
+- [ ] `grep -rn "\bany\b\|![.)]\| as " frontend/src` shows no `any`, no non-null assertion and no
+      compiler-silencing `as`; empty collections are handled as a view state.
+- [ ] No import of `lib/api` or `lib/stream` under `frontend/src/components/`; no island fetching
+      its own initial data; patches compare `occurred_at` against the rendered `updated_at`.
+- [ ] Every `client:*` directive sits on a component that subscribes to the store or handles an
+      event; none exists only to render static text.
+- [ ] `grep -rn "#[0-9A-Fa-f]\{3,6\}" frontend/src --include=*.astro` returns nothing outside
+      `styles/tokens.css`, and no object literal in `frontend/src` is keyed by a state, risk,
+      signal or priority code.
 - [ ] `npx tsc --noEmit` and `npm run build` pass in `frontend/`.
 
 ## Returns

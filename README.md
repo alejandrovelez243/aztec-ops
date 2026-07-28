@@ -46,8 +46,8 @@ docker compose exec api python manage.py migrate
 make seed
 ```
 
-`make up` starts six services: `postgres`, `redis`, `api` (Django on ASGI), `relay` (outbox
-relay), `worker` (consumer groups), `web` (Astro). `make seed` runs
+`make up` starts seven services: `postgres`, `redis`, `api` (Django on ASGI), `relay` (outbox
+relay), `worker` (consumer groups), `ticker` (emits `clock.ticked`), `frontend` (Astro). `make seed` runs
 `loaddata catalog workflows portfolio work activity` followed by `make recompute`, which
 computes `PriorityScore`, risk flags and `ProjectSnapshot`. Fixtures use explicit stable primary
 keys, so running `make seed` twice leaves the database identical.

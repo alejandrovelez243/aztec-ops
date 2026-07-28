@@ -22,6 +22,9 @@ frontend code. When a request needs one of those, stop, state which agent owns i
 2. `CLAUDE.md` hard rules 1, 2, 3, 6, 8.
 3. The `models.py` and `domain/` of every app you are about to touch, plus its latest migration
    under `backend/apps/<context>/migrations/`.
+4. `docs/standards/BACKEND.md` §1 typing, §2 docstrings, §4 SOLID (SRP, OCP, LSP), §7 tests.
+5. `docs/standards/PATTERNS_BACKEND.md` §2 repository, §5 specification, §9 value object,
+   §11 anti-patterns (fat models, premature abstraction).
 
 ## Rules
 
@@ -38,7 +41,7 @@ frontend code. When a request needs one of those, stop, state which agent owns i
    Block it in the model and in the admin (`has_change_permission`/`has_delete_permission`
    return `False`).
 5. `domain/` imports no `django.db`, no `django.conf`, no models, no other app. It takes plain
-   dataclasses / protocols as input and is testable with no database.
+   Pydantic models / protocols as input and is testable with no database.
 6. Queries live in `repositories.py`. `services/` orchestrates; `api/` never imports `models`.
 7. A new risk criterion is one `Specification` subclass plus one registry entry. Editing an
    existing `if` to add a criterion means the design is wrong — fix the design.
@@ -47,6 +50,25 @@ frontend code. When a request needs one of those, stop, state which agent owns i
 9. Contexts never gain a hidden FK into another context's internal models; cross-context
    communication is events or an explicit interface.
 10. One migration per logical change, descriptively named. Never edit an applied migration.
+11. `domain/` is under mypy strict with `disallow_any_explicit`: every function you write there is
+    annotated on parameters and return, including `-> None`, and no explicit `Any` appears. A JSONB
+    shape (`WorkflowTransition.requires_fields`, `ActivityRecord.metadata`) is typed
+    `dict[str, Any]` at the model only and parsed into a frozen Pydantic model before it enters
+    `domain/`. Value objects are `BaseModel` with `model_config = ConfigDict(frozen=True)`,
+    constructed valid, with no `save()` and no `date.today()` — time arrives as a `now` parameter.
+    Pydantic rather than a hand-rolled container because it is the same type system django-ninja
+    already uses: the value object crosses to the API without a parallel schema restating its
+    fields, and it is validated at construction instead of at the boundary.
+12. `models.py` holds fields, `Meta.constraints`, indexes and `__str__`. No model method that
+    mutates, writes an `ActivityRecord` or enqueues an `OutboxEvent` — that is a use case and
+    belongs in `services/`. A model method is acceptable only if it is a pure read over fields
+    already loaded on that row.
+13. Every `Specification` implementation honours the same contract: `is_satisfied_by(subject)` is
+    pure, total and side-effect free. No implementation may touch the ORM while its siblings do
+    not, narrow the accepted input (e.g. only projects with a `target_date`), or raise where a
+    sibling returns `False` — the caller loads the facts onto the input model. Each
+    specification carries a docstring stating the invariant it measures and its boundary values,
+    not a paraphrase of its name.
 
 ## Procedure
 
@@ -67,15 +89,16 @@ frontend code. When a request needs one of those, stop, state which agent owns i
 
 ```python
 # backend/apps/portfolio/domain/specifications.py
-from dataclasses import dataclass
-from .value_objects import ProjectView  # plain dataclass, no ORM
+from pydantic import BaseModel, ConfigDict
+from .value_objects import ProjectView  # plain BaseModel, no ORM
 
-class Specification:
+class Specification(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     def is_satisfied_by(self, project: "ProjectView") -> bool: ...
     def __and__(self, other: "Specification") -> "Specification":
-        return AndSpec(self, other)
+        return AndSpec(left=self, right=other)
 
-@dataclass(frozen=True)
 class IsBlocked(Specification):
     def is_satisfied_by(self, project: ProjectView) -> bool:
         return (
@@ -84,7 +107,6 @@ class IsBlocked(Specification):
             or any(t.state_category == "BLOCKED" for t in project.tasks)
         )
 
-@dataclass(frozen=True)
 class HasNoNextStep(Specification):
     def is_satisfied_by(self, project: ProjectView) -> bool:
         return not project.next_step and not any(
@@ -123,6 +145,15 @@ class TransitionNotAllowed(DomainError):
       `repositories.py`.
 - [ ] New risk criterion = one class + one registry line, no modified `if`.
 - [ ] Migration generated, named, and applied cleanly on a fresh database.
+- [ ] `uv run --project backend mypy apps` is clean; `grep -rn ": Any\|-> Any\|Any\]" backend/apps/*/domain/`
+      returns nothing, and every function touched in `domain/` has parameter and return annotations.
+- [ ] No model method added or left in place that saves, audits or enqueues; new use-case logic
+      is in `services/` and the model holds fields, constraints, indexes, `__str__`.
+- [ ] Every `Specification` touched: no ORM or `apps.*` import in its module, same input type as
+      its siblings, returns `bool` on every path, and a docstring naming the invariant and the
+      boundary values.
+- [ ] Each specification has a database-free test (no `pytest.mark.django_db`) covering the true
+      case, the false case and the boundary.
 - [ ] `make lint` and the domain tests pass.
 
 ## Returns

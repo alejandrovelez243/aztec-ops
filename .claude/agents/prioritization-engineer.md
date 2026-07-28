@@ -22,6 +22,9 @@ flag list) and stop there.
 - `CLAUDE.md` hard rules 1, 6, 7, 8.
 - `backend/apps/prioritization/domain/` — existing strategies, registry, policy value objects.
 - `backend/apps/prioritization/models.py` and the latest migration in `backend/apps/prioritization/migrations/`.
+- `docs/standards/BACKEND.md` §2 (docstrings), §3 (magic numbers, naming), §4 (OCP, LSP), §7 (tests).
+- `docs/standards/PATTERNS_BACKEND.md` §4 (strategy + registry), §5 (specification), §9 (value object),
+  §11 (banned antipatterns — premature abstraction, service locator).
 
 ## Rules
 
@@ -33,7 +36,7 @@ flag list) and stop there.
 3. Adding a signal is exactly one class plus one registry line. Never edit an existing `if`,
    never add a branch to a dispatcher. Same for a risk criterion.
 4. `backend/apps/prioritization/domain/` imports neither Django nor another app. Strategies receive a
-   plain input object (dataclass), never a `Project` model instance or a queryset.
+   plain Pydantic input model, never a `Project` model instance or a queryset.
 5. Weights come from the active `PriorityPolicy.weights` JSONB, never hardcoded in the strategy.
    Changing weights means a new `PriorityPolicy` version with `is_active` moved — existing rows
    keep their `policy_version` so past scores stay reproducible.
@@ -45,6 +48,26 @@ flag list) and stop there.
    into `PriorityScore.value`. The persisted computed score stays visible next to it.
 9. Health is derived from the flags at read time. There is no editable health field.
 10. Unit tests for this app run with no database and no fixtures.
+11. Every numeric literal inside a strategy or specification is either a module-level
+    `Final` constant with a name that says what it measures (`HORIZON_DAYS`, `STALE_AFTER_DAYS`,
+    `BLOCKER_AGE_SATURATION_DAYS`) or a `PriorityPolicy` weight. A bare `0.25`, `40` or `14` in an
+    expression is a rejected change, including inside `min()`/`max()` clamps and severity thresholds
+    (BACKEND §3).
+12. The docstring of a signal or specification states the fact it measures, its boundary values, and
+    what it does when the input is missing — not the signature. "Days remaining until `target_date`
+    over a 30-day horizon; overdue returns 1.0, a null `target_date` returns 0.5 and raises
+    `NO_TARGET_DATE` rather than reading as distant" passes. "Evaluates the deadline pressure signal.
+    Args: data. Returns: the result." does not (BACKEND §2).
+13. `SignalResult`, `ScoreBreakdown` and `SignalContribution` are frozen Pydantic models
+    (`model_config = ConfigDict(frozen=True)`) that clamp and validate at construction, not tuples
+    or dicts assembled by the evaluator. The evaluator never fixes up a score a strategy returned
+    out of range — construction refuses it (PATTERNS_BACKEND §9). They are `BaseModel` because it
+    is the same type system django-ninja uses, so a breakdown reaches the API without a parallel
+    schema restating its fields.
+14. No abstract base class, `Protocol` or `Base*` helper for something with one implementation. The
+    signal and risk registries and the `Specification` protocol are the whole allowed abstraction
+    surface here; a new indirection layer between the evaluator and the strategies is a rejected
+    change (PATTERNS_BACKEND §11).
 
 ## Procedure
 
@@ -70,7 +93,7 @@ flag list) and stop there.
 
 ```python
 # backend/apps/prioritization/domain/signals/deadline_pressure.py
-from dataclasses import dataclass
+from pydantic import BaseModel, ConfigDict
 
 from ..registry import register
 from ..types import SignalInput, SignalResult  # SignalResult = tuple[float, str]
@@ -79,9 +102,10 @@ HORIZON_DAYS = 30
 
 
 @register("deadline_pressure")
-@dataclass(frozen=True)
-class DeadlinePressure:
+class DeadlinePressure(BaseModel):
     """Days remaining until target_date, normalized over a 30-day horizon."""
+
+    model_config = ConfigDict(frozen=True)
 
     def evaluate(self, data: SignalInput) -> SignalResult:
         if data.target_date is None:
@@ -100,12 +124,20 @@ The registry entry is the decorator. Nothing else in the engine changes.
 ## Definition of done
 
 - [ ] The new signal or specification is one class plus one registry entry; no existing branch edited.
-- [ ] No Django import anywhere under `domain/`; strategies take a dataclass input including `now`.
+- [ ] No Django import anywhere under `domain/`; strategies take a Pydantic input model including `now`.
 - [ ] Every returned score is clamped to `[0, 1]` and carries a non-empty English reason.
 - [ ] Weights live in a `PriorityPolicy` version, sum to 1.0, and older scores keep their version.
 - [ ] Boundary tests pass with no database; reason strings are asserted.
 - [ ] `make lint` clean, including mypy strict over `domain/`.
 - [ ] Overrides remain distinguishable from computed scores in the persisted data.
+- [ ] `grep -nE '[^a-z_][0-9]+\.?[0-9]*' ` over the touched strategy or specification shows no numeric
+      literal outside a named `Final` constant or a policy weight lookup.
+- [ ] Each new or edited docstring names the measured fact, the boundary values and the
+      missing-data behaviour; none of them lists `Args:` entries that only repeat the parameter names.
+- [ ] Clamping to `[0, 1]` happens in the value object constructor; a test constructs an
+      out-of-range `SignalResult` and asserts it raises or clamps there, not in the evaluator.
+- [ ] No new ABC, `Protocol` or base class was introduced; the diff adds exactly one class plus one
+      registry line and no dispatcher, `if signal_code ==`, or lookup helper.
 
 ## Returns
 

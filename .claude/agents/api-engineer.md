@@ -20,6 +20,10 @@ service and do not put the logic in the view.
 
 - `docs/ARCHITECTURE.md` §6 (event flow), §7 (layers), §8 (read side), §9 (frontend).
 - `CLAUDE.md` hard rules 2, 6 and the Conventions section.
+- `docs/standards/BACKEND.md` §1 (typing, no bare `Any`), §2 (docstrings), §4 ISP (one schema per
+  use case), §5 (error handling), §8 (the ruff/mypy gate).
+- `docs/standards/PATTERNS_BACKEND.md` §3 (application service), §8 (CQRS-lite read model),
+  §11 (banned antipatterns: anemic ORM-passthrough services).
 - The target context's `services/` package, to see which use cases already exist.
 - The existing root API module (`NinjaAPI` instance + registered routers) before adding a router.
 
@@ -45,6 +49,20 @@ service and do not put the logic in the view.
    unversioned, always-on endpoint the frontend keeps open.
 10. CORS allows only the Astro origin(s) from settings, and must expose/allow the headers SSE and
     the actor header need. No `allow_all_origins` outside local dev settings.
+11. One schema per use case (`BACKEND.md` §4, ISP). The queue row, the detail page and the command
+    body are three schemas, not one `ProjectSchema` with every field `| None = None`. A field is
+    optional in an `*Out` only when the response genuinely omits it; if two routes need different
+    field sets, write `ProjectListItem` and `ProjectDetail(ProjectListItem)`. An `*Out` field that
+    is `None` for every row of one endpoint is proof the schema was shared, not designed.
+12. Route handlers are fully annotated like any other function (`BACKEND.md` §1, ruff `ANN`):
+    `request: HttpRequest`, every param typed, and an explicit return type. No `Any` in a schema
+    field or a handler signature — the only permitted `dict[str, Any]` is a JSONB column passed
+    through verbatim (`breakdown`, `metadata`, `payload`), and it carries the comment saying so.
+    `response=` never takes `dict`, `list[dict]`, `Schema` without fields, or a model class.
+13. `api/` contains no `try`, no `except`, and no `HttpResponse` built from an exception. Introducing
+    a new `DomainError` subclass means one line in `STATUS_BY_ERROR` plus its stable `code` in
+    `ErrorOut` — nothing else. A route that needs to branch on a failure is asking the service for
+    the wrong signature; hand back to `domain-architect`.
 
 ## Procedure
 
@@ -138,6 +156,12 @@ def handle_domain_error(request, exc: DomainError):
 - [ ] Routes mounted under `/api/v1`; OpenAPI renders without warnings.
 - [ ] SSE endpoint sets the required headers, emits heartbeats, and honours `Last-Event-ID`.
 - [ ] CORS covers the Astro origin from settings only.
+- [ ] No schema is reused across two endpoints that render different field sets; no `*Out` field is
+      `None` on every row of the endpoint that returns it.
+- [ ] `grep -rn "Any" backend/apps/*/api/` returns only JSONB passthrough fields, each commented.
+- [ ] Every handler has `request: HttpRequest`, typed params and an explicit return type;
+      `mypy apps` and ruff `ANN` clean under `api/`.
+- [ ] `grep -rn "try:\|except " backend/apps/*/api/` returns nothing.
 - [ ] `make lint` and `make test` pass.
 
 ## Returns
