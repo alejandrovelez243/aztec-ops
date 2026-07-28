@@ -34,6 +34,7 @@ Minimum requirements from the challenge:
 | 7 | Django fixtures for seed data | Built into Django, versioned in git, deterministic, and `loaddata` is one command. Reviewers can read the data as JSON | A custom xlsx importer — more code to maintain and to trust |
 | 8 | Astro 7 + islands | Server render for a fast first paint; only the live regions hydrate and listen to SSE | Full SPA — unnecessary weight for four views |
 | 9 | Celery for the schedule **and** the bus | One job system, not two. Beat's `crontab(hour=0, minute=0)` replaces a loop that had to remember the last local date; the same worker drains the outbox and dispatches handlers, so seven application processes became three | A hand-rolled ticker loop; and keeping Redis Streams beside Celery — two brokers, two retry policies, two dead-letter stories for a bus moving a few dozen events an hour ([ADR 0010](adr/0010-celery-as-the-bus.md)) |
+| 10 | Risk flags computed on read, never stored | Overdue is `due_date < today` and stale is `last_activity < now - N days`; the other four are pure functions of current rows. A stored derivation can be wrong, a computed one cannot — so the table, the handler and the change event all go ([ADR 0011](adr/0011-risk-flags-computed-on-read.md)) | A `RiskFlag` table reconciled by a handler and re-checked on every clock tick — three copies of one conclusion, each able to disagree with the rows beneath it |
 
 ## 3. Domain model
 
@@ -255,10 +256,27 @@ Each risk condition is a composable specification supporting `and` / `or` / `not
 - `IsStale` — no activity for N days (configurable).
 - `OwnerOverloaded` — owner load above capacity.
 
-The evaluator returns a list of `RiskFlag` with severity. A project's health is **derived**
+The evaluator returns a list of `RiskFlag` values with severity. A project's health is **derived**
 from its flags — not a field someone edits by hand.
 Adding a new risk criterion is one class plus one registry line. Nothing else changes.
 (Open/closed.)
+
+**Nothing here is persisted** ([ADR 0011](adr/0011-risk-flags-computed-on-read.md)). There is no
+`RiskFlag` table, no `health` column and no `project.risk.changed` topic. Every one of the six
+conditions is a pure function of rows that already exist, over a clock, so the specifications are
+evaluated wherever the flags are read:
+
+- `GET /api/v1/projects/{code}` evaluates them from the write side, at the request's instant.
+- `GET /api/v1/queue` evaluates them from the `ProjectSnapshot` row it already loaded — the read
+  model stores the *facts* (state category, dates, next step, task and blocker counts, owner load,
+  last activity) and the conclusion is drawn per row, in Python, with no query inside the loop.
+
+The consequence, taken deliberately: a derived value computed on read has no previous set to
+compare against, so it has **no change event**. Nothing pushes "this project just became at risk";
+the flags ride along in every project payload and are correct the moment anyone loads them. The
+score is the deliberate exception and stays persisted — not for speed, but because
+`ActivityRecord` records `PRIORITY_CHANGED` with a before and an after, and without a stored
+previous value there is no before, no event and no live reprioritization.
 
 ## 6. Event-driven flow
 
@@ -282,8 +300,6 @@ POST /api/projects/{code}/transition
         ▼
   Celery broker (Redis)  ──┬── handler: priority-recalculator
                            │      └─> emits project.priority.recalculated
-                           ├── handler: risk-evaluator
-                           │      └─> emits project.risk.changed
                            ├── handler: snapshot-builder
                            │      └─> rebuilds ProjectSnapshot (emits nothing)
                            └── handler: sse-fanout
@@ -320,9 +336,9 @@ Stable event envelope:
 }
 ```
 
-Initial topics: `project.created`, `project.updated`, `project.state_changed`,
-`project.priority.recalculated`, `project.risk.changed`, `task.created`, `task.updated`,
-`task.state_changed`, `blocker.raised`, `blocker.resolved`, `note.added`. Payload schemas live in
+Topics: `project.created`, `project.updated`, `project.state_changed`,
+`project.priority.recalculated`, `task.created`, `task.updated`,
+`task.state_changed`, `blocker.raised`, `blocker.resolved`, `note.added`, `clock.ticked`. Payload schemas live in
 `docs/EVENTS.md` §4.
 
 Rules:
@@ -385,12 +401,24 @@ Dependency rules — enforced, not suggested:
 
 ## 8. Read side (CQRS-lite)
 
-The command center needs a heavy join: project + score + risk flags + owner load + task
-counts. Resolving that through the ORM on every request does not hold up.
+The command center needs a heavy join: project + score + owner load + task and blocker counts.
+Resolving that through the ORM on every request does not hold up.
 
-`ProjectSnapshot` is a denormalized read model rebuilt by the `snapshot-builder` handler whenever any event for
-that project arrives. The read API queries only that table. Write and read sides evolve
-independently, and the operational view loads in a single query.
+`ProjectSnapshot` is a denormalized read model rebuilt by the `snapshot-builder` handler whenever
+any event for that project arrives. The read API queries only that table. Write and read sides
+evolve independently, and the operational view loads in a single query.
+
+**It denormalizes facts, never conclusions** ([ADR 0011](adr/0011-risk-flags-computed-on-read.md)).
+There are no `risk_flags` and no `health` columns: those are derived from the row's own counts and
+dates on every read, so a row nobody has rebuilt since yesterday still reports today's truth. What
+it stores is what is expensive to aggregate — the score copy, `open/overdue/blocked/urgent/
+in_progress_task_count`, `open_blocker_count`, `oldest_blocker_age_days`, `owner_load_points`,
+`last_activity_at` — and each of those is a fact about rows, not a judgement about them.
+
+The two derived facets pay for this. `?health=` and `?risk_flag=` cannot be `WHERE` clauses, so
+`read_queue` evaluates the ordered match and filters it in Python; at 22 projects that is free, and
+the alternative — the six specifications written a second time as SQL predicates — is the drift the
+whole decision removes.
 
 ## 9. Frontend (Astro)
 
@@ -423,8 +451,9 @@ Rules:
   matched against task titles within the same project, falling back to `raw_label`.
 - The `Team` sheet counters are not imported. They are a projection of the task data and are
   recomputed by the system.
-- After seeding, scores and risk flags are computed by `recompute_active_portfolio()`, which
-  `make seed` calls as its last step (§4.2).
+- After seeding, scores are computed by `recompute_active_portfolio()`, which `make seed` calls as
+  its last step (§4.2). Risk flags need no such step: they are computed on read, so a freshly
+  seeded portfolio is correctly flagged before anything has run (§5).
 
 ### 10.1 What the source data actually contains
 
@@ -458,7 +487,12 @@ Measured from the spreadsheet (`data/raw/dataset.json` holds the normalized expo
 
 Documented in the README rather than hidden:
 
-- Real authentication and multi-tenancy. Django auth plus an actor header is enough here.
+- **Multi-tenancy.** One operation, one portfolio. Authentication is *not* on this list any more:
+  the `X-Actor` header was replaced by JWT access tokens (`docs/API.md` §1.2), because a header
+  anyone can type does not merely leave permissions unimplemented — it leaves them
+  unrepresentable, and it makes `ActivityRecord.actor` a claim rather than a fact. What remains
+  out of scope is server-side token revocation: there is no blacklist table, logout clears the
+  cookie, and rotating `DJANGO_SECRET_KEY` invalidates every outstanding token at once.
 - External notifications (Slack, email). The bus already exists — it would be one more registered handler.
 - Task drag & drop. Transitions happen through buttons that respect the workflow.
 - Historical metrics / burndown. `ActivityRecord` already stores the raw material for them.

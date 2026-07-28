@@ -5,11 +5,10 @@ Ends at the database. It writes no ``ActivityRecord`` and no ``OutboxEvent``: th
 so when this function reports that something actually changed. That is what keeps a clock tick on
 a quiet portfolio from producing twenty-two identical events every five minutes.
 
-**Risk flags are not persisted here.** The specifications are evaluated, because the breakdown
-denormalizes the raised flag codes, but the ``RiskFlag`` rows are written by
-``evaluate_risk_for_project`` and by nothing else. Two groups reconciling the same rows would make
-the second one see its own change already applied and stay silent, so ``project.risk.changed``
-would be lost exactly when the risk moved. One writer per table, one group per reason to react.
+**Risk flags are not persisted here, or anywhere** (ADR 0011). The specifications are evaluated —
+the breakdown denormalizes the raised codes and the caller reports them — and the result carries
+them out as values. There is nothing to reconcile, nothing to invalidate and no change event: a
+flag is true exactly as long as the rows that satisfy it say so, and any reader re-derives it.
 """
 
 from datetime import datetime
@@ -22,8 +21,8 @@ from ..domain.errors import ActivePolicyNotFound
 from ..domain.events import ORIGIN_MANUAL, ORIGIN_POLICY, ScoreOrigin
 from ..domain.policies import load_policy
 from ..domain.scoring import compute_breakdown, compute_input_hash, compute_valid_until
-from ..domain.specifications import evaluate_risk
-from ..domain.types import ScoreBreakdown
+from ..domain.specifications import derive_health, evaluate_risk
+from ..domain.types import Health, RiskFlag, ScoreBreakdown
 from ..models import PriorityOverride, PriorityPolicy, PriorityScore
 from .collect_project_facts import collect_project_facts
 
@@ -44,6 +43,11 @@ class RecomputeResult(BaseModel):
 
     ``breakdown`` is carried out whole rather than as the persisted document so the caller can
     build its payload without re-reading the row it just wrote.
+
+    ``flags`` and ``health`` are reported, never stored. The scoring pass evaluates the
+    specifications anyway — the breakdown denormalizes the raised codes — so handing them back
+    costs nothing and saves an operator reading a rebuild report from having to ask a second
+    question. They describe the facts at ``now`` and are not a claim about any other instant.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -55,6 +59,8 @@ class RecomputeResult(BaseModel):
     policy_version: str
     origin: ScoreOrigin
     breakdown: ScoreBreakdown
+    flags: tuple[RiskFlag, ...]
+    health: Health
     valid_until: datetime | None
 
 
@@ -116,6 +122,8 @@ def recompute_for_project(*, project_code: str, now: datetime) -> RecomputeResul
             policy_version=policy.version,
             origin=origin,
             breakdown=breakdown,
+            flags=flags,
+            health=derive_health(flags),
             valid_until=stored.valid_until,
         )
 
@@ -142,6 +150,8 @@ def recompute_for_project(*, project_code: str, now: datetime) -> RecomputeResul
         policy_version=policy.version,
         origin=origin,
         breakdown=breakdown,
+        flags=flags,
+        health=derive_health(flags),
         valid_until=valid_until,
     )
 

@@ -274,12 +274,15 @@ needs_attention = And(IsOverdue(), Not(IsBlocked()))
 ```
 
 The six live specifications are `IsBlocked`, `IsOverdue`, `HasNoNextStep`, `HasNoTargetDate`,
-`IsStale`, `OwnerOverloaded`. The evaluator runs the registry and returns the flags it satisfied;
-`risk-evaluator` persists them as `RiskFlag` rows.
+`IsStale`, `OwnerOverloaded`. The evaluator runs the registry and returns the flags it satisfied.
+**Nothing persists them** ([ADR 0011](../adr/0011-risk-flags-computed-on-read.md)): every condition
+is a pure function of rows that already exist, so the evaluator is called where the flags are read —
+from the write side for a project detail, from the `ProjectSnapshot` row for a queue page, in
+Python, with no query inside the loop.
 
-**Deriving health.** `health` is a function of the open flags, not a column anyone edits:
+**Deriving health.** `health` is a function of the raised flags, not a column anyone edits:
 `BLOCKED` if a `CRITICAL` flag is raised, `AT_RISK` if any flag is raised, otherwise `HEALTHY`.
-It is computed once and copied into `ProjectSnapshot.health` by the rebuild consumer. The source
+It is derived beside the flags on the same read, so the two cannot disagree. The source
 spreadsheet's `health` is kept as `imported_health` and read by nothing at runtime.
 
 **Rule for extending.** One class, a `flag_code`, a `severity`, one `@register_risk` line, one
@@ -347,28 +350,30 @@ service. A second `WorkflowTransition` row for the same ordered pair instead of 
 
 ## 7. Publish/Subscribe through a handler registry
 
-**Problem.** One committed fact has several independent reactions — rescore, re-evaluate risk,
-rebuild the read model, push to the browser. In one handler, a failing risk evaluation also stops
-the browser from updating. And the producer must not learn who reacts, or adding a reaction becomes
+**Problem.** One committed fact has several independent reactions — rescore, rebuild the read
+model, push to the browser. In one handler, a failing rescore also stops the browser from
+updating. And the producer must not learn who reacts, or adding a reaction becomes
 an edit to the code that emitted the fact.
 
 **Where.** `backend/apps/events/registry.py` holds the map. A reactor is a **function** in
 `backend/apps/<context>/handlers.py` — the module name is load-bearing: app-ready calls
 `autodiscover_modules("handlers")`, so a reactor in any other module is never imported and silently
-never runs. Four are registered: `priority-recalculator` and `risk-evaluator`
-(`apps/prioritization/handlers.py`), `snapshot-builder` (`apps/portfolio/handlers.py`),
-`sse-fanout` (`apps/events/handlers.py`).
+never runs. Three are registered: `priority-recalculator` (`apps/prioritization/handlers.py`),
+`snapshot-builder` (`apps/portfolio/handlers.py`), `sse-fanout` (`apps/events/handlers.py`).
 
 ```python
 # backend/apps/prioritization/handlers.py
-@register_handler(name="risk-evaluator", topics=ENGINE_TOPICS)
-def evaluate_risk(envelope: EventEnvelope) -> None:
-    """Re-run the specifications for the project this event names.
+@register_handler(name="priority-recalculator", topics=ENGINE_TOPICS)
+def recalculate_priority(envelope: EventEnvelope) -> None:
+    """Rescore the project this event names, and announce it only if it moved.
 
     Raises on failure: that is how the retry, the log line and the dead letter happen.
     """
-    evaluate_risk_for_project(project_code=project_code_of(envelope), now=envelope.occurred_at)
+    recompute_for_project(project_code=project_code_of(envelope), now=envelope.occurred_at)
 ```
+
+There is no `risk-evaluator`. Risk flags are computed on read, so they have no moment of change and
+therefore no reactor ([ADR 0011](../adr/0011-risk-flags-computed-on-read.md)).
 
 The transport calls it through `apply_once`, which is the whole idempotency mechanism:
 

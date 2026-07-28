@@ -36,8 +36,9 @@ def publish_to_sse_channel(envelope: EventEnvelope) -> None:
     except ``clock.ticked``. The tick is the standing counter-example and stays excluded on
     purpose: it renders nothing, a browser has its own clock, and forwarding it would push a frame
     every ``TICKER_INTERVAL_SECONDS`` to every open tab for the client to discard. What the tick
-    *causes* — ``project.priority.recalculated`` and ``project.risk.changed`` — is on the allowlist
-    and reaches the browser normally.
+    *causes* — ``project.priority.recalculated`` — is on the allowlist and reaches the browser
+    normally. There is no risk topic beside it: flags are computed on read (ADR 0011), so a client
+    re-reads them with the project rather than being pushed a change it could not have missed.
 
     Delivery is at-least-once and this handler does not try to make it exactly-once. A duplicate
     delivery before the claim commits produces a duplicate frame, and that is the correct trade:

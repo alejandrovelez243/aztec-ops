@@ -1,56 +1,78 @@
-"""Typed failures of actor resolution.
+"""Typed failures of authentication and of the two authorization rules.
 
-All three are 422 rather than 401 or 403, and that is deliberate. There is no authentication in
-this scope (ARCHITECTURE §12): ``X-Actor`` is a *stand-in* that names who is acting, so a missing
-or nonsensical value is a malformed request, not a rejected credential. Returning 401 would
-promise a login flow that does not exist and would make the frontend render a sign-in prompt for
-what is really a client bug.
+Four errors, and the split between them is the point: the client does something different for
+each. No credential at all means "show the sign-in form"; a token the API refuses means "try the
+refresh endpoint before giving up"; wrong username or password means "the form was answered
+incorrectly"; a refusal on an ops-lead action means "this account is signed in and still may not
+do this", which signing in again never fixes.
 
-When real authentication arrives these three disappear together with the header, replaced by the
-session or token check — which is why nothing else in the codebase raises them.
+They are 401/403 rather than the 422 the ``X-Actor`` stand-in returned, because there is now a
+credential to reject. The 401 is a real promise: the token endpoints exist, so a frontend that
+renders a sign-in prompt on one is responding to something true.
+
+``domain/`` is pure, so nothing here knows about HTTP. :mod:`config.errors` owns the mapping from
+each class to its status and its wire ``code``.
 """
 
 
-class ActorError(Exception):
-    """Base class for every failure of the ``X-Actor`` stand-in.
+class AuthError(Exception):
+    """Base class for every authentication and authorization failure.
 
-    Registered once with the API's exception handler, so adding a case here never adds a
+    Registered once with the API's exception handler, so adding a case below never adds a
     ``try/except`` to a router.
     """
 
 
-class ActorHeaderMissing(ActorError):
-    """The request carried no ``X-Actor`` header, or carried it empty.
+class AuthenticationRequired(AuthError):
+    """The request carried no usable credential at all.
 
-    Every mutating route requires one: an ``ActivityRecord`` with a blank actor cannot answer "who
-    changed this", which is the question the whole audit trail exists for.
+    Raised before any token is parsed: there was no ``Authorization: Bearer`` header, and either
+    the access cookie was absent or the request was a mutation — which the cookie is deliberately
+    not accepted for (:mod:`config.auth`).
     """
 
     def __init__(self) -> None:
-        super().__init__("The X-Actor header is required on every mutating request.")
+        super().__init__(
+            "Authentication is required. Send 'Authorization: Bearer <access token>', "
+            "or sign in at POST /api/v1/auth/token."
+        )
 
 
-class SystemActorRejected(ActorError):
-    """An HTTP client claimed to be ``system``.
+class TokenRejected(AuthError):
+    """A token was presented and the API refused it.
 
-    ``system`` is reserved for the prioritization engine, the risk evaluator and the stream
-    consumers (EVENTS.md §1). Letting a browser send it would make an operator's manual override
-    indistinguishable from a policy recomputation in the timeline, which is the one distinction
-    ``ActivityRecord.origin`` exists to preserve.
+    One class for expired, malformed, wrongly typed and issued-for-a-deactivated-account, on
+    purpose: the client's move is the same in every case — refresh, then sign in — and telling an
+    unauthenticated caller *which* of those was wrong is free reconnaissance for whoever is
+    guessing.
     """
 
     def __init__(self) -> None:
-        super().__init__("'system' is written by consumers only and cannot be sent by a client.")
-        self.actor_code = "system"
+        super().__init__(
+            "The token is invalid, expired, or issued for an account that can no longer sign in."
+        )
 
 
-class ActorNotFound(ActorError):
-    """The header named a code that matches nobody on the roster.
+class InvalidCredentials(AuthError):
+    """Sign-in failed: unknown username, wrong password, or a deactivated account.
 
-    Inactive people still resolve — retiring someone must not make their projects unmovable — so
-    reaching this error always means the code itself is wrong.
+    Deliberately one error for all three. Distinguishing "no such user" from "wrong password"
+    turns the sign-in form into an account-enumeration oracle, and an operator gains nothing from
+    the distinction that retyping the password does not already give them.
     """
 
-    def __init__(self, actor_code: str) -> None:
-        super().__init__(f"No person with code {actor_code!r}.")
-        self.actor_code = actor_code
+    def __init__(self) -> None:
+        super().__init__("Username or password is incorrect, or the account is inactive.")
+
+
+class OpsLeadRequired(AuthError):
+    """An authenticated member attempted one of the two ops-lead actions.
+
+    Not a hint to sign in again: the caller *is* authenticated, the resource exists, and the answer
+    is still no. Carries the action so the response can name it — a bare "forbidden" sends an
+    operator to read the source to find out what was refused.
+    """
+
+    def __init__(self, action: str) -> None:
+        super().__init__(f"{action} is reserved for an ops lead.")
+        self.action = action

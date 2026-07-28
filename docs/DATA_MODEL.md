@@ -214,8 +214,9 @@ the context that consumes it rather than on a manager.
 | `created_at` | `timestamptz` | no | `auto_now_add` | — | |
 | `updated_at` | `timestamptz` | no | `auto_now` | — | |
 
-There is no `status` column and no writable `health` column. Status is `workflow_state`; health is
-derived from `RiskFlag` rows at read time.
+There is no `status` column and no `health` column anywhere. Status is `workflow_state`; health is
+derived on read from the risk specifications, which are pure functions of this row and its tasks,
+blockers and activity ([ADR 0011](adr/0011-risk-flags-computed-on-read.md)).
 
 ### `portfolio_projectsnapshot` — the read model (CQRS-lite, `ARCHITECTURE` §8)
 
@@ -250,12 +251,11 @@ is a single indexed scan instead of a six-table join plus per-row aggregates.
 | `has_override` | `boolean` | no | `false` | — | Drives the "override" badge. The computed score stays visible beside it. |
 | `override_position` | `smallint` | yes | `null` | — | Forced queue position, if any. |
 | `override_reason` | `varchar(255)` | no | `''` | — | Mandatory when an override exists. |
-| `risk_flags` | `jsonb` | no | `[]` | GIN | `[{"code": "...", "severity": "...", "detail": "..."}]`. GIN so `?flag=BLOCKED` filters without a join. |
-| `health` | `varchar(16)` | no | `'HEALTHY'` | `(health)` | Derived from `risk_flags`: `HEALTHY` \| `AT_RISK` \| `BLOCKED`. |
 | `open_task_count` | `smallint` | no | `0` | — | |
 | `overdue_task_count` | `smallint` | no | `0` | — | |
 | `blocked_task_count` | `smallint` | no | `0` | — | Tasks whose state category is `BLOCKED`. |
 | `urgent_open_task_count` | `smallint` | no | `0` | — | Open tasks whose `priority.is_urgent`. |
+| `in_progress_task_count` | `smallint` | no | `0` | — | Tasks whose state category is `IN_PROGRESS`. Read by `HasNoNextStep` at query time; a count rather than a boolean because the aggregate produces it for free. |
 | `open_blocker_count` | `smallint` | no | `0` | — | |
 | `oldest_blocker_age_days` | `smallint` | yes | `null` | — | Feeds the blockers panel ordering. |
 | `last_activity_at` | `timestamptz` | yes | `null` | — | Latest `ActivityRecord.occurred_at`. Drives `IsStale`. |
@@ -383,7 +383,7 @@ The project timeline in `/projects/{code}` is exactly
 
 ---
 
-## 6. `backend/apps/prioritization` — score, override, risk flags
+## 6. `backend/apps/prioritization` — score and override (risk flags are computed, not stored)
 
 ### 6.1 `prioritization_prioritypolicy` — the versioned criterion
 
@@ -496,8 +496,10 @@ Invariants the recalculator asserts before writing: `contribution == round(raw *
 `base == sum(contribution)`, `value == round(base * modifier_total, 2)` clamped to `[0, 100]`, and
 `sum(weight) == 1.0`. `reason` must name the fact — the days, the counts, the dates — never restate
 the number. `flags` is a denormalized copy of the risk flag codes at computation time so the UI can
-render "the score is real, the owner is the constraint" without a second query; the authoritative
-flags are the `RiskFlag` rows.
+render "the score is real, the owner is the constraint" without a second query. It is a snapshot of
+what the specifications said at `computed_at`, not a source of truth: flags are computed on read
+([ADR 0011](adr/0011-risk-flags-computed-on-read.md)), so a client that needs the current set reads
+`risk_flags` on the project payload rather than this array.
 
 To justify a rank, sort `signals` by `contribution` descending and read the top two or three, then
 the modifiers and flags. If the breakdown does not explain the number, the breakdown is the bug.
@@ -518,24 +520,25 @@ the modifiers and flags. If the breakdown does not explain the number, the break
 The override is **never** written into `PriorityScore.value`. The computed score stays visible next
 to it, the UI labels the row as an override, and revoking restores the ranking with no recompute.
 
-### 6.5 `prioritization_riskflag` — persisted risk detections
+### 6.5 There is no risk flag table
 
-The domain `RiskFlag` is a value object returned by the specification evaluator (`ARCHITECTURE`
-§5). This table is where the evaluator's output is persisted so the API, the admin and the snapshot
-rebuild all read the same set.
+There used to be `prioritization_riskflag`, one row per raised flag, cleared rather than deleted.
+It is gone ([ADR 0011](adr/0011-risk-flags-computed-on-read.md)).
 
-| Column | Type | Null | Default | Index | Meaning |
-|---|---|---|---|---|---|
-| `project_id` | `bigint` FK → `portfolio_project` | no | — | partial `(project) WHERE cleared_at IS NULL` | `on_delete=CASCADE`. |
-| `code` | `varchar(32)` | no | — | partial unique with `project` | `BLOCKED`, `OVERDUE`, `NO_NEXT_STEP`, `NO_TARGET_DATE`, `STALE`, `OWNER_OVERLOADED`. The registry key of the specification, not a label. |
-| `severity` | `varchar(8)` | no | — | `(severity)` | `LOW` \| `MEDIUM` \| `HIGH` \| `CRITICAL`. Comes from the registry entry, not from the row. |
-| `detail` | `varchar(255)` | no | `''` | — | The fact that satisfied the specification: "6 days past target date". |
-| `detected_at` | `timestamptz` | no | — | `(detected_at)` | First time this flag became true in this open episode. Not reset while it stays true — that is what lets the UI say "blocked for 19 days". |
-| `cleared_at` | `timestamptz` | yes | `null` | partial indexes above | Null means currently raised. |
+Every one of the six conditions — `BLOCKED`, `OVERDUE`, `NO_NEXT_STEP`, `NO_TARGET_DATE`, `STALE`,
+`OWNER_OVERLOADED` — is a pure function of rows that already exist, over a clock: overdue is
+`due_date < today`, stale is `last_activity < now - N days`. Storing that bought a `WHERE` clause
+and cost invalidation, and two of the six changed with no event at all, so the stored copy was
+wrong from midnight until whenever the next tick reconciled it. The specifications
+(`ARCHITECTURE` §5) are unchanged and unpersisted: they run when the flags are read, from the write
+side for a project detail and from the `portfolio_projectsnapshot` row for the queue.
 
-A flag going from raised to cleared and back produces two rows, not one mutated row, so the risk
-history is reconstructible. Project `health` is derived from the open rows and is not stored on
-`Project`.
+The score is the deliberate exception and stays in §6.3 — not for speed, but because
+`ActivityRecord` records `PRIORITY_CHANGED` with a before and an after, and a derived value with no
+stored previous value has no before, no event and no live push.
+
+`Severity` (`LOW | MEDIUM | HIGH | CRITICAL`) and the flag codes survive as domain vocabulary in
+`prioritization.domain.types`; they name no column.
 
 ---
 
@@ -584,7 +587,7 @@ entry to point at.
 | Column | Type | Null | Default | Index | Meaning |
 |---|---|---|---|---|---|
 | `event_id` | `uuid` | no | — | unique with `handler` | The envelope `id`. Not a FK to `OutboxEvent`: the table must stay prunable independently of the outbox. |
-| `handler` | `varchar(48)` | no | — | same unique | The **registry name** of the reactor: `priority-recalculator` \| `risk-evaluator` \| `snapshot-builder` \| `sse-fanout`. The same event is legitimately processed once per handler. Renaming a deployed handler replays history for it, so the name is released API. |
+| `handler` | `varchar(48)` | no | — | same unique | The **registry name** of the reactor: `priority-recalculator` \| `snapshot-builder` \| `sse-fanout`. The same event is legitimately processed once per handler. Renaming a deployed handler replays history for it, so the name is released API. |
 | `processed_at` | `timestamptz` | no | `auto_now_add` | `(processed_at)` | Retention sweep key. |
 
 The handler inserts this row and does its work in one transaction. A duplicate hits the unique
@@ -623,7 +626,6 @@ erDiagram
     PROJECT ||--o{ TASK : "contains"
     PROJECT ||--o{ BLOCKER : "is impeded by"
     PROJECT ||--o{ NOTE : "is commented on"
-    PROJECT ||--o{ RISK_FLAG : "raises"
     PROJECT ||--|| PRIORITY_SCORE : "is scored by"
     PROJECT ||--o{ PRIORITY_OVERRIDE : "is overridden by"
     PROJECT ||--|| PROJECT_SNAPSHOT : "is projected into"
@@ -675,7 +677,6 @@ outside.
 | `prioritization_prioritypolicy` | `UNIQUE (version)`, `UNIQUE ((true)) WHERE is_active` | One active policy at a time. |
 | `prioritization_priorityscore` | `UNIQUE (project_id)` | Current score only. |
 | `prioritization_priorityoverride` | `UNIQUE (project_id) WHERE revoked_at IS NULL` | One live override per project. |
-| `prioritization_riskflag` | `UNIQUE (project_id, code) WHERE cleared_at IS NULL` | A flag is raised at most once at a time; clearing frees the slot for the next episode. |
 | `events_outboxevent` | `PRIMARY KEY (id)` | The envelope id is the identity. |
 | `events_processedevent` | `UNIQUE (event_id, consumer_group)` | The idempotency key. This constraint *is* the deduplication mechanism, not a safety net over one. |
 
@@ -696,7 +697,6 @@ outside.
 | `prioritization_priorityscore` | `value BETWEEN 0 AND 100` | The score's stated range. |
 | `prioritization_priorityoverride` | `num_nonnulls(position, boost) = 1` | Exactly one override mechanism per row. |
 | `prioritization_priorityoverride` | `length(trim(reason)) > 0` | Mandatory reason, enforced where it cannot be forgotten. |
-| `prioritization_riskflag` | `cleared_at IS NULL OR cleared_at >= detected_at` | |
 | `events_outboxevent` | `attempts >= 0` | The only check on this table. The old `published_at IS NULL OR stream_entry_id <> ''` was dropped with the stream (`events/migrations/0002_celery_transport.py`): there is no entry id to prove anything with, and `published_at` now means "dispatched". |
 
 ### 9.3 Enforced in the application layer, and why
@@ -712,8 +712,8 @@ outside.
 | `requires_reason` / `requires_fields` on a transition | transition service, raising `ReasonRequired` / `MissingRequiredFields` | The required fields are a JSONB list read at runtime. A `CHECK` cannot dereference it. |
 | `PriorityPolicy.weights` keys match the signal registry and sum to 1.0 | policy load in `backend/apps/prioritization/domain/` | Postgres cannot know which strategies are registered in the Python process. Loading raises rather than silently defaulting a missing weight to zero. |
 | `ActivityRecord` is append-only | `save()`/`delete()` overrides on the model, `has_change_permission` / `has_delete_permission` returning `False` in the admin | Making it truly immutable needs a `BEFORE UPDATE OR DELETE` trigger and a role that cannot `DROP` it. That is real database administration, out of scope here (`ARCHITECTURE` §12); the two Python-level blocks cover every path the application has. |
-| `Project.health` is derived, never stored | read model + risk evaluator | There is no column to constrain. That is the point. |
-| A resolved `Blocker` clears the project's `BLOCKED` risk flag | `risk-evaluator` handler | Derived state is rebuilt from events, not maintained by a trigger, so it stays reproducible from the admin's recompute action. |
+| `Project.health` is derived, never stored | the risk specifications, evaluated on every read | There is no column to constrain. That is the point ([ADR 0011](adr/0011-risk-flags-computed-on-read.md)). |
+| A resolved `Blocker` clears the project's `BLOCKED` risk flag | nothing — it is not a rule, it is arithmetic | The flag *is* "an open blocker exists". Resolving the last one clears it by definition on the next read; there is no derived row to reconcile and therefore nothing that can fall out of step. |
 | Task `due_date` may fall after the project `target_date` | nothing enforces it | Real portfolio data does this constantly. Rejecting it would make the seed unloadable and would hide the overdue signal instead of surfacing it. |
 
 ---
@@ -734,13 +734,15 @@ LIMIT 25;
 - `portfolio_projectsnapshot (is_archived, priority_score DESC)` — the whole command center in one
   index scan. `is_archived` leads because it is the constant predicate; `priority_score DESC`
   matches the sort so there is no sort node.
-- `portfolio_projectsnapshot (health)`, `(state_category)`, `(engagement_type_code)`,
-  `(owner_code)` — the four filter facets on that same list. Each is selective enough on 22 rows to
-  be pointless today and correct at 10x, which is the size this table is designed to survive.
-- `portfolio_projectsnapshot USING GIN (risk_flags)` — `?flag=NO_TARGET_DATE` without joining
-  `prioritization_riskflag`.
-- `prioritization_riskflag (project_id) WHERE cleared_at IS NULL` — the open-blockers and
-  no-next-step panels, and the rebuild that repopulates `risk_flags`.
+- `portfolio_projectsnapshot (state_category)`, `(engagement_type_code)`, `(owner_code)` — three of
+  the filter facets on that same list. Each is selective enough on 22 rows to be pointless today
+  and correct at 10x, which is the size this table is designed to survive.
+- **`?health=` and `?risk_flag=` have no index and cannot have one.** Both are derived on read
+  ([ADR 0011](adr/0011-risk-flags-computed-on-read.md)), so there is no column to index; the GIN
+  index on `risk_flags` was dropped with the column. `read_queue` evaluates the ordered match and
+  filters it in Python. That is a full scan of the filtered set, which is free at this size and is
+  the first thing to revisit — as a materialized view, not as a hand-maintained table — if the
+  portfolio ever becomes a thousand projects.
 - `work_blocker (project_id) WHERE resolved_at IS NULL` — the open-blockers panel and the `blockage`
   signal's input. Partial, because a resolved blocker is never read by either.
 
@@ -824,12 +826,11 @@ field with no named owner is a field that goes stale silently.
 
 | Field | Source of truth | Rebuilt by | Trigger |
 |---|---|---|---|
-| all of `portfolio_projectsnapshot` | `Project` + `Task` + `Blocker` + `PriorityScore` + `RiskFlag` + `ActivityRecord` | `snapshot-builder` handler, `backend/apps/portfolio/handlers.py` | every topic except `clock.ticked`; `task.*` and `blocker.*` events resolve to their project through `payload.project_code` |
+| all of `portfolio_projectsnapshot` | `Project` + `Task` + `Blocker` + `PriorityScore` + `ActivityRecord` | `snapshot-builder` handler, `backend/apps/portfolio/handlers.py` | every topic except `clock.ticked`; `task.*` and `blocker.*` events resolve to their project through `payload.project_code` |
 | `projectsnapshot.priority_score`, `priority_policy_version`, `breakdown` | `prioritization_priorityscore` | `snapshot-builder`, after `priority-recalculator` emits `project.priority.recalculated` | `project.priority.recalculated` |
-| `projectsnapshot.risk_flags`, `health` | open `prioritization_riskflag` rows | `snapshot-builder`, after `risk-evaluator` emits `project.risk.changed` | `project.risk.changed` |
 | `projectsnapshot.owner_load_points` | `Task` rows assigned to the owner | `snapshot-builder` | any `task.*` event; the load of **every** snapshot owned by that person is recomputed, not just the event's project |
 | `projectsnapshot.last_activity_at` | `activity_activityrecord.occurred_at` | `snapshot-builder` | every event |
-| `priorityscore.breakdown.flags` | open `RiskFlag` rows | `priority-recalculator` | recomputation |
+| `priorityscore.breakdown.flags` | the risk specifications, evaluated during scoring | `priority-recalculator` | recomputation. A point-in-time copy, like `ActivityRecord`'s — the current set is computed on read and never taken from here |
 | `priorityscore.policy_version` | `prioritization_prioritypolicy.version` | never — frozen copy | written once, at computation |
 | `work_blocker.project_id` on a task-level blocker | `work_task.project_id` | never — written by the service at creation | a blocker cannot change project |
 | `work_note.project_id` on a task-level note | `work_task.project_id` | never | same |
@@ -879,7 +880,7 @@ Python.
 ## 13. Migration notes
 
 - One migration per logical change, descriptively named:
-  `uv run python manage.py makemigrations <app> -n add_riskflag_cleared_at`. Read the generated
+  `uv run python manage.py makemigrations <app> -n add_blocker_severity`. Read the generated
   file before committing it.
 - Adding a workflow state, a transition, a taxonomy row or a priority is **data**, entered in the
   admin or shipped as a fixture. It is never a migration. A `TextChoices` addition to

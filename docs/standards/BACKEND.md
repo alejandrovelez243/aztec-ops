@@ -275,8 +275,8 @@ def transition_project(...) -> Project:
     return project
 ```
 
-`priority-recalculator` and `risk-evaluator` consume `project.state_changed`. A slow or failing
-recalculation cannot roll back a legitimate state change, and the two concerns are deployable and
+`priority-recalculator` and `snapshot-builder` consume `project.state_changed`. A slow or failing
+recalculation cannot roll back a legitimate state change, and the concerns are deployable and
 testable apart.
 
 ### OCP — a new signal is a class plus a registry line

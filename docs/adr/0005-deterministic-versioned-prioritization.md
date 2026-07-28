@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted — 2026-07-28.
+Accepted — 2026-07-28. Narrowed by [0011](0011-risk-flags-computed-on-read.md): the *score* stays
+deterministic, versioned and persisted exactly as decided here; the risk flags evaluated by the same
+engine are no longer persisted, because a stored derivation with no before/after to publish buys
+nothing.
 
 ## Context
 

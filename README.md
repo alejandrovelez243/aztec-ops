@@ -264,8 +264,6 @@ POST /api/projects/{code}/transition
         ▼
   Celery broker  ──┬── handler: priority-recalculator
                    │      └─> emits project.priority.recalculated
-                   ├── handler: risk-evaluator
-                   │      └─> emits project.risk.changed
                    ├── handler: snapshot-builder
                    │      └─> rebuilds ProjectSnapshot (emits nothing)
                    └── handler: sse-fanout
@@ -384,10 +382,13 @@ definitions cannot follow the same pattern — each tool has its own format — 
 
 Stated here rather than hidden, with what each would actually take.
 
-- **Real authentication and multi-tenancy.** Requests identify the actor with an `X-Actor`
-  header and the admin uses Django auth. Doing it properly means a real user model wired to
-  `accounts.User`, an organization FK on every aggregate, and a default queryset scoped by it —
-  which is a data model change, not a middleware change, and would rewrite every fixture.
+- **Multi-tenancy.** Authentication is no longer on this list: the `X-Actor` header was replaced
+  by JWT access tokens over `accounts.User` (`docs/API.md` §1.2), because a header anyone can type
+  makes `ActivityRecord.actor` a claim rather than a fact and leaves permissions unrepresentable.
+  Multi-tenancy would still mean an organization FK on every aggregate and a default queryset
+  scoped by it — a data model change, not a middleware change, and it would rewrite every fixture.
+  Server-side token revocation is also out: there is no blacklist table, logout clears the cookie,
+  and rotating `DJANGO_SECRET_KEY` invalidates everything outstanding at once.
 - **External notifications (Slack, email).** The bus already carries everything a notifier would
   need. It is one more registered handler plus a per-user subscription table deciding which topics
   reach whom — no producer would change.

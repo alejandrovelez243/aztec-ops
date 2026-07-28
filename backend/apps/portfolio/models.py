@@ -11,7 +11,8 @@ and nowhere else:
   service raises ``TransitionNotAllowed`` instead (DATA_MODEL §9.3).
 * ``ProjectSnapshot`` carries ``project_id`` as a plain column rather than a foreign key. The read
   side must survive the write side being rebuilt, so it is coupled to the business code only
-  (DATA_MODEL §8).
+  (DATA_MODEL §8). It denormalizes facts and never conclusions: risk flags and health are computed
+  from its columns on every read (ADR 0011), so no rebuild can leave them wrong.
 * There is no person model here. A project owner is an ``accounts.User``: the person who is
   assigned work is the person who signs in to move it, so identity and roster are one row rather
   than two joined by a nullable link that is never null. ``weekly_capacity_points`` therefore lives
@@ -19,21 +20,22 @@ and nowhere else:
   ``apps.portfolio.repositories`` — "who is overloaded?" is a portfolio question.
 """
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from django.conf import settings
-from django.contrib.postgres.indexes import GinIndex
 from django.db import models
 
 from apps.portfolio.domain.value_objects import QUEUE_ORDERING, ProjectResult
 from apps.portfolio.domain.views import (
-    HEALTH_LABELS,
     HealthRef,
     QueueItemView,
     QueueOverrideView,
 )
-from apps.prioritization.domain.views import RiskFlagView, ScoreView
+from apps.prioritization.domain.specifications import derive_health, evaluate_risk
+from apps.prioritization.domain.types import ProjectRiskInput
+from apps.prioritization.domain.views import ScoreView
 from apps.shared.ordering import resolve_ordering
 from apps.shared.refs import ActorRef, StateRef, TaxonomyRef
 
@@ -167,8 +169,11 @@ class ProjectSnapshotQuerySet(models.QuerySet["ProjectSnapshot"]):
         silently match nothing.
 
         Repeatable facets OR their values, because that is what a multi-select means.
-        ``risk_flag_codes`` ANDs instead: "blocked **and** overdue" is the question the panel asks,
-        and the OR of two common flags is most of the portfolio.
+        **``health`` and ``risk_flag_codes`` are not applied here**, and cannot be: they are
+        derived on read (ADR 0011), so there is no column to compare and the only way to filter on
+        them in SQL would be a second implementation of the six specifications as ``WHERE``
+        clauses — the drift the derivation exists to remove. ``read_queue`` applies them in Python
+        over what this returns.
 
         Args:
             filters: The requested facets. The window (``offset``/``limit``) and the ordering are
@@ -176,8 +181,6 @@ class ProjectSnapshotQuerySet(models.QuerySet["ProjectSnapshot"]):
                 can count the whole match before paging it.
         """
         queryset = self.filter(is_archived=filters.is_archived)
-        if filters.health is not None:
-            queryset = queryset.filter(health=filters.health)
         if filters.state_category is not None:
             queryset = queryset.filter(state_category=filters.state_category)
         if filters.state_code is not None:
@@ -190,10 +193,6 @@ class ProjectSnapshotQuerySet(models.QuerySet["ProjectSnapshot"]):
             queryset = queryset.filter(stage_code=filters.stage_code)
         if filters.owner_codes:
             queryset = queryset.filter(owner_code__in=filters.owner_codes)
-        for flag_code in filters.risk_flag_codes:
-            # GIN containment, so ?risk_flag=BLOCKED never joins prioritization_riskflag. One
-            # predicate per requested flag is what makes the set AND rather than OR.
-            queryset = queryset.filter(risk_flags__contains=[{"code": flag_code}])
         if filters.has_open_blockers is True:
             queryset = queryset.filter(open_blocker_count__gt=0)
         elif filters.has_open_blockers is False:
@@ -235,14 +234,29 @@ class ProjectSnapshotQuerySet(models.QuerySet["ProjectSnapshot"]):
         """
         return self.order_by(*resolve_ordering(order_by, QUEUE_ORDERING, tiebreaker="project_code"))
 
-    def as_queue_items(self) -> tuple["QueueItemView", ...]:
-        """Materialise the selection as the rows the command center renders.
+    def as_queue_items(
+        self, *, now: datetime, staleness_threshold_days: int
+    ) -> tuple["QueueItemView", ...]:
+        """Materialise the selection as the rows the command center renders, flags included.
 
         **Ends the chain**: the query executes here, so no caller can narrow the queue after the
-        response shape was decided. Every field comes from this one table — that is the whole
+        response shape was decided. Every field still comes from this one table — that is the whole
         point of the read model — so this issues exactly one query however many rows it returns.
+        The risk specifications are then evaluated **in Python, per row, from the columns already
+        loaded**: a per-project query inside a loop over the portfolio is exactly the N+1 the read
+        model exists to prevent, and the six specifications need nothing this row does not carry.
+
+        Args:
+            now: The instant every row's flags are evaluated at. One instant for the whole page,
+                so two projects cannot be judged overdue against two different days.
+            staleness_threshold_days: Operational threshold ``IsStale`` compares against, from
+                ``settings.STALENESS_THRESHOLD_DAYS``. Passed in rather than read here, because a
+                queryset must not reach for configuration its caller did not choose.
         """
-        return tuple(snapshot.to_queue_item() for snapshot in self)
+        return tuple(
+            snapshot.to_queue_item(now=now, staleness_threshold_days=staleness_threshold_days)
+            for snapshot in self
+        )
 
     def page(self, *, offset: int, limit: int) -> "ProjectSnapshotQuerySet":
         """Take one window of the current ordering.
@@ -272,7 +286,7 @@ class ProjectSnapshotQuerySet(models.QuerySet["ProjectSnapshot"]):
         side being rebuilt. The row is replaced wholesale: a partial write would mix columns
         from two deliveries while ``last_event_id`` claimed a single one.
 
-        The only permitted caller is the ``snapshot-rebuild`` consumer group. A write path that
+        The only permitted caller is the ``snapshot-builder`` handler. A write path that
         edits a snapshot instead of emitting its event has removed the only thing that keeps the
         row reproducible (PATTERNS §8).
 
@@ -282,8 +296,7 @@ class ProjectSnapshotQuerySet(models.QuerySet["ProjectSnapshot"]):
                 stale row back to its delivery. ``None`` only when rebuilding outside the
                 bus, such as from the admin's recompute action.
         """
-        defaults = values.model_dump(exclude={"project_code", "risk_flags"})
-        defaults["risk_flags"] = [flag.model_dump() for flag in values.risk_flags]
+        defaults = values.model_dump(exclude={"project_code"})
         defaults["last_event_id"] = last_event_id
         self.update_or_create(project_code=values.project_code, defaults=defaults)
 
@@ -322,8 +335,9 @@ class Project(models.Model):
     itself an operational signal. ``next_step`` is an empty string rather than null so
     ``HasNoNextStep`` stays a single predicate.
 
-    There is no ``status`` column and no writable ``health`` column: status is ``workflow_state``,
-    health is derived from open ``RiskFlag`` rows at read time.
+    There is no ``status`` column and no ``health`` column anywhere: status is ``workflow_state``,
+    and health is derived on read from the risk specifications, which are themselves pure functions
+    of this row and its tasks, blockers and activity (ADR 0011).
     """
 
     code = models.CharField(max_length=16)
@@ -423,9 +437,9 @@ class Project(models.Model):
 
         Deliberately omitted: ``pk``, ``created_at``, ``updated_at`` (row bookkeeping no caller
         renders) and ``imported_health``, which is the spreadsheet's opinion of health kept only
-        for reconciliation — health is derived from open ``RiskFlag`` rows and is served from
-        ``ProjectSnapshot``, so exposing the imported column here would offer callers a second,
-        stale answer to the same question.
+        for reconciliation — health is derived from the risk specifications on every read, so
+        exposing the imported column here would offer callers a second, stale answer to the same
+        question.
 
         The seven relations read below must already be loaded: ``ProjectQuerySet.with_relations``
         selects every one of them. On an instance fetched without them this is still correct but each attribute
@@ -461,28 +475,22 @@ class Project(models.Model):
 class ProjectSnapshot(models.Model):
     """Denormalized read model backing the command center (ARCHITECTURE §8, DATA_MODEL §3).
 
-    One row per project, pre-joined so ``GET /api/v1/projects`` is a single index scan on
+    One row per project, pre-joined so ``GET /api/v1/queue`` is a single index scan on
     ``(is_archived, priority_score DESC)`` instead of a six-table join with per-row aggregates.
 
-    **No write path may update this table directly.** It is rebuilt by the ``snapshot-rebuild``
-    consumer group (``apps.portfolio.consumers``) reacting to any event whose entity is a project,
-    plus ``task.*`` and ``blocker.*`` events resolved to their project. A write path that edits a
+    **No write path may update this table directly.** It is rebuilt by the ``snapshot-builder``
+    handler (``apps.portfolio.handlers``) reacting to any event whose entity is a project, plus
+    ``task.*`` and ``blocker.*`` events resolved to their project. A write path that edits a
     snapshot instead of emitting the event has removed the only thing that keeps the row
     reproducible. ``rebuilt_at`` and ``last_event_id`` make a stale row traceable to the exact
     delivery that produced it.
+
+    **What it stores is facts, not conclusions** (ADR 0011). There are no ``risk_flags`` and no
+    ``health`` columns: the counts, dates, categories and load figures those were derived from are
+    all here, and the derivation runs in :meth:`to_queue_item` on every read. A stored flag would be
+    a claim about a moment that has passed — a row rebuilt yesterday would still say "not overdue"
+    the morning after the date fell — while a computed one is true when it is read or not at all.
     """
-
-    class Health(models.TextChoices):
-        """Derived project health.
-
-        Structural, not operator data: a pure function of the open ``RiskFlag`` rows (``BLOCKED``
-        if a CRITICAL flag is raised, ``AT_RISK`` if any flag is raised, otherwise ``HEALTHY``), so
-        extending it would mean changing that function, not adding a taxonomy row.
-        """
-
-        HEALTHY = "HEALTHY", HEALTH_LABELS["HEALTHY"]
-        AT_RISK = "AT_RISK", HEALTH_LABELS["AT_RISK"]
-        BLOCKED = "BLOCKED", HEALTH_LABELS["BLOCKED"]
 
     project_code = models.CharField(max_length=16, primary_key=True)
     project_id = models.BigIntegerField()
@@ -510,17 +518,14 @@ class ProjectSnapshot(models.Model):
     has_override = models.BooleanField(default=False)
     override_position = models.SmallIntegerField(null=True, blank=True)
     override_reason = models.CharField(max_length=255, blank=True, default="")
-    risk_flags = models.JSONField(default=list)
-    health = models.CharField(
-        max_length=16,
-        choices=Health.choices,
-        default=Health.HEALTHY,
-        db_index=True,
-    )
     open_task_count = models.SmallIntegerField(default=0)
     overdue_task_count = models.SmallIntegerField(default=0)
     blocked_task_count = models.SmallIntegerField(default=0)
     urgent_open_task_count = models.SmallIntegerField(default=0)
+    # Read by ``HasNoNextStep`` on every queue row. A count rather than a boolean because the
+    # aggregate that produces the other four produces this one for free, and a stored boolean
+    # would answer one question where the number answers any.
+    in_progress_task_count = models.SmallIntegerField(default=0)
     open_blocker_count = models.SmallIntegerField(default=0)
     oldest_blocker_age_days = models.SmallIntegerField(null=True, blank=True)
     last_activity_at = models.DateTimeField(null=True, blank=True)
@@ -546,15 +551,49 @@ class ProjectSnapshot(models.Model):
                 fields=["is_archived", "-priority_score"],
                 name="portfolio_snap_queue",
             ),
-            # ?flag=NO_TARGET_DATE filters without joining prioritization_riskflag.
-            GinIndex(fields=["risk_flags"], name="portfolio_snap_riskflags_gin"),
         ]
 
     def __str__(self) -> str:
         """Return the business code and its queue score."""
         return f"{self.project_code} ({self.priority_score})"
 
-    def to_queue_item(self) -> QueueItemView:
+    def to_risk_input(self, *, now: datetime, staleness_threshold_days: int) -> ProjectRiskInput:
+        """Describe this row as the facts the risk specifications are allowed to look at.
+
+        Issues no query, which is the whole reason the read model denormalizes these columns: the
+        six specifications need a state category, two dates, a next step and five counts, and every
+        one of them is already on the row. Ages are computed here against the caller's ``now``
+        rather than stored — ``days_since_last_activity`` written at rebuild time would be wrong by
+        one day every midnight, which is precisely the invalidation ADR 0011 removes.
+
+        Args:
+            now: The instant the flags will be evaluated at.
+            staleness_threshold_days: The operational threshold ``IsStale`` compares against.
+
+        Returns:
+            The frozen input, ready for
+            :func:`~apps.prioritization.domain.specifications.evaluate_risk`.
+        """
+        return ProjectRiskInput(
+            project_code=self.project_code,
+            now=now,
+            is_archived=self.is_archived,
+            state_category=self.state_category,
+            target_date=self.target_date,
+            next_step=self.next_step,
+            has_in_progress_task=self.in_progress_task_count > 0,
+            overdue_task_count=self.overdue_task_count,
+            blocked_task_count=self.blocked_task_count,
+            open_blocker_count=self.open_blocker_count,
+            oldest_blocker_age_days=self.oldest_blocker_age_days,
+            days_since_last_activity=_age_in_days(self.last_activity_at, now),
+            staleness_threshold_days=staleness_threshold_days,
+            owner_code=self.owner_code,
+            owner_load_points=max(0, self.owner_load_points),
+            owner_capacity_points=max(0, self.owner_capacity_points),
+        )
+
+    def to_queue_item(self, *, now: datetime, staleness_threshold_days: int) -> QueueItemView:
         """Describe this row as the queue entry the command center renders.
 
         Issues no query: the read model exists precisely so this projection reads one table. Every
@@ -562,13 +601,22 @@ class ProjectSnapshot(models.Model):
         reasons while the wire distinguishes "no owner" from "an owner whose code is empty"
         (`docs/API.md` §1.6).
 
-        ``risk_flags`` is parsed defensively. It is JSONB written by the rebuild consumer, and an
-        entry that no longer matches the shape is skipped rather than crashing the whole queue —
-        one unreadable flag must not take the command center down.
+        ``risk_flags`` and ``health`` are **computed here, not read** (ADR 0011). The
+        specifications run over :meth:`to_risk_input` and health is derived from what they raise by
+        the one function that derives it, so the two can never disagree with each other or with the
+        counts printed beside them — and a row nobody has rebuilt since yesterday still reports
+        today's truth.
+
+        Args:
+            now: The instant the flags are evaluated at.
+            staleness_threshold_days: The threshold ``IsStale`` compares against.
 
         Returns:
             The row as an immutable :class:`~apps.portfolio.domain.views.QueueItemView`.
         """
+        flags = evaluate_risk(
+            self.to_risk_input(now=now, staleness_threshold_days=staleness_threshold_days)
+        )
         return QueueItemView(
             code=self.project_code,
             name=self.name,
@@ -589,7 +637,7 @@ class ProjectSnapshot(models.Model):
                 label=self.state_label or self.state_code,
                 category=self.state_category,
             ),
-            health=HealthRef.of(self.health),
+            health=HealthRef.of(derive_health(flags).value),
             target_date=self.target_date,
             business_value=(
                 float(self.business_value) if self.business_value is not None else None
@@ -610,34 +658,18 @@ class ProjectSnapshot(models.Model):
                 if self.has_override
                 else None
             ),
-            risk_flags=_risk_flag_views(self.risk_flags),
+            risk_flags=tuple(flag.to_view() for flag in flags),
             updated_at=self.rebuilt_at,
         )
 
 
-def _risk_flag_views(stored: object) -> tuple[RiskFlagView, ...]:
-    """Parse ``ProjectSnapshot.risk_flags`` into projections, skipping unreadable entries.
+def _age_in_days(moment: datetime | None, now: datetime) -> int | None:
+    """Whole days between ``moment`` and ``now``, or ``None`` when the moment never happened.
 
-    The column is JSONB written by the rebuild consumer from
-    :class:`~apps.portfolio.domain.value_objects.RiskFlagEntry`, whose ``detail`` is the wire's
-    ``reason``. An entry that does not parse is dropped rather than raised on: a single malformed
-    flag must not turn the whole command center into a 500, and the missing flag is visible in the
-    response next to the ones that survived.
+    ``None`` is not zero: ``IsStale`` reads "never" as longer than any threshold, while zero would
+    read as "active today". Negative ages are clamped, because a row timestamped in the future is a
+    data problem and not a reason for a specification to see a negative age.
     """
-    entries = stored if isinstance(stored, list) else []
-    views: list[RiskFlagView] = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        code = entry.get("code")
-        severity = entry.get("severity")
-        if isinstance(code, str) and isinstance(severity, str):
-            detail = entry.get("detail")
-            views.append(
-                RiskFlagView(
-                    code=code,
-                    severity=severity,
-                    reason=detail if isinstance(detail, str) else "",
-                )
-            )
-    return tuple(views)
+    if moment is None:
+        return None
+    return max(0, (now - moment).days)

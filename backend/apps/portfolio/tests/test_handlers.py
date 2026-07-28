@@ -16,7 +16,6 @@ from django.test import SimpleTestCase, TransactionTestCase
 from apps.events.domain.envelope import (
     TOPIC_CLOCK_TICKED,
     TOPIC_PROJECT_PRIORITY_RECALCULATED,
-    TOPIC_PROJECT_RISK_CHANGED,
     TOPIC_PROJECT_STATE_CHANGED,
     EventEnvelope,
 )
@@ -44,14 +43,15 @@ def _deliver(envelope: EventEnvelope) -> bool:
 class SnapshotSubscriptionTestCase(SimpleTestCase):
     """The subscription: everything that names a project, and nothing that does not."""
 
-    def test_the_read_model_is_rebuilt_from_the_derived_topics_too(self) -> None:
-        for topic in (TOPIC_PROJECT_PRIORITY_RECALCULATED, TOPIC_PROJECT_RISK_CHANGED):
-            with self.subTest(topic=topic):
-                self.assertIn(topic, SNAPSHOT_TOPICS)
-                self.assertIn(
-                    SNAPSHOT_BUILDER,
-                    {registration.name for registration in handlers_for(topic)},
-                )
+    def test_the_read_model_is_rebuilt_from_the_derived_topic_too(self) -> None:
+        self.assertIn(TOPIC_PROJECT_PRIORITY_RECALCULATED, SNAPSHOT_TOPICS)
+        self.assertIn(
+            SNAPSHOT_BUILDER,
+            {
+                registration.name
+                for registration in handlers_for(TOPIC_PROJECT_PRIORITY_RECALCULATED)
+            },
+        )
 
     def test_the_clock_is_not_subscribed_because_it_names_no_project(self) -> None:
         self.assertNotIn(TOPIC_CLOCK_TICKED, SNAPSHOT_TOPICS)

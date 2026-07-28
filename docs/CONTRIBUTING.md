@@ -499,8 +499,8 @@ Owning skill: `.agents/skills/event-driven-flow/`.
    both until nothing emits 1.
 3. Emit it from the application service, inside the same `transaction.atomic()` as the mutation
    and the `ActivityRecord`. Services write `OutboxEvent` and stop — no Redis, no `.delay()`.
-4. Decide which existing handler reacts (`priority-recalculator`, `risk-evaluator`,
-   `snapshot-builder`, `sse-fanout`) and add the constant to its `topics=` set. One handler per
+4. Decide which existing handler reacts (`priority-recalculator`, `snapshot-builder`,
+   `sse-fanout`) and add the constant to its `topics=` set. One handler per
    reason to react, never one per topic — a failing one must not block the others. Adding a *new*
    reaction is a decorated function in `apps/<context>/handlers.py` and **zero producer edits**;
    the module name is fixed, because app-ready autodiscovers exactly `handlers`.
@@ -531,9 +531,9 @@ Owning skill: `.agents/skills/event-driven-flow/`.
        def test_the_same_event_delivered_twice_produces_one_effect(self) -> None:
            envelope = envelope_for("blocker.resolved", entity_id="PRJ-01")
 
-           with only_handlers("risk-evaluator"):
-               self.assertTrue(apply_once(get_handler("risk-evaluator"), envelope))
-               self.assertFalse(apply_once(get_handler("risk-evaluator"), envelope))
+           with only_handlers("priority-recalculator"):
+               self.assertTrue(apply_once(get_handler("priority-recalculator"), envelope))
+               self.assertFalse(apply_once(get_handler("priority-recalculator"), envelope))
    ```
 
 ## 11. Who to hand a task to

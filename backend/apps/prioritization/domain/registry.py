@@ -103,7 +103,8 @@ def register_risk[SpecificationT: type[RiskSpecification]](
     """Register a risk specification class under the flag code it raises.
 
     Args:
-        flag_code: The ``RiskFlag.code`` this specification produces, e.g. ``"NO_TARGET_DATE"``.
+        flag_code: The code every flag this specification raises carries on the wire, e.g.
+            ``"NO_TARGET_DATE"``. It names no column: flags are computed on read (ADR 0011).
         severity: Severity carried by every flag this specification raises.
 
     Returns:

@@ -8,7 +8,7 @@ description: Operating Aztec Ops locally — docker compose up/down, migrations,
 Six services in `docker-compose.yml`, three of them application processes: `postgres` (16),
 `redis` (7 — Celery broker plus the `aztec.sse` pub/sub channel, no durable event state), `api`
 (Django/ASGI on 8000), `worker` (the single Celery worker: it drains the outbox, runs every handler
-— priority-recalculator, risk-evaluator, snapshot-builder, sse-fanout — and executes the clock
+— priority-recalculator, snapshot-builder, sse-fanout — and executes the clock
 ticks), `beat` (Celery Beat: the schedule and the outbox sweep, executes nothing), `frontend`
 (Astro on 4321). Python deps are managed with `uv`.
 
@@ -187,7 +187,7 @@ docker compose exec api python manage.py shell -c \
    from apps.events.registry import get_handler; \
    from apps.events.tasks import apply_once; \
    row = OutboxEvent.objects.get(id='<uuid>'); \
-   print(apply_once(get_handler('risk-evaluator'), row.to_envelope()))"
+   print(apply_once(get_handler('priority-recalculator'), row.to_envelope()))"
 ```
 
 It returns `False` if that pair is already claimed — delete the one `ProcessedEvent` row to re-run.

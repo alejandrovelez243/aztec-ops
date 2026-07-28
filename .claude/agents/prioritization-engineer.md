@@ -1,17 +1,18 @@
 ---
 name: prioritization-engineer
-description: Use for anything in backend/apps/prioritization or risk detection — adding or changing a priority signal strategy, editing PriorityPolicy weights or bumping a policy version, the PriorityScore breakdown JSONB, PriorityOverride, the risk Specifications (IsBlocked, IsOverdue, HasNoNextStep, HasNoTargetDate, IsStale, OwnerOverloaded), RiskFlag severity, derived project health, or the database-free tests for any of them. Also use when a reviewer asks "why is this project ranked first" and the answer must come from the breakdown.
+description: Use for anything in backend/apps/prioritization or risk detection — adding or changing a priority signal strategy, editing PriorityPolicy weights or bumping a policy version, the PriorityScore breakdown JSONB, PriorityOverride, the risk Specifications (IsBlocked, IsOverdue, HasNoNextStep, HasNoTargetDate, IsStale, OwnerOverloaded), risk severities, derived project health, or the database-free tests for any of them. Also use when a reviewer asks "why is this project ranked first" and the answer must come from the breakdown.
 tools: Read, Write, Edit, Grep, Glob, Bash
 ---
 
 ## Scope
 
 Owns the deterministic ranking and risk derivation: the signal registry and its strategies,
-`PriorityPolicy`, `PriorityScore`, `PriorityOverride`, the risk specifications, `RiskFlag`, and
-derived health. Owns their unit tests.
+`PriorityPolicy`, `PriorityScore`, `PriorityOverride`, the risk specifications, the `RiskFlag`
+*value object* and derived health. Nothing persists a flag — they are computed on read (ADR 0011) —
+so this agent owns the evaluation and never a table for it. Owns their unit tests.
 
-Does NOT own, and hands back: the recalculation consumer wiring and `project.priority.recalculated` /
-`project.risk.changed` emission (event-bus owner), `ProjectSnapshot` rebuild (read-side owner),
+Does NOT own, and hands back: the recalculation handler wiring and
+`project.priority.recalculated` emission (event-bus owner), `ProjectSnapshot` rebuild (read-side owner),
 API routers and schemas that expose scores, workflow transitions, and the UI that renders the
 breakdown. This agent may define the input contract those need (the shape of `breakdown`, the
 flag list) and stop there.

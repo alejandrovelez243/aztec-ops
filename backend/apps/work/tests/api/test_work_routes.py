@@ -11,25 +11,26 @@ from typing import Any
 
 from django.test import TestCase
 
+from apps.accounts.tests.support import bearer
 from apps.portfolio.tests.scenario import OWNER_CODE, PROJECT_CODE, PortfolioScenario
-
-ACTOR = {"HTTP_X_ACTOR": OWNER_CODE}
 
 
 class TaskRouteTestCase(TestCase):
     scenario: PortfolioScenario
+    auth: dict[str, str]
 
     @classmethod
     def setUpTestData(cls) -> None:
         cls.scenario = PortfolioScenario()
         cls.scenario.add_task_workflow()
+        cls.auth = bearer(username=OWNER_CODE)
 
     def _create_task(self, **body: Any) -> Any:
         return self.client.post(
             f"/api/v1/projects/{PROJECT_CODE}/tasks",
             data=json.dumps({"title": "Validate release checklist", "priority": "critica", **body}),
             content_type="application/json",
-            **ACTOR,
+            **self.auth,
         )
 
     def test_creating_a_task_allocates_a_project_scoped_code_and_the_initial_state(self) -> None:
@@ -52,7 +53,7 @@ class TaskRouteTestCase(TestCase):
         self.assertEqual(response.json()["code"], "not_found")
 
     def test_listing_tasks_of_an_unknown_project_is_404_not_an_empty_page(self) -> None:
-        response = self.client.get("/api/v1/projects/PRJ-NOPE/tasks")
+        response = self.client.get("/api/v1/projects/PRJ-NOPE/tasks", **self.auth)
 
         self.assertEqual(response.status_code, 404)
 
@@ -60,13 +61,17 @@ class TaskRouteTestCase(TestCase):
         self._create_task()
         self._create_task()
 
-        body = self.client.get(f"/api/v1/projects/{PROJECT_CODE}/tasks?page_size=1").json()
+        body = self.client.get(
+            f"/api/v1/projects/{PROJECT_CODE}/tasks?page_size=1", **self.auth
+        ).json()
 
         self.assertEqual(len(body["items"]), 1)
         self.assertEqual(body["count"], 2)
 
     def test_an_order_by_outside_the_allowlist_is_422_and_names_what_is_allowed(self) -> None:
-        response = self.client.get(f"/api/v1/projects/{PROJECT_CODE}/tasks?order_by=secret_column")
+        response = self.client.get(
+            f"/api/v1/projects/{PROJECT_CODE}/tasks?order_by=secret_column", **self.auth
+        )
 
         self.assertEqual(response.status_code, 422)
         body = response.json()
@@ -80,7 +85,7 @@ class TaskRouteTestCase(TestCase):
             f"/api/v1/tasks/{code}/transition",
             data=json.dumps({"to_state": "doing"}),
             content_type="application/json",
-            **ACTOR,
+            **self.auth,
         )
 
         self.assertEqual(response.status_code, 200)
@@ -93,7 +98,7 @@ class TaskRouteTestCase(TestCase):
             f"/api/v1/tasks/{code}/transition",
             data=json.dumps({"to_state": "todo"}),
             content_type="application/json",
-            **ACTOR,
+            **self.auth,
         )
 
         self.assertEqual(response.status_code, 409)
@@ -102,17 +107,19 @@ class TaskRouteTestCase(TestCase):
 
 class BlockerRouteTestCase(TestCase):
     scenario: PortfolioScenario
+    auth: dict[str, str]
 
     @classmethod
     def setUpTestData(cls) -> None:
         cls.scenario = PortfolioScenario()
+        cls.auth = bearer(username=OWNER_CODE)
 
     def _raise_blocker(self) -> Any:
         return self.client.post(
             f"/api/v1/projects/{PROJECT_CODE}/blockers",
             data=json.dumps({"kind": "ACCESS", "description": "Repository access pending."}),
             content_type="application/json",
-            **ACTOR,
+            **self.auth,
         )
 
     def test_raising_a_blocker_returns_it_open_with_a_zero_age(self) -> None:
@@ -126,7 +133,7 @@ class BlockerRouteTestCase(TestCase):
     def test_raising_a_blocker_does_not_move_the_project_state(self) -> None:
         self._raise_blocker()
 
-        detail = self.client.get(f"/api/v1/projects/{PROJECT_CODE}").json()
+        detail = self.client.get(f"/api/v1/projects/{PROJECT_CODE}", **self.auth).json()
         self.assertEqual(detail["state"]["code"], "execution")
         self.assertEqual(detail["open_blockers"], 1)
 
@@ -137,7 +144,7 @@ class BlockerRouteTestCase(TestCase):
             f"/api/v1/blockers/{blocker_id}/resolve",
             data=json.dumps({"resolution": "Client granted access."}),
             content_type="application/json",
-            **ACTOR,
+            **self.auth,
         )
 
         self.assertEqual(response.status_code, 200)
@@ -150,14 +157,14 @@ class BlockerRouteTestCase(TestCase):
             f"/api/v1/blockers/{blocker_id}/resolve",
             data=payload,
             content_type="application/json",
-            **ACTOR,
+            **self.auth,
         )
 
         response = self.client.post(
             f"/api/v1/blockers/{blocker_id}/resolve",
             data=json.dumps({"resolution": "Again."}),
             content_type="application/json",
-            **ACTOR,
+            **self.auth,
         )
 
         self.assertEqual(response.status_code, 409)
@@ -170,7 +177,7 @@ class BlockerRouteTestCase(TestCase):
             "/api/v1/blockers/999999/resolve",
             data=json.dumps({"resolution": "Nothing to resolve."}),
             content_type="application/json",
-            **ACTOR,
+            **self.auth,
         )
 
         self.assertEqual(response.status_code, 404)
@@ -178,17 +185,19 @@ class BlockerRouteTestCase(TestCase):
 
 class NoteRouteTestCase(TestCase):
     scenario: PortfolioScenario
+    auth: dict[str, str]
 
     @classmethod
     def setUpTestData(cls) -> None:
         cls.scenario = PortfolioScenario()
+        cls.auth = bearer(username=OWNER_CODE)
 
-    def test_a_note_records_its_author_from_the_actor_header(self) -> None:
+    def test_a_note_records_its_author_from_the_authenticated_account(self) -> None:
         response = self.client.post(
             f"/api/v1/projects/{PROJECT_CODE}/notes",
             data=json.dumps({"body": "Kickoff scheduled for Monday."}),
             content_type="application/json",
-            **ACTOR,
+            **self.auth,
         )
 
         self.assertEqual(response.status_code, 201)
@@ -199,7 +208,7 @@ class NoteRouteTestCase(TestCase):
             f"/api/v1/projects/{PROJECT_CODE}/notes",
             data=json.dumps({"body": ""}),
             content_type="application/json",
-            **ACTOR,
+            **self.auth,
         )
 
         self.assertEqual(response.status_code, 422)

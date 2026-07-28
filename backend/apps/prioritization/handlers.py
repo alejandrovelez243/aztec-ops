@@ -1,19 +1,17 @@
-"""The two reactors of the prioritization context: the ranking engine and the risk engine.
+"""The one reactor of the prioritization context: the ranking engine.
 
-Both are registered here, in the context that owns ``PriorityScore`` and ``RiskFlag``, and not in
-``apps.events``. The bus knows a topic and a handler name; it knows nothing about scoring, which is
-what lets a signal or a specification be added without the transport learning anything.
+It is registered here, in the context that owns ``PriorityScore``, and not in ``apps.events``. The
+bus knows a topic and a handler name; it knows nothing about scoring, which is what lets a signal
+be added without the transport learning anything.
 
-**Two handlers and not one**, over the same subscription, because they have two reasons to react
-and two tables to write. One combined handler would make a failure in the risk half roll back a
-perfectly good score, and — worse — it would emit one event for two independent facts, so a client
-watching the queue could not tell a reranking from a health change. One writer per table, one
-handler per reason to react (EVENTS.md §5).
+**One handler, where there used to be two.** The risk evaluator is gone with the table it wrote
+(ADR 0011): risk flags are computed on read, so there is no moment at which they "change", no
+previous set to diff against and therefore no event to emit. What the browser used to learn from
+``project.risk.changed`` it now reads in every project payload, correct as of the moment it asked.
 
-**The subscription is the write side only.** ``project.priority.recalculated`` and
-``project.risk.changed`` are emitted from here and are deliberately absent from
-:data:`ENGINE_TOPICS`: a handler that consumed what it emits would recompute forever. The graph is
-acyclic by construction, not by a guard somewhere downstream.
+**The subscription is the write side only.** ``project.priority.recalculated`` is emitted from here
+and is deliberately absent from :data:`ENGINE_TOPICS`: a handler that consumed what it emits would
+recompute forever. The graph is acyclic by construction, not by a guard somewhere downstream.
 
 **Time comes from the envelope.** A data event is applied at its ``occurred_at`` and a tick at its
 ``tick_at``, never at ``timezone.now()``. That is what makes a redelivery land on the same number
@@ -37,7 +35,6 @@ from apps.events.domain.envelope import (
     TOPIC_NOTE_ADDED,
     TOPIC_PROJECT_CREATED,
     TOPIC_PROJECT_PRIORITY_RECALCULATED,
-    TOPIC_PROJECT_RISK_CHANGED,
     TOPIC_PROJECT_STATE_CHANGED,
     TOPIC_PROJECT_UPDATED,
     TOPIC_TASK_CREATED,
@@ -48,14 +45,10 @@ from apps.events.domain.envelope import (
 from apps.events.domain.routing import project_code_of, tick_at_of
 from apps.events.registry import register_handler
 from apps.events.services import enqueue_event
-from apps.prioritization.domain.events import (
-    ORIGIN_POLICY,
-    PriorityRecalculatedPayload,
-    RiskChangedPayload,
-)
+from apps.prioritization.domain.events import ORIGIN_POLICY, PriorityRecalculatedPayload
 from apps.prioritization.domain.types import ScoreBreakdown, SignalContribution
 from apps.prioritization.models import PriorityScore
-from apps.prioritization.services import evaluate_risk_for_project, recompute_for_project
+from apps.prioritization.services import recompute_for_project
 
 logger = logging.getLogger(__name__)
 
@@ -63,14 +56,11 @@ logger = logging.getLogger(__name__)
 #: ``ProcessedEvent`` row it writes. Renaming it replays the whole backlog for it.
 PRIORITY_RECALCULATOR = "priority-recalculator"
 
-#: Registered name of the risk handler.
-RISK_EVALUATOR = "risk-evaluator"
-
 #: Everything that can change a project's rank: every write-side topic, plus the clock.
 #:
 #: ``note.added`` is in here even though a note changes no field — a note is activity, so it resets
 #: the ``staleness`` signal, and a portfolio where writing a note did not move the score would rank
-#: an actively-managed project as abandoned. The two derived topics are excluded: see the module
+#: an actively-managed project as abandoned. The one derived topic is excluded: see the module
 #: docstring.
 ENGINE_TOPICS: Final[frozenset[str]] = frozenset(
     {
@@ -125,43 +115,12 @@ def recalculate_priority(envelope: EventEnvelope) -> None:
         _rescore(project_code=project_code, now=now, envelope=envelope)
 
 
-@register_handler(name=RISK_EVALUATOR, topics=ENGINE_TOPICS)
-def evaluate_risk(envelope: EventEnvelope) -> None:
-    """Re-run the risk specifications for the projects this event affects and reconcile the flags.
-
-    Same subscription and same selection as :func:`recalculate_priority`, because risk is stale for
-    exactly the same two reasons: the data moved, or the calendar did. ``OVERDUE`` in particular
-    becomes true at midnight with nobody touching anything, which is the whole reason the clock is
-    a participant on the bus rather than an assumption.
-
-    ``project.risk.changed`` is emitted only when the flag set or the derived health actually
-    moved. A refreshed wording — "2 tasks past due" becoming "3 tasks past due" — is the same risk
-    and is deliberately not an event.
-
-    No ``ActivityRecord`` is written here, and that is not an oversight: the closed verb set
-    (ARCHITECTURE §3.4) has no risk verb, because the ``RiskFlag`` rows are themselves the
-    append-only history — a flag keeps its ``detected_at`` while it stands and is cleared rather
-    than deleted, so "blocked for 19 days" is answerable from the table.
-
-    Args:
-        envelope: A delivered event on one of :data:`ENGINE_TOPICS`.
-
-    Raises:
-        EventNamesNoProjectError: A non-project event carries no ``project_code``.
-        MalformedTickError: A tick with no usable ``tick_at``.
-        ProjectNotFound: The event names a project that no longer exists.
-    """
-    for project_code, now in _affected(envelope):
-        _reevaluate(project_code=project_code, now=now, envelope=envelope)
-
-
 def _affected(envelope: EventEnvelope) -> Iterator[tuple[str, datetime]]:
-    """The projects an event asks the engines to reconsider, each with the instant to apply it at.
+    """The projects an event asks the engine to reconsider, each with the instant to apply it at.
 
-    One generator for both handlers, so "which projects does a tick touch" has a single definition.
-    A second copy is where the two engines would start disagreeing about which projects went stale,
-    and a project scored against a tick but not re-flagged against it is exactly the inconsistency
-    the read model would then render.
+    A generator rather than an inline branch, so "which projects does a tick touch" has a single
+    definition and the two shapes of event — a fact about one project, a tick about many — reach
+    the same rescoring code path.
 
     Args:
         envelope: The delivered event.
@@ -222,29 +181,6 @@ def _rescore(*, project_code: str, now: datetime, envelope: EventEnvelope) -> No
             breakdown=result.breakdown,
             previous_value=result.previous_value,
             origin=result.origin,
-        ).model_dump(mode="json"),
-        actor=SYSTEM_ACTOR,
-        correlation_id=envelope.correlation_id,
-        occurred_at=now,
-    )
-
-
-def _reevaluate(*, project_code: str, now: datetime, envelope: EventEnvelope) -> None:
-    """Reconcile one project's flags, and publish only if the set or the health moved."""
-    result = evaluate_risk_for_project(project_code=project_code, now=now)
-    if not result.changed:
-        return
-
-    enqueue_event(
-        topic=TOPIC_PROJECT_RISK_CHANGED,
-        entity_type=ENTITY_PROJECT,
-        entity_id=project_code,
-        payload=RiskChangedPayload.of(
-            flags=result.flags,
-            added=result.added,
-            removed=result.removed,
-            health=result.health,
-            previous_health=result.previous_health,
         ).model_dump(mode="json"),
         actor=SYSTEM_ACTOR,
         correlation_id=envelope.correlation_id,

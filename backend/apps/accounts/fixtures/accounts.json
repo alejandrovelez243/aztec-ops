@@ -32,7 +32,7 @@
       "first_name": "Camila",
       "last_name": "Torres",
       "email": "",
-      "is_staff": false,
+      "is_staff": true,
       "is_active": true,
       "date_joined": "2026-01-05T09:00:00+00:00",
       "code": "camila.torres",

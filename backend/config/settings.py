@@ -9,6 +9,7 @@ The rule this file follows: a value that changes per environment is a field on
 Anything genuinely conditional keys off ``ENVIRONMENT`` in one visible place.
 """
 
+from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
@@ -43,7 +44,12 @@ class Settings(BaseSettings):
     environment: Literal["local", "test", "production"] = Field(
         default="local", alias="ENVIRONMENT"
     )
-    secret_key: str = Field(default="dev-only-not-a-secret", alias="DJANGO_SECRET_KEY")
+    #: Long enough for HS256 (PyJWT warns below 32 bytes) and obviously not a secret, so a deployment
+    #: that forgot ``DJANGO_SECRET_KEY`` is embarrassing rather than subtly weak.
+    secret_key: str = Field(
+        default="dev-only-not-a-secret-do-not-use-this-in-production",
+        alias="DJANGO_SECRET_KEY",
+    )
     debug: bool = Field(default=True, alias="DJANGO_DEBUG")
     allowed_hosts: list[str] = Field(default=["*"], alias="DJANGO_ALLOWED_HOSTS")
 
@@ -204,19 +210,43 @@ AUTH_USER_MODEL = "accounts.User"
 REDIS_URL = settings.redis_url
 
 # --- CORS ---------------------------------------------------------------------------
-# An explicit origin allowlist and nothing wider. ``CORS_ALLOW_ALL_ORIGINS`` is deliberately not
-# set, not even in development: a permissive default has a habit of reaching production, and the
-# Astro origin is the only browser origin that has any business calling this API.
+# An explicit origin allowlist and nothing wider, and now it is not merely good hygiene: a browser
+# refuses a credentialed cross-origin response whose ``Access-Control-Allow-Origin`` is ``*``. The
+# moment the access token became a cookie, the wildcard stopped being an option the API could take
+# even if someone wanted it. ``CORS_ALLOW_ALL_ORIGINS`` is deliberately not set, in any environment.
 CORS_ALLOWED_ORIGINS = settings.cors_origins
 
-#: ``X-Actor`` is not one of the CORS-safelisted request headers, so a browser preflights every
-#: mutating call and refuses it unless the header is named here. Without this line every POST from
-#: the frontend fails at the preflight with an error that says nothing about the header.
-CORS_ALLOW_HEADERS = (*default_headers, "x-actor")
+#: ``Authorization`` is already one of ``default_headers``, so no custom request header is
+#: preflighted any more.
+CORS_ALLOW_HEADERS = default_headers
 
-#: The stream is a plain ``GET`` an ``EventSource`` opens, so it needs no extra methods — but it
-#: does need the origin allowlist above, which is why the SSE view is not exempt from CORS.
-CORS_ALLOW_CREDENTIALS = False
+#: Required, and the reason is ``EventSource``. It cannot set request headers, so the only way a
+#: browser authenticates ``GET /api/stream`` is the access cookie — which it sends only when the
+#: client passes ``withCredentials: true``, and which the browser only accepts back when the server
+#: answers with ``Access-Control-Allow-Credentials: true`` and a named origin.
+CORS_ALLOW_CREDENTIALS = True
+
+# --- Authentication -------------------------------------------------------------------
+# JWT access tokens, minted by ``ninja_jwt`` and validated by ``config.auth``. Not in
+# ``INSTALLED_APPS``: the library only needs its settings, and ``ninja_jwt.token_blacklist`` is the
+# one part with tables — deliberately not installed, since nothing in this deployment revokes a
+# token server-side (``apps.accounts.services.sign_in`` says why).
+
+NINJA_JWT = {
+    # Short enough that a leaked access token is worth little, long enough that a working session
+    # is not a refresh loop. The refresh token is what carries the session across the day.
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=30),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    # Signed with the project's own secret: one secret to rotate, and rotating it revokes every
+    # outstanding token at once — which is the only revocation lever this deployment has.
+    "SIGNING_KEY": SECRET_KEY,
+    "ALGORITHM": "HS256",
+}
+
+#: A browser silently discards a ``Secure`` cookie that arrives over plain HTTP, and the compose
+#: stack serves ``http://localhost``. So the flag follows the deployment rather than being hardcoded
+#: on — production, where it matters, is exactly where it is set.
+AUTH_COOKIE_SECURE = settings.is_production
 
 TICKER_INTERVAL_SECONDS = settings.ticker_interval_seconds
 STALENESS_THRESHOLD_DAYS = settings.staleness_threshold_days

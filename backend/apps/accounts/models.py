@@ -171,6 +171,31 @@ class User(AbstractUser):
         """Return the display alias."""
         return self.alias
 
+    @property
+    def is_ops_lead(self) -> bool:
+        """Whether this person may override the ranking and rebuild the whole portfolio.
+
+        **Why ``is_staff`` and not the ``role`` foreign key.** ``catalog.Role`` is operator-editable
+        taxonomy: its rows are renamed, reordered and retired from the admin like every other
+        taxonomy (CLAUDE.md rule 1). Hanging authorization off it would mean that retiring a role,
+        or a typo in its ``code``, silently revokes a permission — a label edit becoming a security
+        change. Mapping it onto a Django ``Group`` instead would fix the fragility and cost a
+        migration, a permission codename, a fixture, and a synchronisation rule to keep group
+        membership agreeing with the role column: real machinery whose only readers are the two
+        ``if``s this property serves. ``is_staff`` is already on
+        :class:`~django.contrib.auth.models.AbstractUser`, is identity rather than taxonomy, is
+        editable from the admin, and needs no new table.
+
+        The overlap with admin access is a feature, not a coincidence: the person trusted to edit
+        workflows and priorities from ``/admin/`` is the person trusted to force a rank against the
+        engine. If the two ever have to diverge, that is the moment to introduce the group — and
+        this property is the single place that changes.
+
+        Returns:
+            ``True`` when this account may take the two portfolio-wide actions.
+        """
+        return self.is_staff
+
     def to_ref(self) -> ActorRef:
         """Describe this person as the reference shape every payload that names a person renders.
 

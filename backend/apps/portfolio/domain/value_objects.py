@@ -18,7 +18,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-#: Derived project health, mirroring ``ProjectSnapshot.Health``.
+#: Derived project health, mirroring ``prioritization.domain.types.Health``. A literal rather than
+#: an import of that enum because this is the *filter* vocabulary — what a client may ask the queue
+#: for — and django-ninja renders a literal as an enumerated query parameter. It is a facet, never
+#: a column: no table stores health (ADR 0011).
 Health = Literal["HEALTHY", "AT_RISK", "BLOCKED"]
 
 #: The currency a project is assumed to be billed in when the caller names none — every project in
@@ -72,20 +75,6 @@ class OwnerLoad(BaseModel):
         belongs to the work, not to who happens to be free (ARCHITECTURE §4.1).
         """
         return self.load_points > self.weekly_capacity_points
-
-
-class RiskFlagEntry(BaseModel):
-    """One raised risk flag as it is stored inside ``ProjectSnapshot.risk_flags``.
-
-    Modelled rather than left as a bare mapping so the GIN-indexed JSON keys have exactly one
-    definition; the authoritative rows remain ``prioritization_riskflag``.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    code: str
-    severity: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
-    detail: str = ""
 
 
 class CreateProjectCommand(BaseModel):
@@ -262,14 +251,20 @@ class SnapshotQueueFilters(BaseModel):
 class ProjectSnapshotValues(BaseModel):
     """The full projection written into one ``ProjectSnapshot`` row.
 
-    Produced by the ``snapshot-rebuild`` consumer from ``Project``, ``Task``, ``Blocker``,
-    ``PriorityScore``, ``RiskFlag`` and ``ActivityRecord``, then handed to
+    Produced by the ``snapshot-builder`` handler from ``Project``, ``Task``, ``Blocker``,
+    ``PriorityScore`` and ``ActivityRecord``, then handed to
     :meth:`apps.portfolio.models.ProjectSnapshotQuerySet.upsert`. It is a complete row, never
     a patch: a partial rebuild would leave columns from two different deliveries in one row, and
     ``last_event_id`` would then name a delivery that did not produce all of it.
 
     ``breakdown`` is typed loosely because it is a verbatim copy of ``PriorityScore.breakdown``
     (DATA_MODEL §6.3), owned and validated by the prioritization context.
+
+    It carries **no flags and no health**, and that is the point of ADR 0011. What it does carry is
+    what those two are derived *from* — the state category, the dates, the next step, the task and
+    blocker counts, the owner's load and the last activity — because those are genuinely expensive
+    to aggregate per request and are facts rather than conclusions. The conclusion is drawn at read
+    time, so a row rebuilt a week ago still reads as overdue the morning the date passes.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -300,12 +295,11 @@ class ProjectSnapshotValues(BaseModel):
     has_override: bool = False
     override_position: int | None = None
     override_reason: str = ""
-    risk_flags: tuple[RiskFlagEntry, ...] = ()
-    health: Health = "HEALTHY"
     open_task_count: int = 0
     overdue_task_count: int = 0
     blocked_task_count: int = 0
     urgent_open_task_count: int = 0
+    in_progress_task_count: int = 0
     open_blocker_count: int = 0
     oldest_blocker_age_days: int | None = None
     last_activity_at: datetime | None = None

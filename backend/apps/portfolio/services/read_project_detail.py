@@ -5,6 +5,11 @@ the queue: a list of 22 rows must not pay for a six-table join, while a single p
 rendered from a projection that a consumer has not rebuilt yet — an operator who has just moved a
 project and lands on its detail page has to see the move.
 
+``risk_flags`` and ``health`` arrive from ``read_project_priority``, which evaluates the
+specifications against ``now`` rather than reading a stored set (ADR 0011). That is what makes this
+response correct the moment it is asked for, including on the morning a target date passes with no
+event having been emitted about it.
+
 ``transitions`` is the load-bearing part. It is the only source of transition buttons
 (`docs/API.md` §2.2): the frontend holds no list of state codes and never guesses legality, which
 is what makes adding a workflow state a fixture row and zero frontend changes.
@@ -31,7 +36,7 @@ def read_project_detail(*, project_code: str, now: datetime) -> ProjectDetailVie
             a detail page whose parts disagreed about "now" is one nobody can reason about.
 
     Returns:
-        The project with its tasks, blockers, score, risk flags and legal transitions.
+        The project with its tasks, blockers, score, computed risk flags and legal transitions.
 
     Raises:
         ProjectNotFound: No project carries that code.
@@ -44,7 +49,7 @@ def read_project_detail(*, project_code: str, now: datetime) -> ProjectDetailVie
     tasks = Task.objects.for_project(project.pk)
     counts = tasks.counts(today=today)
     blockers = Blocker.objects.for_project(project.pk).with_relations().in_panel_order()
-    priority = read_project_priority(project_id=project.pk, now=now)
+    priority = read_project_priority(project_code=project.code, now=now)
 
     return ProjectDetailView(
         code=project.code,

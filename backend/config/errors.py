@@ -27,7 +27,7 @@ from collections.abc import Callable, Mapping
 from functools import partial
 from typing import Final
 
-from django.http import HttpRequest, HttpResponse
+from django.http import HttpRequest, HttpResponse, JsonResponse
 from ninja import NinjaAPI
 from ninja.errors import ValidationError as NinjaValidationError
 from pydantic import JsonValue
@@ -49,6 +49,11 @@ CODE_NOT_FOUND: Final = "not_found"
 CODE_TRANSITION_NOT_ALLOWED: Final = "transition_not_allowed"
 CODE_CONFLICTING_STATE: Final = "conflicting_state"
 CODE_VALIDATION_ERROR: Final = "validation_error"
+CODE_AUTHENTICATION_REQUIRED: Final = "authentication_required"
+#: A wire ``code`` the frontend switches on, not a credential — hence the bandit suppression.
+CODE_INVALID_TOKEN: Final = "invalid_token"  # noqa: S105
+CODE_INVALID_CREDENTIALS: Final = "invalid_credentials"
+CODE_PERMISSION_DENIED: Final = "permission_denied"
 
 #: Applied to a ``DomainError`` subclass no descriptor names. 400 rather than 500 because the
 #: error is typed and therefore deliberate — the context meant to reject the request — but the API
@@ -61,7 +66,7 @@ _FALLBACK_CODE: Final = "domain_error"
 #: errors that belong to no context and ninja's own request-validation failure. Registering roots
 #: rather than leaves is what lets a context add an error class without touching this file.
 _HANDLED_ROOTS: Final[tuple[type[Exception], ...]] = (
-    accounts_errors.ActorError,
+    accounts_errors.AuthError,
     activity_errors.ActivityError,
     catalog_errors.CatalogError,
     portfolio_errors.DomainError,
@@ -108,6 +113,16 @@ def _no_details(_exc: Exception) -> dict[str, JsonValue]:
     return {}
 
 
+def _ops_lead_details(exc: Exception) -> dict[str, JsonValue]:
+    """Name the action that was refused and the capability it needs.
+
+    ``required`` is a capability name, not a taxonomy code: the rule is ``User.is_ops_lead`` and the
+    UI branches on the ``is_ops_lead`` flag the token endpoints already return, so nothing here
+    invites the client to compare against a ``catalog.Role`` label.
+    """
+    return {"required": "ops_lead", "action": getattr(exc, "action", "")}
+
+
 def _transition_details(exc: Exception) -> dict[str, JsonValue]:
     """Render ``{from_state, to_state, allowed[]}`` so a stale client resyncs from the rejection.
 
@@ -150,6 +165,18 @@ _DESCRIPTORS: Final[
     work_errors.BlockerNotFound: (404, CODE_NOT_FOUND, _not_found("blocker")),
     work_errors.PriorityNotFound: (404, CODE_NOT_FOUND, _not_found("priority")),
     work_errors.PersonNotFound: (404, CODE_NOT_FOUND, _not_found("person")),
+    # --- 401 / 403: who is asking, and whether they may -------------------------------------
+    # Three distinct 401 codes rather than one, because the client's next move differs: no
+    # credential means "sign in", a refused token means "refresh first", and bad credentials mean
+    # "the form was answered wrongly". A single ``unauthorized`` would make the frontend guess.
+    accounts_errors.AuthenticationRequired: (
+        401,
+        CODE_AUTHENTICATION_REQUIRED,
+        _no_details,
+    ),
+    accounts_errors.TokenRejected: (401, CODE_INVALID_TOKEN, _no_details),
+    accounts_errors.InvalidCredentials: (401, CODE_INVALID_CREDENTIALS, _no_details),
+    accounts_errors.OpsLeadRequired: (403, CODE_PERMISSION_DENIED, _ops_lead_details),
     # --- 409: legal in the workflow, impossible against current facts ------------------------
     workflow_errors.TransitionNotAllowed: (
         409,
@@ -169,9 +196,6 @@ _DESCRIPTORS: Final[
     ),
     work_errors.DependencyCycle: (409, CODE_CONFLICTING_STATE, _cycle_details),
     # --- 422: the request is well-formed and the domain refuses it ---------------------------
-    accounts_errors.ActorHeaderMissing: (422, CODE_VALIDATION_ERROR, _field("X-Actor")),
-    accounts_errors.SystemActorRejected: (422, CODE_VALIDATION_ERROR, _field("X-Actor")),
-    accounts_errors.ActorNotFound: (422, CODE_VALIDATION_ERROR, _field("X-Actor")),
     workflow_errors.ReasonRequired: (422, CODE_VALIDATION_ERROR, _field("reason")),
     workflow_errors.RequiredFieldMissing: (
         422,
@@ -224,6 +248,27 @@ def register_exception_handlers(api: NinjaAPI) -> None:
     for root in _HANDLED_ROOTS:
         api.add_exception_handler(root, partial(_domain_error_response, api=api))
     api.add_exception_handler(NinjaValidationError, partial(_request_validation_response, api=api))
+
+
+def domain_error_json(exc: Exception) -> JsonResponse:
+    """Render a typed error in the §1.5 envelope for a view ninja does not serve.
+
+    ``GET /api/stream`` is a plain Django view — its body is an open-ended byte stream, not a
+    schema — so it cannot reach ninja's exception handlers. It still has to refuse an
+    unauthenticated caller in the *same* shape as every other route, or the frontend would need a
+    second parser for the one endpoint it keeps open permanently. Same table, same statuses, one
+    contract.
+
+    Args:
+        exc: The typed error to render.
+
+    Returns:
+        The envelope, with the status :data:`_DESCRIPTORS` assigns the exception.
+    """
+    status, code, render_details = _descriptor_for(exc)
+    return JsonResponse(
+        {"code": code, "message": str(exc), "details": render_details(exc)}, status=status
+    )
 
 
 def _domain_error_response(request: HttpRequest, exc: Exception, *, api: NinjaAPI) -> HttpResponse:

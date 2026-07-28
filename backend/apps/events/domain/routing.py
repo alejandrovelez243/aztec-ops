@@ -1,10 +1,10 @@
 """Two questions every project-scoped handler asks of an envelope, answered once.
 
-``priority-recalculator``, ``risk-evaluator`` and ``snapshot-builder`` all begin the same way:
-*which project is this about*, and — for ``clock.ticked`` — *which instant does this tick
-represent*. Three copies of either answer is three places for "``entity.id`` when the entity is a
-project, ``payload.project_code`` otherwise" to drift, and the second copy is where a handler
-starts reading its own wall clock instead of the tick.
+``priority-recalculator`` and ``snapshot-builder`` both begin the same way: *which project is this
+about*, and — for ``clock.ticked`` — *which instant does this tick represent*. A second copy of
+either answer is a second place for "``entity.id`` when the entity is a project,
+``payload.project_code`` otherwise" to drift, and it is where a handler starts reading its own wall
+clock instead of the tick.
 
 Both helpers are pure functions over the envelope: no Django, no database, no clock, so they are
 provable on ``SimpleTestCase``. They live beside the envelope rather than inside it because they

@@ -40,7 +40,7 @@ from apps.work.services.raise_blocker import raise_blocker
 from apps.work.services.read_tasks import TaskFilters, read_project_tasks
 from apps.work.services.resolve_blocker import resolve_blocker
 from apps.work.services.transition_task import transition_task
-from config.actor import actor_code_of, actor_header
+from config.auth import actor_code_of
 
 router = Router(tags=["work"])
 
@@ -48,7 +48,6 @@ router = Router(tags=["work"])
 @router.get(
     "/projects/{project_code}/tasks",
     response=Page[TaskView],
-    auth=None,
     url_name="project_tasks",
 )
 def get_project_tasks(
@@ -82,7 +81,6 @@ def get_project_tasks(
 @router.post(
     "/projects/{project_code}/tasks",
     response={201: TaskView},
-    auth=actor_header,
     url_name="task_create",
 )
 def post_project_task(
@@ -115,7 +113,6 @@ def post_project_task(
 @router.post(
     "/tasks/{task_code}/transition",
     response=TaskView,
-    auth=actor_header,
     url_name="task_transition",
 )
 def post_task_transition(
@@ -124,9 +121,10 @@ def post_task_transition(
     """Move a task along a declared edge of the task workflow.
 
     A task entering or leaving a ``BLOCKED``-category state changes its project's derived health,
-    so the read model is rebuilt by the consumer reacting to ``task.state_changed`` and
-    ``project.risk.changed`` may follow on the stream. None of that happens here: a slow rescore
-    must not be able to roll back a legitimate move.
+    and nothing has to be written for that to be true: health is computed when the project is read
+    (ADR 0011). What the ``task.state_changed`` event does cause is a rescore and a read-model
+    rebuild, downstream and asynchronously. None of that happens here: a slow rescore must not be
+    able to roll back a legitimate move.
     """
     now = timezone.now()
     task = transition_task(
@@ -145,7 +143,6 @@ def post_task_transition(
 @router.post(
     "/projects/{project_code}/blockers",
     response={201: BlockerView},
-    auth=actor_header,
     url_name="blocker_create",
 )
 def post_project_blocker(
@@ -175,7 +172,6 @@ def post_project_blocker(
 @router.post(
     "/blockers/{blocker_id}/resolve",
     response=BlockerView,
-    auth=actor_header,
     url_name="blocker_resolve",
 )
 def post_blocker_resolve(
@@ -206,7 +202,6 @@ def post_blocker_resolve(
 @router.post(
     "/projects/{project_code}/notes",
     response={201: NoteView},
-    auth=actor_header,
     url_name="note_create",
 )
 def post_project_note(request: HttpRequest, project_code: str, payload: NoteIn) -> Status[NoteView]:

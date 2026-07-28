@@ -82,14 +82,16 @@ consumer at once and is out of scope for a normal feature.
 
 ```
 <entity>.<event>              project.created, task.state_changed, blocker.raised
-<entity>.<aspect>.<event>     project.priority.recalculated, project.risk.changed
+<entity>.<aspect>.<event>     project.priority.recalculated
 ```
 
 - Lowercase, dot-separated, `snake_case` inside a segment, at most three segments.
 - Entity singular. Event in past tense: the topic reports something that already committed, so
   `project.updated`, never `project.update` or `update_project`.
 - The `<aspect>` segment exists for facts derived by a consumer rather than by a user action —
-  `priority`, `risk`. It keeps the derived topics visually separate from the write-side ones.
+  `priority`. It keeps the derived topic visually separate from the write-side ones. There is only
+  one, and there is deliberately no `project.risk.changed`: risk flags are computed on read
+  (ADR 0011), so they have no moment of change to announce.
 - A topic name is immutable once released. Renaming means introducing the new topic, emitting
   both for one release, migrating consumers, then removing the old one.
 - Never encode an identifier or a state in the topic (`project.PRJ-01.updated`,
@@ -124,7 +126,7 @@ Codes used below are workflow state `code`s, not labels: project states `discove
 | `business_value` | number | no |
 | `currency` | string ISO-4217 | no |
 
-**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes — the
+**Consumed by** `priority-recalculator`, `snapshot-builder`. **SSE**: yes — the
 command center gains a row.
 
 ```json
@@ -163,7 +165,7 @@ transition. `workflow_state` can never appear in `changes` — state moves only 
 |---|---|---|
 | `changes` | object mapping field name → `{"from": any, "to": any}` | yes, non-empty |
 
-**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes.
+**Consumed by** `priority-recalculator`, `snapshot-builder`. **SSE**: yes.
 
 ```json
 {
@@ -204,7 +206,7 @@ matched an active `WorkflowTransition` and satisfied its guard, `requires_reason
 Consumers branch on `to_category`, never on `to` — that is what lets an operator add a state
 from the admin without a deploy.
 
-**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes.
+**Consumed by** `priority-recalculator`, `snapshot-builder`. **SSE**: yes.
 
 ```json
 {
@@ -248,8 +250,8 @@ recompute, so the timeline shows the state change and the reranking as one decis
 `code` values in `breakdown` are the registered signal codes: `deadline_pressure`,
 `overdue_work`, `criticality`, `business_value`, `blockage`, `staleness`.
 
-**Consumed by** `snapshot-builder`. **Not** consumed by `priority-recalculator` or
-`risk-evaluator` — a handler never consumes what it emits, which is what keeps the bus acyclic.
+**Consumed by** `snapshot-builder`. **Not** consumed by `priority-recalculator` — a handler
+never consumes what it emits, which is what keeps the bus acyclic.
 **SSE**: yes — the queue reorders live and the breakdown is what the UI shows next to the number.
 
 ```json
@@ -288,59 +290,27 @@ recompute, so the timeline shows the state change and the reranking as one decis
 
 ---
 
-### `project.risk.changed`
+### ~~`project.risk.changed`~~ — retired (ADR 0011)
 
-**Emitted by** the `risk-evaluator` handler when the set of `RiskFlag`s for a project
-differs from the persisted one, or when the derived health changes. Nothing is emitted when the
-evaluation is identical. `actor` is `system`. Version 1.
+**This topic does not exist.** Risk flags are computed on read, so there is no moment at which a
+flag "changes": no previous set to diff against, no event to emit and no handler to emit it. The
+flags a client used to receive here now travel in **every project payload** —
+`GET /api/v1/queue` and `GET /api/v1/projects/{code}` both return `risk_flags` and `health`,
+evaluated at the instant of the request (`docs/API.md` §1.6).
 
-| Field | Type | Required |
-|---|---|---|
-| `flags` | array of `{code, severity, reason}` | yes (may be empty — an empty array is the "risk cleared" event) |
-| `added` | array of string flag codes | yes |
-| `removed` | array of string flag codes | yes |
-| `health` | string (`HEALTHY \| AT_RISK \| BLOCKED`) | yes — derived, never operator-set |
-| `previous_health` | string \| null | yes — the health this event replaced; null only where no evaluation preceded it |
+Flag codes still come from the risk registry: `BLOCKED`, `OVERDUE`, `NO_NEXT_STEP`,
+`NO_TARGET_DATE`, `STALE`, `OWNER_OVERLOADED`. Severity ∈ `LOW | MEDIUM | HIGH | CRITICAL`, taken
+from the registry entry. `CRITICAL` is what makes health `BLOCKED`; any other raised flag makes it
+`AT_RISK`. Health remains the one derived vocabulary in the system and it is **English**, matching
+`prioritization.domain.types.Health` — Spanish belongs to operator-editable *labels*, which never
+appear in a payload.
 
-Health is the one derived vocabulary on the bus and it is **English**, matching
-`ProjectSnapshot.health` and `prioritization.domain.types.Health`. It is structural, not operator
-data: a payload carrying Spanish here would force every reader to hold two vocabularies for one
-fact, and the read model's column would still be the English one (`CLAUDE.md` language rule —
-Spanish belongs to operator-editable *labels*, which are never in a payload).
-
-Flag codes come from the risk registry: `BLOCKED`, `OVERDUE`, `NO_NEXT_STEP`, `NO_TARGET_DATE`,
-`STALE`, `OWNER_OVERLOADED`. Severity ∈ `LOW | MEDIUM | HIGH | CRITICAL`, taken from the registry
-entry and never from the row. `CRITICAL` is what makes health `BLOCKED`; any other raised flag
-makes it `AT_RISK`.
-
-**Consumed by** `snapshot-builder`. **SSE**: yes — the risk panels and the health indicator patch
-from it.
-
-```json
-{
-  "id": "4c8e2f16-5ba9-4d77-8f10-9a3e2b7c5d02",
-  "topic": "project.risk.changed",
-  "occurred_at": "2026-07-28T09:05:13Z",
-  "actor": "system",
-  "correlation_id": "1e7c4b90-2a55-4c0e-b0d2-8f4b1c66a201",
-  "entity": {"type": "project", "id": "PRJ-01"},
-  "payload": {
-    "flags": [
-      {"code": "BLOCKED", "severity": "CRITICAL",
-       "reason": "Project state category is BLOCKED and 1 task is blocked"},
-      {"code": "OVERDUE", "severity": "HIGH", "reason": "2 open tasks past their due date"},
-      {"code": "NO_TARGET_DATE", "severity": "MEDIUM", "reason": "Active project with no target date"},
-      {"code": "NO_NEXT_STEP", "severity": "MEDIUM",
-       "reason": "No next step and no task in an IN_PROGRESS state"}
-    ],
-    "added": ["BLOCKED", "NO_NEXT_STEP"],
-    "removed": [],
-    "health": "BLOCKED",
-    "previous_health": "AT_RISK"
-  },
-  "version": 1
-}
-```
+**What a live client does instead.** A project's flags can only change because something about it
+changed, and everything that can change about it is already a topic. `project.state_changed`,
+`task.state_changed`, `blocker.raised` and `blocker.resolved` all reach the browser, and the
+project they name is re-read with its freshly evaluated flags. The one case with no event behind it
+is the calendar: a project that becomes overdue or stale at midnight pushes nothing, and the board
+shows it the moment anyone loads or re-reads it. That trade is recorded in ADR 0011.
 
 ---
 
@@ -359,7 +329,7 @@ what lets a consumer aggregate without a FK into `backend/apps/work`. Version 1.
 | `due_date` | string `YYYY-MM-DD` \| null | yes |
 | `depends_on` | array of `{task_code \| null, raw_label}` | no (unresolved dependencies keep only `raw_label`) |
 
-**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes — task
+**Consumed by** `priority-recalculator`, `snapshot-builder`. **SSE**: yes — task
 counts and owner load are on screen.
 
 ```json
@@ -404,7 +374,7 @@ Keys of `changes` are model field names (`title`, `detail`, `last_progress`, `du
 as the referenced row's business `code`, a `Decimal` as a number, a `date` as an ISO string, and
 `null` when the field is empty — `null` and `""` are different facts.
 
-**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes — a
+**Consumed by** `priority-recalculator`, `snapshot-builder`. **SSE**: yes — a
 priority or due-date edit reorders the queue, and without this topic the score goes stale
 silently: neither is a transition, and `clock.ticked` does not rescue it because
 `PriorityScore.valid_until` only moves when something recomputes the score.
@@ -447,7 +417,7 @@ silently: neither is a transition, and `clock.ticked` does not rescue it because
 | `reason` | string \| null | yes |
 | `last_progress` | string \| null | no |
 
-**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes — a
+**Consumed by** `priority-recalculator`, `snapshot-builder`. **SSE**: yes — a
 task entering `BLOCKED` can change the whole project's health, which is visible on the queue.
 
 ```json
@@ -489,7 +459,7 @@ names what it blocks. Version 1.
 | `owner_alias` | string \| null | yes — who has to move it |
 | `raised_at` | string ISO-8601 | yes |
 
-**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes — the
+**Consumed by** `priority-recalculator`, `snapshot-builder`. **SSE**: yes — the
 open-blockers panel is the second question the command center answers.
 
 ```json
@@ -528,7 +498,7 @@ resolved blocker is a no-op and emits nothing. Version 1.
 | `resolved_at` | string ISO-8601 | yes |
 | `open_for_days` | integer | yes — age at resolution; the blockage signal reads it |
 
-**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes.
+**Consumed by** `priority-recalculator`, `snapshot-builder`. **SSE**: yes.
 
 ```json
 {
@@ -565,7 +535,7 @@ Version 1.
 | `body` | string | yes |
 | `author_alias` | string | yes |
 
-**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes — the
+**Consumed by** `priority-recalculator`, `snapshot-builder`. **SSE**: yes — the
 detail timeline appends live.
 
 ```json
@@ -606,14 +576,16 @@ handler. The clock is dispatched by the same drain as a transition.
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `tick_at` | ISO-8601 | yes | The instant the tick represents. Consumers use this, never their own wall clock, so a replayed tick is deterministic. |
-| `kind` | `"interval"` \| `"day_boundary"` | yes | A day boundary additionally re-evaluates calendar-derived flags such as `IS_OVERDUE`. |
+| `kind` | `"interval"` \| `"day_boundary"` | yes | A day boundary is when the calendar-derived signals (`deadline_pressure`, `staleness`) are most likely to have moved a stored score. |
 
 `entity` is `{"type": "clock", "id": "system"}`. There is no project in scope: the handler
 decides which projects a tick affects.
 
-**Consumed by** `priority-recalculator` and `risk-evaluator`. **SSE**: no. A tick itself is not
-a fact a view renders; the `project.priority.recalculated` and `project.risk.changed` events it
-produces are, and those reach the browser normally.
+**Consumed by** `priority-recalculator`. **SSE**: no. A tick itself is not a fact a view
+renders; the `project.priority.recalculated` events it produces are, and those reach the browser
+normally. A tick no longer re-flags anything: a project becomes overdue at midnight whether or not
+anything ticked, because the flag is evaluated when somebody reads the project. What the tick still
+buys is the *score*, which is stored and therefore has to be told that the calendar moved.
 
 **What the handler does with it.** Recomputing all 22 projects on every tick would work at this
 size and would be the wrong shape at any other. Each `PriorityScore` persists `valid_until`: the
@@ -652,8 +624,7 @@ API: renaming a deployed handler replays history for it.
 | Handler (registry name) | Declared in | Subscribes to | What it does | Emits | Idempotency key |
 |---|---|---|---|---|---|
 | `priority-recalculator` | `apps/prioritization/handlers.py` | `project.created`, `project.updated`, `project.state_changed`, `task.created`, `task.updated`, `task.state_changed`, `blocker.raised`, `blocker.resolved`, `note.added`, `clock.ticked` | Recomputes `PriorityScore` for the affected project under the active `PriorityPolicy`, persisting `value`, `policy_version` and `breakdown` | `project.priority.recalculated`, only when value or breakdown changed | `(event.id, "priority-recalculator")` |
-| `risk-evaluator` | `apps/prioritization/handlers.py` | same set as above, including `clock.ticked` | Re-runs the risk specifications and rewrites the project's `RiskFlag` set; derives health from the flags | `project.risk.changed`, only when the flag set or health changed | `(event.id, "risk-evaluator")` |
-| `snapshot-builder` | `apps/portfolio/handlers.py` | every topic except `clock.ticked` (§8 read model) | Rebuilds the `ProjectSnapshot` row for the project named by `entity.id` or `payload.project_code`: score, flags, owner load, task counts | nothing | `(event.id, "snapshot-builder")` |
+| `snapshot-builder` | `apps/portfolio/handlers.py` | every topic except `clock.ticked` (§8 read model) | Rebuilds the `ProjectSnapshot` row for the project named by `entity.id` or `payload.project_code`: score, owner load, task and blocker counts. **Facts only** — flags and health are derived when the queue is read | nothing | `(event.id, "snapshot-builder")` |
 | `sse-fanout` | `apps/events/handlers.py` | every topic on the allowlist | `PUBLISH aztec.sse` with the envelope unchanged, for `GET /api/stream` to frame | nothing | `(event.id, "sse-fanout")` |
 
 Notes:
@@ -666,13 +637,16 @@ Notes:
   error; the event is simply dispatched to nobody.
 - The idempotency key is a `ProcessedEvent` row with a unique constraint on
   `(event_id, handler)`. The same event is legitimately processed once **per handler**.
-- `priority-recalculator` and `risk-evaluator` do not consume the topics they emit. Derived
-  topics feed only `snapshot-builder` and `sse-fanout`, which emit nothing — the graph has no
-  cycle by construction.
+- `priority-recalculator` does not consume the topic it emits. The derived topic feeds only
+  `snapshot-builder` and `sse-fanout`, which emit nothing — the graph has no cycle by construction.
+- **There are three handlers where there were four.** `risk-evaluator` is gone with the table it
+  wrote (ADR 0011). A derived value computed on read has no previous value to diff against, so it
+  has no change event and needs no reactor; the flags travel in every project payload instead. The
+  cost is stated in the ADR: the board no longer pushes "this became at risk" on its own.
 - `snapshot-builder` derives its subscription by subtraction (`ALL_TOPICS - {clock.ticked}`) rather
   than by a list, because the failure mode of forgetting a new topic is a silently stale command
   center. What a tick *causes* arrives here as its own event, so nothing is missed.
-- Every topic except `clock.ticked` is on the `sse-fanout` allowlist, because each of those eleven
+- Every topic except `clock.ticked` is on the `sse-fanout` allowlist, because each of those ten
   changes something a view renders. `clock.ticked` is the standing example of the opposite case: it
   triggers recomputation and is never forwarded, since a browser has its own clock. The allowlist
   still exists and defaults to off: a topic that only triggers internal recomputation must not be

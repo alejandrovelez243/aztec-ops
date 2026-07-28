@@ -60,6 +60,11 @@ class ProjectTaskCounts(BaseModel):
     overdue_task_count: int = Field(ge=0)
     urgent_open_task_count: int = Field(ge=0)
     blocked_task_count: int = Field(ge=0)
+    #: Tasks sitting in an ``IN_PROGRESS`` state. Counted here rather than probed with a separate
+    #: ``exists()`` because "is anything moving on this project" is read by ``HasNoNextStep`` on
+    #: every queue row, and a per-row probe over a page of projects is the N+1 the aggregate exists
+    #: to prevent.
+    in_progress_task_count: int = Field(default=0, ge=0)
 
 
 class OpenBlockerSummary(BaseModel):

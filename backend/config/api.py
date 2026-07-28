@@ -17,11 +17,13 @@ Breaking a response shape means ``/api/v2``, not an edit here. Adding an optiona
 
 from ninja import NinjaAPI
 
+from apps.accounts.api import router as accounts_router
 from apps.activity.api import router as activity_router
 from apps.catalog.api import router as catalog_router
 from apps.portfolio.api import router as portfolio_router
 from apps.prioritization.api import router as prioritization_router
 from apps.work.api import router as work_router
+from config.auth import token_auth
 from config.errors import register_exception_handlers
 from config.health import router as health_router
 
@@ -32,15 +34,27 @@ api = NinjaAPI(
     title="Aztec Ops API",
     version=API_VERSION,
     description=(
-        "Operational portfolio command center. Every mutating request carries the actor as an "
-        "`X-Actor` header — a documented stand-in for authentication, which is out of scope "
-        "(ARCHITECTURE §12). Errors share one envelope: `{code, message, details}`; branch on "
-        "`code`, never on `message`."
+        "Operational portfolio command center. Authenticated with a JWT access token, sent as "
+        "`Authorization: Bearer` or — for `EventSource`, which cannot set headers — as an HttpOnly "
+        "cookie on safe methods. Any member may act on any project; the manual priority override "
+        "and the portfolio-wide recompute additionally require an ops lead. Errors share one "
+        "envelope: `{code, message, details}`; branch on `code`, never on `message`."
     ),
     urls_namespace="api-v1",
-    # Every route declares its own ``auth``: the mutating ones take ``actor_header``, the reads
-    # take ``None``. Set here it would be a default that a new read route silently inherits, and
-    # a server-rendered Astro page would start needing a header to fetch the queue.
+    # Authentication is the DEFAULT of the instance, not a per-router opt-in, so a route added
+    # tomorrow is protected by the fact that its author did nothing. Declaring it per route is how
+    # an endpoint ends up public because somebody forgot a line — the failure mode is silent, and
+    # it fails open.
+    #
+    # THE COMPLETE LIST OF ROUTES THAT OPT OUT WITH ``auth=None``. Adding a sixth is a decision
+    # somebody makes on purpose, and it is reviewed here:
+    #   1. GET  /health/live      — a kubelet probe runs before anything can present a token.
+    #   2. GET  /health/ready     — the load balancer's drain signal, same reason.
+    #   3. GET  /health/pipeline  — operational counters, no business data.
+    #   4. POST /auth/token       — obtaining a token cannot require a token.
+    #   5. POST /auth/token/refresh — reachable precisely when the access token has expired.
+    # Everything else, read or write, requires a valid access token.
+    auth=token_auth,
     docs_url="/docs",
 )
 
@@ -49,6 +63,7 @@ register_exception_handlers(api)
 # Routers are mounted at the root and declare full paths. Two contexts serve paths under
 # ``/projects/{code}/`` — the portfolio owns the project, ``work`` owns its tasks and blockers —
 # and mounting by prefix would force the URL to decide which context owns a use case.
+api.add_router("", accounts_router)
 api.add_router("", catalog_router)
 api.add_router("", portfolio_router)
 api.add_router("", work_router)

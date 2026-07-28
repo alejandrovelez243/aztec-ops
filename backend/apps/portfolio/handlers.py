@@ -1,9 +1,13 @@
 """The reactor that keeps the command center's read model true: ``snapshot-builder``.
 
 ``ProjectSnapshot`` is the answer to the one question the command center asks — project, score,
-flags, health, owner load, task counts and open blockers, ranked — and computing it per request is
-a six-table join with per-row aggregates (ARCHITECTURE §8). This handler is what pays for it once
-per event instead of once per page load.
+owner load, task counts and open blockers, ranked — and computing it per request is a six-table
+join with per-row aggregates (ARCHITECTURE §8). This handler is what pays for it once per event
+instead of once per page load.
+
+It rebuilds *facts*. The risk flags and the health the queue shows are derived from those facts
+when the queue is read (ADR 0011), so a row this handler has not touched since yesterday still
+reports today's truth — which is also why there is no risk event for it to react to.
 
 It **emits nothing**, which is what makes it safe to subscribe to everything, including the two
 derived topics. A handler that both consumed ``project.priority.recalculated`` and emitted an event
@@ -37,8 +41,8 @@ SNAPSHOT_BUILDER = "snapshot-builder"
 #: subscription the moment it is registered, because the failure mode of forgetting it is a
 #: silently stale command center rather than an error anyone would see. ``clock.ticked`` names no
 #: project at all and is excluded structurally: what a tick *causes* —
-#: ``project.priority.recalculated``, ``project.risk.changed`` — arrives here as its own event, so
-#: nothing is missed by ignoring the tick itself.
+#: ``project.priority.recalculated`` — arrives here as its own event, so nothing is missed by
+#: ignoring the tick itself.
 SNAPSHOT_TOPICS: Final[frozenset[str]] = ALL_TOPICS - {TOPIC_CLOCK_TICKED}
 
 

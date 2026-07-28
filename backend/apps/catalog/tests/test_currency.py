@@ -9,6 +9,7 @@ from django.db.utils import DataError, IntegrityError
 from django.test import SimpleTestCase, TestCase
 from pydantic import ValidationError
 
+from apps.accounts.tests.support import bearer, make_member
 from apps.catalog.domain.value_objects import CurrencyRef
 from apps.catalog.models import Currency, EngagementType, Priority
 from apps.catalog.services import read_catalog
@@ -48,8 +49,14 @@ class CurrencyRowTestCase(TestCase):
 class CatalogDocumentTestCase(TestCase):
     """What ``GET /api/v1/catalog`` promises the frontend it will never have to hardcode."""
 
+    auth: dict[str, str]
+
     @classmethod
     def setUpTestData(cls) -> None:
+        # The catalog is a read, and reads are authenticated too: the vocabulary is not secret, but
+        # a public endpoint is a public endpoint, and the exception list is five routes long.
+        make_member(code="catalog.reader")
+        cls.auth = bearer(username="catalog.reader")
         Currency.objects.create(code="USD", label="Dolar estadounidense", order=1)
         Currency.objects.create(code="CLP", label="Peso chileno", minor_units=0, order=2)
         Currency.objects.create(code="JPY", label="Yen", minor_units=0, order=3, is_active=False)
@@ -57,7 +64,7 @@ class CatalogDocumentTestCase(TestCase):
         Priority.objects.create(code="critica", label="Critica", is_urgent=True)
 
     def test_currencies_are_served_beside_every_other_taxonomy(self) -> None:
-        response = self.client.get("/api/v1/catalog")
+        response = self.client.get("/api/v1/catalog", **self.auth)
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -65,7 +72,7 @@ class CatalogDocumentTestCase(TestCase):
         self.assertEqual([row["code"] for row in body["currencies"]], ["USD", "CLP"])
 
     def test_every_served_currency_carries_its_minor_units(self) -> None:
-        response = self.client.get("/api/v1/catalog")
+        response = self.client.get("/api/v1/catalog", **self.auth)
 
         served = {row["code"]: row["minor_units"] for row in response.json()["currencies"]}
         self.assertEqual(served, {"USD": 2, "CLP": 0})

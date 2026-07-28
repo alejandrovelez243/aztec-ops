@@ -21,6 +21,15 @@ from a dead one to a proxy or a load balancer, and it gets reaped. A comment fra
 
 **``X-Accel-Buffering: no`` is load-bearing.** Without it a buffering proxy holds frames until a
 buffer fills, and the page looks frozen while the data is already on the wire.
+
+**It is authenticated, and it is the reason the access token is also a cookie.** ``EventSource``
+cannot set a request header, so there is no way to send ``Authorization: Bearer`` here from a
+browser; the cookie ``config.auth`` sets on sign-in is what the browser attaches when the client
+opens the stream with ``withCredentials: true``. A token in the query string would have been the
+easy alternative and is refused on purpose — a URL ends up in every proxy access log on the path.
+Because this is a plain Django view rather than a ninja operation, it cannot inherit the API's
+default ``auth``; it calls the same function instead, and renders a refusal through the same error
+table, so the browser has one envelope to parse and not two.
 """
 
 import json
@@ -29,10 +38,15 @@ from collections.abc import AsyncIterator
 from typing import Final
 
 import redis.asyncio as aioredis
+from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.http import HttpRequest, StreamingHttpResponse
+from django.http.response import HttpResponseBase
 
+from apps.accounts.domain.errors import AuthError
 from apps.events.domain.envelope import SSE_ALLOWLIST_TOPICS
+from config.auth import authenticate_request
+from config.errors import domain_error_json
 
 logger = logging.getLogger(__name__)
 
@@ -58,8 +72,8 @@ TOPIC_STREAM_RESET: Final = "stream.reset"
 RESET_REASON_NO_REPLAY: Final = "last_event_id_expired"
 
 
-async def event_stream(request: HttpRequest) -> StreamingHttpResponse:
-    """Open one server-sent event stream for this client.
+async def event_stream(request: HttpRequest) -> HttpResponseBase:
+    """Open one server-sent event stream for this authenticated client.
 
     Query parameters (all optional):
 
@@ -68,15 +82,27 @@ async def event_stream(request: HttpRequest) -> StreamingHttpResponse:
     * ``last_event_id`` — same meaning as the ``Last-Event-ID`` header, for a manual reconnect that
       builds a fresh ``EventSource`` and therefore cannot send the header.
 
-    ``X-Actor`` is not required and is ignored: the stream is read-only and not actor-scoped.
+    Authentication is the access cookie, or ``Authorization: Bearer`` for a non-browser client.
+    The stream is not actor-scoped — every subscriber sees the same board, because the board is
+    shared — but it is not public either: it broadcasts project names, blockers and client
+    identities to whoever holds the connection.
+
+    Authenticating costs one database read, done *before* the response is opened. Doing it inside
+    the generator would return ``200 text/event-stream`` and then close, which a browser retries on
+    a timer forever: a rejected credential must look like a rejection, not like a flaky stream.
 
     Args:
         request: The incoming ASGI request.
 
     Returns:
         A streaming response whose body is produced lazily, frame by frame, until the client
-        disconnects.
+        disconnects — or the ``401`` envelope when the credential is missing or refused.
     """
+    try:
+        await sync_to_async(authenticate_request)(request)
+    except AuthError as error:
+        return domain_error_json(error)
+
     topics = _requested_topics(request.GET.get("topics"))
     project_code = request.GET.get("project") or None
     last_event_id = request.headers.get("Last-Event-ID") or request.GET.get("last_event_id")

@@ -12,6 +12,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .views import RiskFlagView
+
 
 class Severity(StrEnum):
     """Severity of a risk flag, ordered from advisory to blocking.
@@ -165,9 +167,10 @@ class SignalResult(BaseModel):
 class RiskFlag(BaseModel):
     """A satisfied risk specification, as a value.
 
-    Persisted as a ``RiskFlag`` row by the caller. ``severity`` comes from the registry entry and
-    never from the row, so re-classifying a risk is a code change reviewed once rather than a
-    data edit that leaves old rows disagreeing with new ones.
+    Never persisted (ADR 0011): it is produced on every read from the facts that were already
+    resolved, so there is no row that can be wrong about it. ``severity`` comes from the registry
+    entry, so re-classifying a risk is a code change reviewed once rather than a data edit that
+    leaves old rows disagreeing with new ones.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -175,6 +178,16 @@ class RiskFlag(BaseModel):
     code: str
     severity: Severity
     detail: str = ""
+
+    def to_view(self) -> RiskFlagView:
+        """Describe this flag as the projection every read surface returns.
+
+        ``detail`` is published as ``reason`` because that is the name `docs/API.md` §1.6 fixed on
+        the wire, and because it is what the field is: the sentence naming the fact that raised the
+        flag. Defined once, here, so the queue row, the project detail and the recompute report
+        cannot each rename it slightly differently.
+        """
+        return RiskFlagView(code=self.code, severity=self.severity.value, reason=self.detail)
 
 
 class SignalContribution(BaseModel):

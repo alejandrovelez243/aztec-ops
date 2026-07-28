@@ -9,7 +9,7 @@ from apps.catalog.services import read_catalog
 router = Router(tags=["catalog"])
 
 
-@router.get("/catalog", response=CatalogView, auth=None, url_name="catalog_read")
+@router.get("/catalog", response=CatalogView, url_name="catalog_read")
 def get_catalog(request: HttpRequest) -> CatalogView:
     """Return every active taxonomy value the frontend renders a picker from.
 

@@ -1,6 +1,6 @@
 ---
 name: prioritization-engine
-description: Load when working on the ranking in backend/apps/prioritization — adding or changing a priority signal strategy, touching PriorityPolicy weights or policy versions, the PriorityScore breakdown JSONB, PriorityOverride, the risk Specifications (IsBlocked, IsOverdue, HasNoNextStep, HasNoTargetDate, IsStale, OwnerOverloaded) and RiskFlag severity, writing database-free tests for any of them, or answering "why is this project ranked first" from a persisted breakdown.
+description: Load when working on the ranking in backend/apps/prioritization — adding or changing a priority signal strategy, touching PriorityPolicy weights or policy versions, the PriorityScore breakdown JSONB, PriorityOverride, the risk Specifications (IsBlocked, IsOverdue, HasNoNextStep, HasNoTargetDate, IsStale, OwnerOverloaded) and their severities, writing database-free tests for any of them, or answering "why is this project ranked first" from a persisted breakdown.
 ---
 
 # Prioritization engine
@@ -131,9 +131,13 @@ class HasNoTargetDate(Specification):
         return not data.is_archived and data.target_date is None
 ```
 
-The evaluator returns a list of `RiskFlag`. Project health is **derived** from the flags at read
-time; there is no editable health field, and the dataset's imported `health` column is a
-cross-check only.
+The evaluator returns a list of `RiskFlag` **values**, and nothing persists them (ADR 0011): the
+six conditions are pure functions of rows that already exist, so `evaluate_risk` is called where the
+flags are read — from the write side for a project detail, from the `ProjectSnapshot` row for a
+queue page. Project health is derived from those flags on the same read; there is no editable health
+field, no `health` column and no `RiskFlag` table, and the dataset's imported `health` column is a
+cross-check only. Assemble the inputs once and evaluate in Python: a query per project inside a loop
+over the queue is the N+1 the read model exists to prevent.
 
 ## Manual override
 

@@ -2,9 +2,10 @@
 
 The policy is the one editable thing here: tuning the ranking is an operational decision, so it
 happens by inserting a new ``PriorityPolicy`` version from this screen rather than by a deploy.
-Scores and risk flags are engine output — they are shown in full, with the breakdown rendered
-readably, and are never editable, because a hand-edited score is a score that no longer matches
-the reasons printed beside it.
+Scores are engine output — shown in full, with the breakdown rendered readably, and never
+editable, because a hand-edited score is a score that no longer matches the reasons printed beside
+it. There is no risk flag screen: flags are computed on read (ADR 0011), so there is nothing to
+show here that the queue does not already derive.
 """
 
 import json
@@ -16,7 +17,7 @@ from django.http import HttpRequest
 from django.utils.html import format_html
 from django.utils.safestring import SafeString
 
-from .models import PriorityOverride, PriorityPolicy, PriorityScore, RiskFlag
+from .models import PriorityOverride, PriorityPolicy, PriorityScore
 
 
 def _render_json(document: object) -> SafeString:
@@ -113,35 +114,5 @@ class PriorityOverrideAdmin(admin.ModelAdmin[PriorityOverride]):
     readonly_fields: ClassVar[tuple[str, ...]] = ("created_at",)
 
     def get_queryset(self, request: HttpRequest) -> QuerySet[PriorityOverride]:
-        """Join the project once instead of per row in ``list_display``."""
-        return super().get_queryset(request).select_related("project")
-
-
-@admin.register(RiskFlag)
-class RiskFlagAdmin(admin.ModelAdmin[RiskFlag]):
-    """Detections, raised and cleared as separate rows. Read-only: severity comes from the registry."""
-
-    list_display = ("project", "code", "severity", "detail", "detected_at", "cleared_at")
-    list_filter = ("code", "severity", "cleared_at")
-    search_fields = ("project__code", "project__name", "detail")
-    date_hierarchy = "detected_at"
-    readonly_fields: ClassVar[tuple[str, ...]] = (
-        "project",
-        "code",
-        "severity",
-        "detail",
-        "detected_at",
-        "cleared_at",
-    )
-
-    def has_add_permission(self, request: HttpRequest) -> bool:  # noqa: ARG002  Django's hook signature
-        """Flags are raised by the risk evaluator, not typed in."""
-        return False
-
-    def has_change_permission(self, request: HttpRequest, obj: RiskFlag | None = None) -> bool:  # noqa: ARG002  Django's hook signature
-        """Clearing a flag by hand would leave the specification raising it again on the next tick."""
-        return False
-
-    def get_queryset(self, request: HttpRequest) -> QuerySet[RiskFlag]:
         """Join the project once instead of per row in ``list_display``."""
         return super().get_queryset(request).select_related("project")

@@ -301,8 +301,13 @@ docker compose exec api celery -A config call events.drain_outbox
 In another shell, cause an event and watch it go:
 
 ```bash
+TOKEN=$(curl -s -X POST localhost:8000/api/v1/auth/token \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\": \"camila.torres\", \"password\": \"$SEED_USER_PASSWORD\"}" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["access"])')
+
 curl -s -X POST localhost:8000/api/v1/projects/PRJ-01/transition \
-  -H 'Content-Type: application/json' -H 'X-Actor: camila' \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
   -d '{"to_state": "blocked", "reason": "waiting for client access"}'
 
 make logs-worker
@@ -317,7 +322,7 @@ docker compose exec api python manage.py shell -c \
    from apps.events.registry import get_handler; \
    from apps.events.tasks import apply_once; \
    row = OutboxEvent.objects.get(id='<uuid>'); \
-   print(apply_once(get_handler('risk-evaluator'), row.to_envelope()))"
+   print(apply_once(get_handler('priority-recalculator'), row.to_envelope()))"
 ```
 
 ### Driving the clock by hand
@@ -495,9 +500,14 @@ and trigger a transition (§7).
 - **`SUBSCRIBE aztec.sse` shows nothing** — the problem is upstream of SSE: either the event was
   never dispatched (§8) or `sse-fanout` is failing or unregistered (§9). `SELECT handler FROM
   events_processedevent WHERE event_id = '<uuid>'` tells you which.
-- **`curl` streams but the browser does not** — CORS. `CORS_ALLOWED_ORIGINS` must include
-  `http://localhost:4321`. `EventSource` sends no custom headers, so `/api/stream` must not
-  require `X-Actor` or any auth header. The browser console shows the blocked-origin error.
+- **`curl` streams but the browser does not** — CORS or the cookie. `CORS_ALLOWED_ORIGINS` must
+  include `http://localhost:4321` **and** `CORS_ALLOW_CREDENTIALS` must be true: a browser refuses a
+  credentialed cross-origin response answered with `*`. `EventSource` sends no custom headers, so
+  the stream authenticates on the `aztec_access` cookie — the client must construct it as
+  `new EventSource(url, { withCredentials: true })`, and the user must have signed in on that
+  origin. A `401` here with `code: authentication_required` means the cookie never arrived: check
+  that the sign-in response set it (`Path=/api/`) and that `Secure` is not on over plain HTTP
+  (`ENVIRONMENT=local` keeps it off). The browser console shows the blocked-origin error.
 - **Events arrive once and then stop** — several `EventSource` objects were opened and the store
   is only reading one. There is exactly one shared connection, owned by
   `frontend/src/lib/stream/store.ts`; islands subscribe to the store and never construct their own
@@ -645,9 +655,11 @@ Unconditional repair, safe to run at any time — and deliberately **not** a mak
 command that only works from a checkout is not an operation:
 
 ```bash
-curl -s -X POST localhost:8000/api/v1/recompute -H 'X-Actor: camila'
+# $TOKEN as obtained in §11. The portfolio-wide route requires an ops lead (camila.torres is the
+# only seeded one); the per-project route is open to any signed-in member.
+curl -s -X POST localhost:8000/api/v1/recompute -H "Authorization: Bearer $TOKEN"
 # or, per project:
-curl -s -X POST localhost:8000/api/v1/projects/PRJ-01/recompute -H 'X-Actor: camila'
+curl -s -X POST localhost:8000/api/v1/projects/PRJ-01/recompute -H "Authorization: Bearer $TOKEN"
 ```
 
 The same thing lives in the admin as **"Recompute priority for selected projects"**. Both recompute

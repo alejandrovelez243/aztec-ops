@@ -47,7 +47,7 @@ Diagnostic can have a shorter lifecycle than a recurring maintenance engagement.
 
 These are the definitions. Do not re-derive them locally in a view or a serializer; they live
 as specifications in `backend/apps/prioritization` / risk domain code (§5) and everything else reads
-the resulting `RiskFlag` list.
+the resulting `RiskFlag` list, which is **computed on every read and never stored** (ADR 0011).
 
 **Blocked** — a project is blocked if **any** of:
 - it has at least one open `Blocker` (`resolved_at IS NULL`), or

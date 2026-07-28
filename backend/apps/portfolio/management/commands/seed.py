@@ -18,9 +18,10 @@ Three steps that must happen in this order and that nobody should have to rememb
    ``BLK-0053`` — a collision that would surface on the first blocker a user raises, not here. It
    is called unconditionally and has no flag to skip it: a repair that can be skipped is a repair
    that gets skipped.
-3. ``recompute_active_portfolio()``, because ``PriorityScore`` and ``RiskFlag`` are derived and are
-   deliberately not fixtures: a committed score would be a number a reviewer could read that no
-   longer follows from the rows beside it.
+3. ``recompute_active_portfolio()``, because ``PriorityScore`` is derived and is deliberately not
+   a fixture: a committed score would be a number a reviewer could read that no longer follows from
+   the rows beside it. Risk flags need no such step at all — they are computed on read (ADR 0011),
+   so a freshly seeded portfolio is correctly flagged before anything has run.
 
 The whole thing is an upsert. Every fixture object carries an explicit ``pk``, so a second run
 updates the same rows, the sequence sync re-reads the same high-water mark, and every
@@ -67,7 +68,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--no-recompute",
             action="store_true",
-            help="Load and sync only; leave PriorityScore and RiskFlag untouched.",
+            help="Load and sync only; leave PriorityScore untouched.",
         )
 
     def handle(self, *_args: Any, **options: Any) -> None:

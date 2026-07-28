@@ -1,8 +1,10 @@
-"""Use case: rebuild score and risk flags for a set of projects, at one instant.
+"""Use case: rebuild the stored scores of a set of projects, at one instant.
 
 The manual override of an automatic system. In normal operation scores are maintained by the
-``priority-recalculator`` and ``risk-evaluator`` handlers — a data change arrives as an event, and
-a clock tick covers the projects whose ``valid_until`` has passed. There are exactly three moments
+``priority-recalculator`` handler — a data change arrives as an event, and a clock tick covers the
+projects whose ``valid_until`` has passed. Risk flags are not rebuilt by anything, here or
+elsewhere: they are computed on read (ADR 0011), so the ``flags`` and ``health`` in this report are
+what held at ``ran_at`` and are reported for the operator, not written anywhere. There are exactly three moments
 when nothing will arrive and rows have to be rebuilt anyway: right after seeding, right after a
 new ``PriorityPolicy`` version is activated (every stored number was computed against weights that
 are no longer the criterion), and when an operator has a reason to distrust a single row.
@@ -28,17 +30,17 @@ from pydantic import BaseModel, ConfigDict
 from apps.portfolio.models import Project
 
 from ..domain.types import Health
-from .evaluate_risk_for_project import evaluate_risk_for_project
 from .recompute_for_project import recompute_for_project
 
 
 class ProjectRecompute(BaseModel):
     """What one project's rebuild produced, in the terms an operator reads back.
 
-    ``changed`` is the disjunction of the score's and the risk evaluation's own ``changed``: an
-    operator who reruns a recomputation needs to know whether anything actually moved, and a run
-    that reports every project unchanged is the expected outcome of a healthy system, not a
-    failure.
+    ``changed`` is the score's own ``changed``, and the score is the only thing a rebuild can
+    change — an operator who reruns a recomputation needs to know whether the stored ranking was
+    wrong, and a run that reports every project unchanged is the expected outcome of a healthy
+    system, not a failure. ``flags`` and ``health`` are the derived reading at ``ran_at``,
+    reported beside it because that is the question an operator asks next.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -71,7 +73,7 @@ class RecomputeRun(BaseModel):
 def recompute_projects(
     *, project_codes: Sequence[str], now: datetime | None = None
 ) -> RecomputeRun:
-    """Rebuild ``PriorityScore`` and ``RiskFlag`` for the named projects against the active policy.
+    """Rebuild ``PriorityScore`` for the named projects against the active policy.
 
     One ``now`` is shared by every project rather than read per project, so two projects with the
     same facts get the same number and the ranking cannot be perturbed by how long the loop took.
@@ -79,7 +81,7 @@ def recompute_projects(
     reports unchanged — which is what makes ``seed`` safe to repeat.
 
     Not atomic across projects, and deliberately: each project is scored in its own transaction
-    (both callees are ``@transaction.atomic``), so a portfolio-wide rebuild that fails on project
+    (the callee is ``@transaction.atomic``), so a portfolio-wide rebuild that fails on project
     eighteen leaves the first seventeen correct instead of rolling back work that was right.
 
     Args:
@@ -104,19 +106,18 @@ def recompute_projects(
 
     results: list[ProjectRecompute] = []
     for code in project_codes:
-        # Two calls because two writers: scoring persists the score, risk evaluation persists the
-        # flags, and each table has exactly one writer. This runs them in the order the bus would;
-        # the score's breakdown evaluates the specifications itself, so neither depends on the
-        # other's rows.
+        # One call, because there is one thing to write. The scoring pass evaluates the risk
+        # specifications for its own breakdown and hands them back, so the report names the flags
+        # that held at ``ran_at`` without a second reading of the portfolio that could disagree
+        # with the first.
         score = recompute_for_project(project_code=code, now=ran_at)
-        risk = evaluate_risk_for_project(project_code=code, now=ran_at)
         results.append(
             ProjectRecompute(
                 project_code=code,
                 value=float(score.value),
-                health=risk.health,
-                flags=tuple(flag.code for flag in risk.flags),
-                changed=score.changed or risk.changed,
+                health=score.health,
+                flags=tuple(flag.code for flag in score.flags),
+                changed=score.changed,
             )
         )
 
@@ -124,7 +125,7 @@ def recompute_projects(
 
 
 def recompute_active_portfolio(*, now: datetime | None = None) -> RecomputeRun:
-    """Rebuild every active project, in ``Project.Meta.ordering`` order.
+    """Rebuild every active project's score, in ``Project.Meta.ordering`` order.
 
     A separate function rather than a nullable argument on :func:`recompute_projects`, because
     "all of them" is a different intent from "these three" and a parameter that silently means

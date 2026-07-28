@@ -14,6 +14,7 @@ reads ``PRJ-T1`` in an assertion should be able to find where ``PRJ-T1`` was mad
 from datetime import date
 
 from apps.accounts.models import User
+from apps.accounts.tests.support import make_member
 from apps.catalog.models import Currency, EngagementType, Priority
 from apps.portfolio.models import Client, Project
 from apps.prioritization.models import PriorityPolicy
@@ -39,6 +40,10 @@ POLICY_WEIGHTS = {
 }
 
 OWNER_CODE = "tester"
+#: The ops lead, created only by :meth:`PortfolioScenario.add_ops_lead`. Opt-in because a second
+#: person on the roster changes what ``GET /team/load`` returns, and a load test should not have to
+#: know that an authorization test exists.
+OPS_LEAD_CODE = "tester.lead"
 PROJECT_CODE = "PRJ-T1"
 SECOND_PROJECT_CODE = "PRJ-T2"
 
@@ -92,14 +97,27 @@ class PortfolioScenario:
             code="critica", label="Crítica", is_urgent=True, weight="1.50"
         )
         self.client = Client.objects.create(code="atlas", alias="Atlas Foods")
-        self.owner = User.objects.create(
-            username=OWNER_CODE,
-            code=OWNER_CODE,
-            alias="Test Owner",
-            weekly_capacity_points=10,
-        )
+        # Built through the identity context's own helper, so the owner can actually sign in:
+        # every route is authenticated now, and a scenario whose people had no password would only
+        # be able to exercise 401s.
+        self.owner = make_member(code=OWNER_CODE)
+        self.owner.alias = "Test Owner"
+        self.owner.weekly_capacity_points = 10
+        self.owner.save(update_fields=["alias", "weekly_capacity_points"])
         self.project = self._project(PROJECT_CODE, "Primary test project")
         self.other_project = self._project(SECOND_PROJECT_CODE, "Second project, same owner")
+
+    def add_ops_lead(self) -> User:
+        """Add the one person allowed to override the ranking and rebuild the whole portfolio.
+
+        Opt-in rather than built in ``__init__`` because they own no projects and carry no tasks,
+        and a roster that grows silently would change every ``GET /team/load`` assertion in the
+        suite for a reason that has nothing to do with load.
+
+        Returns:
+            The ops lead, ready to sign in.
+        """
+        return make_member(code=OPS_LEAD_CODE, is_ops_lead=True)
 
     def _project(self, code: str, name: str) -> Project:
         """One scored-but-unremarkable project: dated, owned, with a next step recorded."""

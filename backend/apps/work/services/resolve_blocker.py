@@ -44,9 +44,10 @@ def resolve_blocker(command: ResolveBlockerCommand) -> Blocker:
     the payload — a database id is the foreign key into this context EVENTS.md §1 forbids. The
     audit row still names the project, which is where the fact is read.
 
-    Clearing the project's ``BLOCKED`` risk flag is not done here. It is derived state,
-    rebuilt by the ``risk-evaluator`` handler from ``blocker.resolved``, which is what
-    keeps it reproducible from a manual recompute.
+    Clearing the project's ``BLOCKED`` risk flag is not done here, or anywhere. The flag is a
+    function of the open blocker rows, so resolving the last one clears it by definition the next
+    time anybody reads the project (ADR 0011) — there is no derived row to reconcile and nothing
+    to get out of step with this write.
 
     Args:
         command: Validated input naming the blocker and the resolution reason.

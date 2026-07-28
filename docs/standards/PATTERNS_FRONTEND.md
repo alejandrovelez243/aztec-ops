@@ -26,7 +26,7 @@ frontend/src/
 ## 1. Islands Architecture
 
 **Problem.** The command center is 22 rows of dense matrix that must paint instantly and then keep
-ticking as `project.priority.recalculated` and `project.risk.changed` arrive. Shipping the whole
+ticking as `project.priority.recalculated` and the write-side topics arrive. Shipping the whole
 board as client JS pays hydration cost for a score breakdown that never changes after first paint.
 
 **Where.** `frontend/src/islands/` holds the live regions; `frontend/src/components/` holds
@@ -107,7 +107,7 @@ handler that appends to a list still needs to key on the entity code.
 ## 3. Adapter / API Client
 
 **Problem.** The backend answers with a typed error envelope (`{code, message, details}`) and every
-route needs the `X-Actor` header. Scattering `fetch` loses both, and loses the generated types.
+route needs the bearer token. Scattering `fetch` loses both, and loses the generated types.
 
 **Where.** `frontend/src/lib/api/client.ts` wraps `frontend/src/lib/api/types.ts`, which is
 generated from Ninja's schema and never hand-edited:
@@ -121,7 +121,7 @@ The client returns a `Result`, it does not throw, because §4's union is driven 
 ```ts
 // WRONG — islands/ProjectHeader.astro
 const p = await (await fetch(`/api/v1/projects/${code}`)).json();
-// no types, no X-Actor, a 409 transition_not_allowed parses as a success body
+// no types, no Authorization header, a 409 transition_not_allowed parses as a success body
 ```
 
 ```ts

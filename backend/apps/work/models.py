@@ -290,15 +290,15 @@ class TaskQuerySet(models.QuerySet["Task"]):
         return tuple(task.to_view(today=today) for task in self)
 
     def counts(self, *, today: date) -> ProjectTaskCounts:
-        """Aggregate the four task counts the priority engine and the snapshot both read.
+        """Aggregate the five task counts the priority engine and the snapshot both read.
 
         **Ends the chain**: this materialises one grouped query and returns a frozen value
         object, not a queryset. Chain the scope first — ``Task.objects.for_project(pk)``.
 
-        One query rather than four round trips, and the four definitions are the same ones
-        :meth:`open`, :meth:`overdue`, :meth:`urgent` and :meth:`blocked` express: overdue and
-        urgent are counted *within* the open set, so a task past its due date but cancelled
-        stops inflating ``overdue_work``.
+        One query rather than five round trips, and the definitions are the same ones
+        :meth:`open`, :meth:`overdue`, :meth:`urgent`, :meth:`blocked` and
+        :meth:`in_state_category` express: overdue and urgent are counted *within* the open set,
+        so a task past its due date but cancelled stops inflating ``overdue_work``.
 
         Args:
             today: The date "overdue" is measured against, in the caller's timezone.
@@ -313,6 +313,9 @@ class TaskQuerySet(models.QuerySet["Task"]):
             urgent_open_task_count=Count("pk", filter=is_open & Q(priority__is_urgent=True)),
             blocked_task_count=Count(
                 "pk", filter=Q(workflow_state__category=StateCategory.BLOCKED)
+            ),
+            in_progress_task_count=Count(
+                "pk", filter=Q(workflow_state__category=StateCategory.IN_PROGRESS)
             ),
         )
         return ProjectTaskCounts(**aggregates)

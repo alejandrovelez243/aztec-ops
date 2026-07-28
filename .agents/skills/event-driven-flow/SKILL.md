@@ -1,6 +1,6 @@
 ---
 name: event-driven-flow
-description: Load when adding, renaming or versioning an event topic, writing an OutboxEvent from a service, implementing or debugging a registered Celery event handler (priority-recalculator, risk-evaluator, snapshot-builder, sse-fanout), touching the outbox drain or a dead-lettered event, or when an event is emitted but never reaches the browser.
+description: Load when adding, renaming or versioning an event topic, writing an OutboxEvent from a service, implementing or debugging a registered Celery event handler (priority-recalculator, snapshot-builder, sse-fanout), touching the outbox drain or a dead-lettered event, or when an event is emitted but never reaches the browser.
 ---
 
 # Adding an event end to end
@@ -75,7 +75,7 @@ Current topics:
 
 ```
 project.created            project.updated          project.state_changed
-project.priority.recalculated                       project.risk.changed
+project.priority.recalculated
 task.created               task.updated             task.state_changed
 blocker.raised             blocker.resolved         note.added
 clock.ticked
@@ -142,14 +142,18 @@ others, and each gets its own delivery task. Registered handlers:
 | Handler | Declared in | Reacts to | Emits |
 |---|---|---|---|
 | `priority-recalculator` | `apps/prioritization/handlers.py` | the nine write-side topics + `clock.ticked` | `project.priority.recalculated` |
-| `risk-evaluator` | `apps/prioritization/handlers.py` | same | `project.risk.changed` |
 | `snapshot-builder` | `apps/portfolio/handlers.py` | `ALL_TOPICS - {clock.ticked}` | nothing |
 | `sse-fanout` | `apps/events/handlers.py` | the SSE allowlist | nothing |
 
 `snapshot-builder` subscribes by subtraction, so a new topic reaches the read model automatically —
-which is the point: forgetting one produces a silently stale command center, not an error. The two
-engines subscribe to the write side only and never to what they emit; that is what keeps the graph
-acyclic. If your new topic must change the ranking, add its constant to `ENGINE_TOPICS`.
+which is the point: forgetting one produces a silently stale command center, not an error. The
+ranking engine subscribes to the write side only and never to what it emits; that is what keeps the
+graph acyclic. If your new topic must change the ranking, add its constant to `ENGINE_TOPICS`.
+
+There is **no `risk-evaluator` and no `project.risk.changed`** (ADR 0011). Risk flags are computed
+on read, so they have no moment of change to announce and no reactor to reconcile them. Do not add
+a topic for a derived value: if it can be recomputed from rows that already exist, publish the fact
+that moved those rows and let the reader derive it.
 
 ### 5. Implement the handler
 
@@ -163,14 +167,14 @@ from apps.events.domain.envelope import TOPIC_CLOCK_TICKED, EventEnvelope
 from apps.events.domain.routing import project_code_of
 from apps.events.registry import register_handler
 
-RISK_EVALUATOR = "risk-evaluator"
+PRIORITY_RECALCULATOR = "priority-recalculator"
 
 
-@register_handler(name=RISK_EVALUATOR, topics=ENGINE_TOPICS)
-def evaluate_risk(envelope: EventEnvelope) -> None:
-    """Re-run the risk specifications for the project this event names.
+@register_handler(name=PRIORITY_RECALCULATOR, topics=ENGINE_TOPICS)
+def recalculate_priority(envelope: EventEnvelope) -> None:
+    """Rescore the project this event names.
 
-    Emits ``project.risk.changed`` only when the flag set or the derived health moved, so a
+    Emits ``project.priority.recalculated`` only when the value or the breakdown moved, so a
     redelivery that changes nothing publishes nothing.
 
     Args:
@@ -253,14 +257,17 @@ class RiskEvaluatorTests(EagerCeleryMixin, TransactionTestCase):
     def test_duplicate_delivery_applies_the_effect_once(self) -> None:
         envelope = envelope_for("project.state_changed", entity_id="PRJ-01")
 
-        with only_handlers("risk-evaluator"):
-            first = apply_once(get_handler("risk-evaluator"), envelope)
-            second = apply_once(get_handler("risk-evaluator"), envelope)
+        with only_handlers("priority-recalculator"):
+            first = apply_once(get_handler("priority-recalculator"), envelope)
+            second = apply_once(get_handler("priority-recalculator"), envelope)
 
         self.assertTrue(first)
         self.assertFalse(second)
         self.assertEqual(
-            ProcessedEvent.objects.filter(event_id=envelope.id, handler="risk-evaluator").count(), 1
+            ProcessedEvent.objects.filter(
+                event_id=envelope.id, handler="priority-recalculator"
+            ).count(),
+            1,
         )
 ```
 

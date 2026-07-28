@@ -25,7 +25,6 @@ TOPIC_PROJECT_CREATED: Final[str] = "project.created"
 TOPIC_PROJECT_UPDATED: Final[str] = "project.updated"
 TOPIC_PROJECT_STATE_CHANGED: Final[str] = "project.state_changed"
 TOPIC_PROJECT_PRIORITY_RECALCULATED: Final[str] = "project.priority.recalculated"
-TOPIC_PROJECT_RISK_CHANGED: Final[str] = "project.risk.changed"
 TOPIC_TASK_CREATED: Final[str] = "task.created"
 TOPIC_TASK_UPDATED: Final[str] = "task.updated"
 TOPIC_TASK_STATE_CHANGED: Final[str] = "task.state_changed"
@@ -41,7 +40,6 @@ ALL_TOPICS: Final[frozenset[str]] = frozenset(
         TOPIC_PROJECT_UPDATED,
         TOPIC_PROJECT_STATE_CHANGED,
         TOPIC_PROJECT_PRIORITY_RECALCULATED,
-        TOPIC_PROJECT_RISK_CHANGED,
         TOPIC_TASK_CREATED,
         TOPIC_TASK_UPDATED,
         TOPIC_TASK_STATE_CHANGED,

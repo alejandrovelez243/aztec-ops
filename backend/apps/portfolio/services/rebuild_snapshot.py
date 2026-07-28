@@ -1,19 +1,23 @@
 """Use case: rebuild one ``ProjectSnapshot`` row from the write side.
 
-This is the read model's only writer, called by the ``snapshot-builder`` consumer group. It exists
-because the command center's question — project + score + flags + owner load + task counts, ranked
-— is a six-table join with per-row aggregates, and resolving that on every request does not hold
-up (ARCHITECTURE §8). Paying for it once per event instead of once per page load is the whole
-trade.
+This is the read model's only writer, called by the ``snapshot-builder`` handler. It exists because
+the command center's question — project + score + owner load + task counts + blockers, ranked — is
+a six-table join with per-row aggregates, and resolving that on every request does not hold up
+(ARCHITECTURE §8). Paying for it once per event instead of once per page load is the whole trade.
+
+**It projects facts, never conclusions.** Risk flags and health are deliberately not written here
+and have no columns to write to (ADR 0011): they are pure functions of the counts, dates and
+categories this does store, so they are evaluated when the queue is read. Persisting them would
+have bought nothing and cost invalidation — a project whose target date passes at midnight becomes
+overdue with no event arriving to rebuild anything.
 
 The row is replaced **wholesale**, never patched. A partial rebuild would leave columns from two
 different deliveries in one row while ``last_event_id`` claimed a single one, which is exactly the
 kind of staleness that cannot be diagnosed afterwards.
 
 Every fact is read through the owning model's published named queries — ``Task.objects``,
-``Blocker.objects``, ``PriorityScore.objects``, ``RiskFlag.objects``, ``ActivityRecord.objects`` —
-so "open task", "open blocker" and "raised flag" keep exactly one definition each, owned by the
-context that owns the rows.
+``Blocker.objects``, ``PriorityScore.objects``, ``ActivityRecord.objects`` — so "open task" and
+"open blocker" keep exactly one definition each, owned by the context that owns the rows.
 """
 
 from datetime import datetime
@@ -25,30 +29,11 @@ from django.db import transaction
 
 from apps.activity.models import ActivityRecord
 from apps.portfolio.domain.errors import ProjectNotFound
-from apps.portfolio.domain.value_objects import (
-    Health,
-    ProjectSnapshotValues,
-    RiskFlagEntry,
-)
+from apps.portfolio.domain.value_objects import ProjectSnapshotValues
 from apps.portfolio.models import Project, ProjectSnapshot
 from apps.portfolio.repositories import owner_load_for_codes
-from apps.prioritization.domain.specifications import derive_health
-from apps.prioritization.domain.types import Health as DerivedHealth
-from apps.prioritization.domain.types import RiskFlag as RiskFlagValue
-from apps.prioritization.domain.types import Severity
 from apps.prioritization.models import PriorityOverride, PriorityScore
-from apps.prioritization.models import RiskFlag as RiskFlagRow
 from apps.work.models import Blocker, Task
-
-#: The one bridge between the prioritization context's ``Health`` enum and the portfolio context's
-#: ``Health`` literal. Two contexts, two type systems, the same three values — spelled out here so
-#: the compiler checks the correspondence, rather than left to a ``.value`` that would silently
-#: accept a fourth member added on the other side.
-_HEALTH_BY_DERIVED: Final[dict[DerivedHealth, Health]] = {
-    DerivedHealth.HEALTHY: "HEALTHY",
-    DerivedHealth.AT_RISK: "AT_RISK",
-    DerivedHealth.BLOCKED: "BLOCKED",
-}
 
 #: Score of a project the engine has not ranked yet. Zero rather than null, so the queue's
 #: ``ORDER BY priority_score DESC`` never has to decide where nulls sort.
@@ -63,9 +48,11 @@ def rebuild_snapshot(
 
     Args:
         project_code: Business code, e.g. ``"PRJ-01"``.
-        now: Domain time of the event being applied. "Overdue" and every age are measured against
-            it rather than against the wall clock, so a redelivery rebuilds the same row instead
-            of one that quietly disagrees with the score computed from the same event.
+        now: Domain time of the event being applied. The overdue count and the blocker age are
+            measured against it rather than against the wall clock, so a redelivery rebuilds the
+            same row instead of one that quietly disagrees with the score computed from the same
+            event. It does not fix the row's *reading*: staleness and overdue are re-derived from
+            these columns whenever the queue is read, against the reader's own clock.
         last_event_id: Envelope id of the event that caused the rebuild, so a stale row is
             traceable to the exact delivery that produced it. ``None`` when rebuilding outside the
             stream, such as from a management command.
@@ -84,7 +71,6 @@ def rebuild_snapshot(
     counts = Task.objects.for_project(project.pk).counts(today=now.date())
     blockers = Blocker.objects.for_project(project.pk).open().summary()
     score = PriorityScore.objects.for_project(project.pk).first()
-    flag_rows = list(RiskFlagRow.objects.for_project(project.pk).open().oldest_first())
     override = _live_override(project_id=project.pk, now=now)
     owner_code = project.owner.code if project.owner is not None else ""
     load_points, capacity_points = _owner_load(owner_code)
@@ -116,12 +102,11 @@ def rebuild_snapshot(
         has_override=override is not None,
         override_position=override.position if override is not None else None,
         override_reason=override.reason if override is not None else "",
-        risk_flags=tuple(_flag_entry(row) for row in flag_rows),
-        health=_health_of(flag_rows),
         open_task_count=counts.open_task_count,
         overdue_task_count=counts.overdue_task_count,
         blocked_task_count=counts.blocked_task_count,
         urgent_open_task_count=counts.urgent_open_task_count,
+        in_progress_task_count=counts.in_progress_task_count,
         open_blocker_count=blockers.open_blocker_count,
         oldest_blocker_age_days=_age_in_days(blockers.oldest_raised_at, now),
         last_activity_at=_last_activity_at(project.code),
@@ -129,35 +114,6 @@ def rebuild_snapshot(
     )
     ProjectSnapshot.objects.upsert(values, last_event_id)
     return values
-
-
-def _flag_entry(row: RiskFlagRow) -> RiskFlagEntry:
-    """Project one persisted flag into the shape stored inside ``ProjectSnapshot.risk_flags``.
-
-    Validated rather than constructed positionally: ``severity`` is a plain ``varchar`` on the row
-    and a closed literal in the read model, so a value the registry never wrote fails here — where
-    the row and the event id that produced it are both still in hand — instead of surfacing later
-    as a facet that silently matches nothing.
-    """
-    return RiskFlagEntry.model_validate(
-        {"code": row.code, "severity": row.severity, "detail": row.detail}
-    )
-
-
-def _health_of(flag_rows: list[RiskFlagRow]) -> Health:
-    """Derive health from the persisted flags, using the prioritization context's own function.
-
-    Health is never stored on ``Project`` and never assigned here. Re-deriving it with a local
-    ``if`` would put a second definition of "blocked" next to the one the risk evaluator applies,
-    and the read model would eventually contradict the flags printed beside it.
-    """
-    derived = derive_health(
-        tuple(
-            RiskFlagValue(code=row.code, severity=Severity(row.severity), detail=row.detail)
-            for row in flag_rows
-        )
-    )
-    return _HEALTH_BY_DERIVED[derived]
 
 
 def _breakdown_of(score: PriorityScore | None) -> dict[str, object]:

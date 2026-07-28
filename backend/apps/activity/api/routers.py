@@ -1,7 +1,8 @@
 """Route of the audit trail: the project timeline.
 
-Read-only, unauthenticated and append-only at the source. No ``X-Actor`` is required, because
-reading who changed what is not itself a change.
+Read-only and append-only at the source: reading who changed what is not itself a change, so this
+router calls a read service and nothing here writes. Authenticated like every other route — the
+trail names people and clients, and the API's default is that you have to be signed in to see it.
 """
 
 from django.http import HttpRequest
@@ -18,7 +19,6 @@ router = Router(tags=["activity"])
 @router.get(
     "/projects/{project_code}/activity",
     response=Page[ActivityEntry],
-    auth=None,
     url_name="project_activity",
 )
 def get_project_activity(

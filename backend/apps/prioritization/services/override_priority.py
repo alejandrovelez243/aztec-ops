@@ -49,7 +49,7 @@ def override_priority(
 
     Returns:
         The project's prioritization state after the override: the **unchanged** computed score,
-        the override now in force, and the open risk flags.
+        the override now in force, and the risk flags that hold at ``now``.
 
     Raises:
         OverrideReasonRequired: The reason is empty or whitespace only.
@@ -85,4 +85,4 @@ def override_priority(
         correlation_id=correlation_id,
         now=now,
     )
-    return read_project_priority(project_id=project_id, now=now)
+    return read_project_priority(project_code=command.project_code, now=now)

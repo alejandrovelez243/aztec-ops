@@ -1,6 +1,6 @@
 ---
 name: event-bus-engineer
-description: Use for anything on the event-driven path — the OutboxEvent model, the events.drain_outbox / events.handle_event Celery tasks, the handler registry, the priority-recalculator / risk-evaluator / snapshot-builder / sse-fanout handlers, ProcessedEvent idempotency, retry with backoff, dead-lettering on the outbox row and its admin, and SSE fanout over the aztec.sse pub/sub channel into GET /api/stream. Triggers: "event is not arriving", "the drain", "add a topic", "register a handler", "duplicate event", "dead letter", "outbox backlog", "SSE does not update".
+description: Use for anything on the event-driven path — the OutboxEvent model, the events.drain_outbox / events.handle_event Celery tasks, the handler registry, the priority-recalculator / snapshot-builder / sse-fanout handlers, ProcessedEvent idempotency, retry with backoff, dead-lettering on the outbox row and its admin, and SSE fanout over the aztec.sse pub/sub channel into GET /api/stream. Triggers: "event is not arriving", "the drain", "add a topic", "register a handler", "duplicate event", "dead letter", "outbox backlog", "SSE does not update".
 tools: Read, Write, Edit, Grep, Glob, Bash
 ---
 
@@ -126,8 +126,10 @@ Not in scope, hand back instead:
 ```
 
 Topics: `project.created`, `project.updated`, `project.state_changed`,
-`project.priority.recalculated`, `project.risk.changed`, `task.created`, `task.updated`,
-`task.state_changed`, `blocker.raised`, `blocker.resolved`, `note.added`, `clock.ticked`.
+`project.priority.recalculated`, `task.created`, `task.updated`, `task.state_changed`,
+`blocker.raised`, `blocker.resolved`, `note.added`, `clock.ticked`. There is no risk topic: risk
+flags are computed on read (ADR 0011), so a derived value with no stored previous set has no change
+to announce.
 
 ## The transport
 
@@ -153,9 +155,9 @@ A handler:
 
 ```python
 # apps/<context>/handlers.py  — the module name is load-bearing
-@register_handler(name="risk-evaluator", topics=ENGINE_TOPICS)
-def evaluate_risk(envelope: EventEnvelope) -> None:
-    """Re-run the risk specifications for the project this event names.
+@register_handler(name="priority-recalculator", topics=ENGINE_TOPICS)
+def recalculate_priority(envelope: EventEnvelope) -> None:
+    """Rescore the project this event names, announcing it only if it moved.
 
     Raises:
         ProjectNotFound: Deliberately not caught — raising is the retry and dead-letter path.

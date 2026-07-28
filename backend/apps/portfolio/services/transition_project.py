@@ -43,7 +43,7 @@ def transition_project(
     ``ActivityRecord`` with verb ``STATE_CHANGED`` and the ``OutboxEvent`` with topic
     ``project.state_changed`` — commits together or not at all, so the trail can never claim a move
     that rolled back and the event can never describe one that did not happen. Redis is untouched:
-    the relay publishes the committed row, and ``priority-recalculator``, ``risk-evaluator`` and
+    the relay publishes the committed row, and ``priority-recalculator``, ``snapshot-builder`` and
     ``sse-fanout`` react independently, so a slow rescore cannot fail a legitimate move.
 
     Args:

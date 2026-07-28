@@ -17,7 +17,7 @@ Two deliberate restrictions:
   ``WorkflowTransition`` allows, with no ``ActivityRecord`` and no event (CLAUDE.md rule 2).
   State moves happen through the API's transition endpoint.
 * ``ProjectSnapshot`` is fully read-only and cannot be added or deleted. It is a projection rebuilt
-  by the ``snapshot-rebuild`` consumer; an edit here would be silently overwritten by the next
+  by the ``snapshot-builder`` handler; an edit here would be silently overwritten by the next
   event, which is worse than being impossible.
 """
 
@@ -70,7 +70,7 @@ class ProjectAdmin(admin.ModelAdmin[Project]):
 
     @admin.action(description="Recompute priority for selected projects")
     def recompute_priority(self, request: HttpRequest, queryset: QuerySet[Project]) -> None:
-        """Rebuild ``PriorityScore`` and ``RiskFlag`` for the selected rows, right now.
+        """Rebuild ``PriorityScore`` for the selected rows, right now.
 
         The manual override of an automatic path, and it lives here because this list is where an
         operator who distrusts a number is already standing. It calls
@@ -105,21 +105,24 @@ class ProjectAdmin(admin.ModelAdmin[Project]):
 class ProjectSnapshotAdmin(admin.ModelAdmin[ProjectSnapshot]):
     """The read model, exposed for diagnosis only.
 
-    A ``rebuilt_at`` lagging a busy stream is the visible symptom of a stuck ``snapshot-rebuild``
-    consumer, and ``last_event_id`` names the delivery that produced the row — which is the whole
+    A ``rebuilt_at`` lagging a busy stream is the visible symptom of a stuck ``snapshot-builder``
+    handler, and ``last_event_id`` names the delivery that produced the row — which is the whole
     reason this table is in the admin at all.
+
+    There is no health column to list or filter on: health and the risk flags are derived from
+    these columns when the queue is read (ADR 0011), so the diagnosis this screen supports is
+    "are the facts current", which is the only question a read model can answer wrongly.
     """
 
     list_display = (
         "project_code",
         "name",
-        "health",
         "priority_score",
         "state_code",
         "owner_code",
         "rebuilt_at",
     )
-    list_filter = ("health", "state_category", "engagement_type_code", "is_archived")
+    list_filter = ("state_category", "engagement_type_code", "is_archived")
     search_fields = ("project_code", "name", "client_alias", "owner_code")
     ordering = ("-priority_score", "project_code")
 

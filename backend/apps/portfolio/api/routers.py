@@ -40,17 +40,19 @@ from apps.portfolio.services import (
     update_project,
 )
 from apps.shared.pagination import Page, PageWindow
-from config.actor import actor_code_of, actor_header
+from config.auth import actor_code_of
 
 router = Router(tags=["portfolio"])
 
 
-@router.get("/queue", response=Page[QueueItemView], auth=None, url_name="queue")
+@router.get("/queue", response=Page[QueueItemView], url_name="queue")
 def get_queue(request: HttpRequest, filters: Query[QueueQuery]) -> Page[QueueItemView]:
     """The prioritized project queue: score, breakdown and risk flags, in one read.
 
     Served from ``ProjectSnapshot`` — the whole command center in one index scan rather than a
-    six-table join with per-row aggregates (ARCHITECTURE §8).
+    six-table join with per-row aggregates (ARCHITECTURE §8). The flags and the health beside each
+    row are evaluated from that row at request time (ADR 0011), so the queue is correct the moment
+    it is loaded rather than the moment it was last rebuilt.
     """
     del request
     window = PageWindow.of(page=filters.page, page_size=filters.page_size)
@@ -70,14 +72,14 @@ def get_queue(request: HttpRequest, filters: Query[QueueQuery]) -> Page[QueueIte
             order_by=filters.order_by,
             limit=window.limit,
             offset=window.offset,
-        )
+        ),
+        now=timezone.now(),
     )
 
 
 @router.get(
     "/projects/{project_code}",
     response=ProjectDetailView,
-    auth=None,
     url_name="project_detail",
 )
 def get_project(request: HttpRequest, project_code: str) -> ProjectDetailView:
@@ -93,7 +95,6 @@ def get_project(request: HttpRequest, project_code: str) -> ProjectDetailView:
 @router.post(
     "/projects",
     response={201: ProjectDetailView},
-    auth=actor_header,
     url_name="project_create",
 )
 def post_project(request: HttpRequest, payload: ProjectCreateIn) -> Status[ProjectDetailView]:
@@ -128,7 +129,6 @@ def post_project(request: HttpRequest, payload: ProjectCreateIn) -> Status[Proje
 @router.patch(
     "/projects/{project_code}",
     response=ProjectDetailView,
-    auth=actor_header,
     url_name="project_update",
 )
 def patch_project(
@@ -152,7 +152,6 @@ def patch_project(
 @router.post(
     "/projects/{project_code}/transition",
     response=ProjectDetailView,
-    auth=actor_header,
     url_name="project_transition",
 )
 def post_project_transition(
@@ -175,7 +174,7 @@ def post_project_transition(
     return read_project_detail(project_code=project_code, now=now)
 
 
-@router.get("/team/load", response=TeamLoadPage, auth=None, url_name="team_load")
+@router.get("/team/load", response=TeamLoadPage, url_name="team_load")
 def get_team_load(request: HttpRequest, filters: Query[TeamLoadQuery]) -> TeamLoadPage:
     """Load per person, computed from task rows at read time.
 

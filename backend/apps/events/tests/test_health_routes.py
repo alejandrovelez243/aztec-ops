@@ -60,7 +60,7 @@ class LivenessRouteTestCase(SimpleTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "alive"})
 
-    def test_liveness_needs_no_actor_header(self) -> None:
+    def test_liveness_needs_no_credential(self) -> None:
         self.assertEqual(self.client.get(LIVE_URL).status_code, 200)
 
 
@@ -151,5 +151,5 @@ class PipelineRouteTestCase(TestCase):
         self.assertEqual(body["dead_lettered"], 1)
         self.assertGreater(body["oldest_unpublished_age_seconds"], 3600)
 
-    def test_the_pipeline_route_needs_no_actor_header(self) -> None:
+    def test_the_pipeline_route_needs_no_credential(self) -> None:
         self.assertEqual(self.client.get(PIPELINE_URL).status_code, 200)

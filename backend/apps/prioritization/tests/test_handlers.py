@@ -1,7 +1,7 @@
-"""What the two engine handlers do when an event reaches them.
+"""What the ranking engine handler does when an event reaches it.
 
 ``TransactionTestCase``, because delivery goes through ``apps.events.tasks.apply_once`` and the
-outbox rows these handlers write are committed by ``transaction.on_commit`` hooks that ``TestCase``
+outbox rows this handler writes are committed by ``transaction.on_commit`` hooks that ``TestCase``
 never runs — such a test would pass while proving nothing about the outbox.
 
 Every delivery goes through ``apply_once`` and the *real* registration looked up by name, rather
@@ -24,8 +24,6 @@ from apps.events.domain.envelope import (
     SYSTEM_ACTOR,
     TOPIC_CLOCK_TICKED,
     TOPIC_PROJECT_PRIORITY_RECALCULATED,
-    TOPIC_PROJECT_RISK_CHANGED,
-    TOPIC_PROJECT_STATE_CHANGED,
     TOPIC_PROJECT_UPDATED,
     EventEnvelope,
 )
@@ -36,14 +34,12 @@ from apps.events.tests.celery_support import EagerCeleryMixin
 from apps.events.tests.envelopes import clock_tick, project_event, task_event
 from apps.events.tests.registry_support import only_handlers
 from apps.portfolio.tests.scenario import PROJECT_CODE, SECOND_PROJECT_CODE, PortfolioScenario
-from apps.prioritization.domain.types import Health
 from apps.prioritization.handlers import (
     ENGINE_TOPICS,
     PRIORITY_RECALCULATOR,
-    RISK_EVALUATOR,
     VERB_PRIORITY_CHANGED,
 )
-from apps.prioritization.models import PriorityScore, RiskFlag
+from apps.prioritization.models import PriorityScore
 
 OCCURRED_AT = datetime(2026, 3, 1, 9, 0, tzinfo=UTC)
 LATER = OCCURRED_AT + timedelta(hours=1)
@@ -72,17 +68,20 @@ class EngineSubscriptionTestCase(SimpleTestCase):
     part of the point.
     """
 
-    def test_neither_engine_consumes_what_an_engine_emits(self) -> None:
-        for topic in (TOPIC_PROJECT_PRIORITY_RECALCULATED, TOPIC_PROJECT_RISK_CHANGED):
-            with self.subTest(topic=topic):
-                subscribed = {registration.name for registration in handlers_for(topic)}
-                self.assertNotIn(PRIORITY_RECALCULATOR, subscribed)
-                self.assertNotIn(RISK_EVALUATOR, subscribed)
+    def test_the_engine_does_not_consume_what_it_emits(self) -> None:
+        subscribed = {
+            registration.name for registration in handlers_for(TOPIC_PROJECT_PRIORITY_RECALCULATED)
+        }
+        self.assertNotIn(PRIORITY_RECALCULATOR, subscribed)
 
-    def test_both_engines_read_every_write_side_topic_and_the_clock(self) -> None:
-        expected = ALL_TOPICS - {TOPIC_PROJECT_PRIORITY_RECALCULATED, TOPIC_PROJECT_RISK_CHANGED}
+    def test_the_engine_reads_every_write_side_topic_and_the_clock(self) -> None:
+        expected = ALL_TOPICS - {TOPIC_PROJECT_PRIORITY_RECALCULATED}
         self.assertEqual(ENGINE_TOPICS, expected)
         self.assertIn(TOPIC_CLOCK_TICKED, ENGINE_TOPICS)
+
+    def test_no_topic_announces_a_risk_change(self) -> None:
+        """Flags are computed on read, so there is no moment at which they change (ADR 0011)."""
+        self.assertNotIn("project.risk.changed", ALL_TOPICS)
 
 
 class PriorityRecalculatorTestCase(EagerCeleryMixin, TransactionTestCase):
@@ -218,72 +217,12 @@ class ClockTickTestCase(EagerCeleryMixin, TransactionTestCase):
             OCCURRED_AT,
         )
 
-    def test_a_tick_uses_the_payload_instant_and_not_the_wall_clock(self) -> None:
+    def test_a_tick_scores_against_the_payload_instant_and_not_the_wall_clock(self) -> None:
         self._expire()
 
-        _deliver(RISK_EVALUATOR, clock_tick(tick_at=TICK_AT))
+        _deliver(PRIORITY_RECALCULATOR, clock_tick(tick_at=TICK_AT))
 
-        raised = RiskFlag.objects.for_project(self.scenario.project.pk).open().oldest_first()
-        self.assertTrue(raised)
-        self.assertTrue(all(flag.detected_at == TICK_AT for flag in raised))
-
-
-class RiskEvaluatorTestCase(EagerCeleryMixin, TransactionTestCase):
-    """Reacting on the risk side: rewrite the flags, derive health, announce only a change."""
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.scenario = PortfolioScenario()
-        self.scenario.block_project()
-
-    def test_a_blocked_project_raises_its_flags_and_announces_the_health_it_reached(self) -> None:
-        envelope = project_event(
-            topic=TOPIC_PROJECT_STATE_CHANGED,
-            project_code=PROJECT_CODE,
-            occurred_at=OCCURRED_AT,
-            payload={"from": "execution", "to": "blocked"},
-        )
-
-        _deliver(RISK_EVALUATOR, envelope)
-
-        emitted = OutboxEvent.objects.get(topic=TOPIC_PROJECT_RISK_CHANGED)
-        self.assertEqual(emitted.actor, SYSTEM_ACTOR)
-        self.assertEqual(emitted.correlation_id, envelope.correlation_id)
-        self.assertEqual(emitted.payload["health"], Health.BLOCKED.value)
-        self.assertIn("BLOCKED", emitted.payload["added"])
         self.assertEqual(
-            {flag["code"] for flag in emitted.payload["flags"]},
-            set(
-                RiskFlag.objects.for_project(self.scenario.project.pk)
-                .open()
-                .values_list("code", flat=True)
-            ),
-        )
-
-    def test_an_unchanged_evaluation_announces_nothing(self) -> None:
-        first = project_event(
-            topic=TOPIC_PROJECT_STATE_CHANGED, project_code=PROJECT_CODE, occurred_at=OCCURRED_AT
-        )
-        _deliver(RISK_EVALUATOR, first)
-
-        second = project_event(
-            topic=TOPIC_PROJECT_STATE_CHANGED, project_code=PROJECT_CODE, occurred_at=LATER
-        )
-        _deliver(RISK_EVALUATOR, second)
-
-        self.assertEqual(OutboxEvent.objects.filter(topic=TOPIC_PROJECT_RISK_CHANGED).count(), 1)
-
-    def test_the_risk_engine_writes_no_activity_record(self) -> None:
-        _deliver(
-            RISK_EVALUATOR,
-            project_event(
-                topic=TOPIC_PROJECT_STATE_CHANGED,
-                project_code=PROJECT_CODE,
-                occurred_at=OCCURRED_AT,
-            ),
-        )
-
-        self.assertFalse(
-            ActivityRecord.objects.filter(entity_id=PROJECT_CODE).exists(),
-            "the RiskFlag rows are the risk history; the verb set has no risk verb",
+            PriorityScore.objects.for_project(self.scenario.project.pk).get().computed_at,
+            TICK_AT,
         )

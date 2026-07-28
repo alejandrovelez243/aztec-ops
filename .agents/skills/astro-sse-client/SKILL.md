@@ -57,7 +57,8 @@ Shape of the module:
   once by the shell layout, not by each island.
 - `subscribe(topic, handler)` — returns an unsubscribe function. Topics are the envelope
   topics from ARCHITECTURE §6 (`project.state_changed`, `project.priority.recalculated`,
-  `project.risk.changed`, `blocker.raised`, ...), listed as constants in `stream/topics.ts`.
+  `blocker.raised`, ...), listed as constants in `stream/topics.ts`. There is no risk topic:
+  flags are computed on read, so a view refreshes them by re-reading the project (ADR 0011).
   Nothing string-literals a topic at the call site.
 - `onStatus(handler)` — `connecting | open | disconnected`. `ConnectionBadge` is the only
   island that renders it; other islands read it to decide whether their data is stale.

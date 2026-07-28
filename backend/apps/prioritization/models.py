@@ -1,24 +1,25 @@
-"""Persistence for the prioritization context: policy, score, override and risk flag.
+"""Persistence for the prioritization context: policy, score and override.
 
 Fields, constraints, indexes and the named queries of each table. The arithmetic lives in
 ``domain/``; a business rule here would be a rule that also runs on every instance the ORM builds
 during an unrelated query.
 
-Two definitions live on these querysets and nowhere else: "open flag" is ``cleared_at IS NULL``
-and "live override" is ``revoked_at IS NULL``. Re-deriving either in a service, a consumer and the
-admin is how the three come to disagree.
+"Live override" is ``revoked_at IS NULL``, defined on the queryset here and nowhere else.
+Re-deriving it in a service, a handler and the admin is how the three come to disagree.
+
+**There is no risk flag table, deliberately** (ADR 0011). Overdue, stale, blocked, no-next-step,
+no-target-date and owner-overloaded are pure functions of rows that already exist, so they are
+evaluated on read from :mod:`apps.prioritization.domain.specifications` and never stored: a stored
+derivation can be wrong between the moment it was written and the moment it is read, and a computed
+one cannot. The score *is* stored, and not for speed — ``ActivityRecord`` records
+``PRIORITY_CHANGED`` with a before and an after, and without a previous value there is no before.
 """
 
 from datetime import datetime
 
 from django.db import models
 
-from .domain.types import Severity
-from .domain.views import OverrideView, RiskFlagView, ScoreView
-
-#: Severity choices for ``RiskFlag``, derived from the domain enum so the database and the
-#: registry can never disagree about the four values that exist.
-SEVERITY_CHOICES = [(severity.value, severity.value.title()) for severity in Severity]
+from .domain.views import OverrideView, ScoreView
 
 
 class PriorityPolicyQuerySet(models.QuerySet["PriorityPolicy"]):
@@ -99,39 +100,6 @@ class PriorityOverrideQuerySet(models.QuerySet["PriorityOverride"]):
         ``expires_at`` against its own ``now``.
         """
         return self.filter(revoked_at__isnull=True)
-
-
-class RiskFlagQuerySet(models.QuerySet["RiskFlag"]):
-    """Named reads of the risk detections."""
-
-    def for_project(self, project_id: int) -> "RiskFlagQuerySet":
-        """Narrow to one project's flags, cleared episodes included.
-
-        Args:
-            project_id: Numeric primary key of the project.
-        """
-        return self.filter(project=project_id)
-
-    def open(self) -> "RiskFlagQuerySet":
-        """Narrow to the flags currently raised.
-
-        ``cleared_at IS NULL`` is the definition of "raised", and it is the condition of the
-        ``prioritization_open_flags`` partial index, so this selection never touches a cleared
-        row.
-        """
-        return self.filter(cleared_at__isnull=True)
-
-    def oldest_first(self) -> "RiskFlagQuerySet":
-        """Order by detection, earliest first, so the UI can say how long each has been true."""
-        return self.order_by("detected_at")
-
-    def as_views(self) -> tuple[RiskFlagView, ...]:
-        """Materialise the selection as the projections the risk panels render.
-
-        Ends the chain: the query executes here, so a caller cannot narrow the flag set after the
-        response shape was decided.
-        """
-        return tuple(flag.to_view() for flag in self)
 
 
 class PriorityPolicy(models.Model):
@@ -303,68 +271,3 @@ class PriorityOverride(models.Model):
             created_at=self.created_at,
             expires_at=self.expires_at,
         )
-
-
-class RiskFlag(models.Model):
-    """A persisted risk detection, raised and cleared as separate rows.
-
-    A flag going from raised to cleared and back produces two rows, never one mutated row, so the
-    risk history is reconstructible and ``detected_at`` keeps meaning "since when" — that is what
-    lets the UI say "blocked for 19 days". ``severity`` is written from the registry entry, not
-    chosen per row.
-    """
-
-    project = models.ForeignKey(
-        "portfolio.Project",
-        on_delete=models.CASCADE,
-        related_name="risk_flags",
-    )
-    code = models.CharField(max_length=32)
-    severity = models.CharField(max_length=8, choices=SEVERITY_CHOICES)
-    detail = models.CharField(max_length=255, default="", blank=True)
-    detected_at = models.DateTimeField()
-    cleared_at = models.DateTimeField(null=True, blank=True)
-
-    objects = RiskFlagQuerySet.as_manager()
-
-    class Meta:
-        verbose_name = "risk flag"
-        ordering = ["-detected_at"]
-        constraints = [
-            models.UniqueConstraint(
-                fields=["project", "code"],
-                condition=models.Q(cleared_at__isnull=True),
-                name="prioritization_one_open_flag_per_code",
-            ),
-            models.CheckConstraint(
-                condition=models.Q(cleared_at__isnull=True)
-                | models.Q(cleared_at__gte=models.F("detected_at")),
-                name="prioritization_flag_cleared_after_detected",
-            ),
-        ]
-        indexes = [
-            # The open-flags panels and the snapshot rebuild read only raised flags; a cleared row
-            # is never read by either, so the index does not carry them.
-            models.Index(
-                fields=["project"],
-                condition=models.Q(cleared_at__isnull=True),
-                name="prioritization_open_flags",
-            ),
-            models.Index(fields=["severity"], name="prioritization_flag_severity"),
-            models.Index(fields=["detected_at"], name="prioritization_flag_detected"),
-        ]
-
-    def __str__(self) -> str:
-        return f"{self.project_id}: {self.code} ({self.severity})"
-
-    def to_view(self) -> RiskFlagView:
-        """Describe this flag as the projection the risk panels render.
-
-        ``detail`` is published as ``reason`` because that is the name `docs/API.md` §1.6 fixed on
-        the wire, and because it is what the field is: the sentence naming the fact that raised the
-        flag. Issues no query.
-
-        Returns:
-            The flag as an immutable :class:`~apps.prioritization.domain.views.RiskFlagView`.
-        """
-        return RiskFlagView(code=self.code, severity=self.severity, reason=self.detail)
