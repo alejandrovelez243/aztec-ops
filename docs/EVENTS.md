@@ -98,7 +98,7 @@ Codes used below are workflow state `code`s, not labels: project states `discove
 
 ### `project.created`
 
-**Emitted by** `backend/apps/portfolio/services/project.py` when a project is created through
+**Emitted by** `backend/apps/portfolio/services/create_project.py` when a project is created through
 `POST /api/projects` or by the seed path. Version 1.
 
 | Field | Type | Required |
@@ -145,7 +145,7 @@ command center gains a row.
 
 ### `project.updated`
 
-**Emitted by** `backend/apps/portfolio/services/project.py` on any field update that is not a workflow
+**Emitted by** `backend/apps/portfolio/services/update_project.py` on any field update that is not a workflow
 transition. `workflow_state` can never appear in `changes` — state moves only through
 `project.state_changed` (`CLAUDE.md` rule 2). Version 1.
 
@@ -177,7 +177,8 @@ transition. `workflow_state` can never appear in `changes` — state moves only 
 
 ### `project.state_changed`
 
-**Emitted by** `backend/apps/workflow/services/transition.py`, only after the transition service has
+**Emitted by** `backend/apps/portfolio/services/transition_project.py`, only after
+`backend/apps/workflow/services/transition.py` has
 matched an active `WorkflowTransition` and satisfied its guard, `requires_reason` and
 `requires_fields`. An illegal move raises `TransitionNotAllowed` and emits nothing. Version 1.
 
@@ -327,7 +328,7 @@ from it.
 
 ### `task.created`
 
-**Emitted by** `backend/apps/work/services/task.py`. `entity` is the task; `payload.project_code` is
+**Emitted by** `backend/apps/work/services/create_task.py`. `entity` is the task; `payload.project_code` is
 what lets a consumer aggregate without a FK into `backend/apps/work`. Version 1.
 
 | Field | Type | Required |
@@ -368,10 +369,54 @@ counts and owner load are on screen.
 
 ---
 
+### `task.updated`
+
+**Emitted by** `backend/apps/work/services/update_task.py` on any field edit that is not a workflow
+transition. `workflow_state` can never appear in `changes` — state moves only through
+`task.state_changed` (`CLAUDE.md` rule 2). An edit that changes nothing emits nothing, exactly as
+`project.updated`: a no-op event teaches consumers to recompute for nothing. Version 1.
+
+| Field | Type | Required |
+|---|---|---|
+| `project_code` | string | yes |
+| `changes` | object mapping field name → `{"from": any, "to": any}` | yes, non-empty |
+
+Keys of `changes` are model field names (`title`, `detail`, `last_progress`, `due_date`,
+`priority`, `assignee`). Values are rendered the same way as in `project.updated`: a foreign key
+as the referenced row's business `code`, a `Decimal` as a number, a `date` as an ISO string, and
+`null` when the field is empty — `null` and `""` are different facts.
+
+**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes — a
+priority or due-date edit reorders the queue, and without this topic the score goes stale
+silently: neither is a transition, and `clock.ticked` does not rescue it because
+`PriorityScore.valid_until` only moves when something recomputes the score.
+
+```json
+{
+  "id": "3fb27c48-0d61-4f9e-b6a3-51c0d8e7a914",
+  "topic": "task.updated",
+  "occurred_at": "2026-07-28T09:41:07Z",
+  "actor": "daniel.rojas",
+  "correlation_id": "3fb27c48-0d61-4f9e-b6a3-51c0d8e7a914",
+  "entity": {"type": "task", "id": "PRJ-01-T02"},
+  "payload": {
+    "project_code": "PRJ-01",
+    "changes": {
+      "priority": {"from": "alta", "to": "critica"},
+      "due_date": {"from": "2026-07-10", "to": "2026-08-03"},
+      "assignee": {"from": "daniel.rojas", "to": "camila.torres"}
+    }
+  },
+  "version": 1
+}
+```
+
+---
+
 ### `task.state_changed`
 
-**Emitted by** `backend/apps/workflow/services/transition.py` for a task aggregate, under the same
-transition validation as a project. Version 1.
+**Emitted by** `backend/apps/work/services/transition_task.py` for a task aggregate, under the same
+`backend/apps/workflow/services/transition.py` validation as a project. Version 1.
 
 | Field | Type | Required |
 |---|---|---|
@@ -413,7 +458,7 @@ task entering `BLOCKED` can change the whole project's health, which is visible 
 
 ### `blocker.raised`
 
-**Emitted by** `backend/apps/work/services/blocker.py`. A blocker is a first-class row attached to a
+**Emitted by** `backend/apps/work/services/raise_blocker.py`. A blocker is a first-class row attached to a
 project or a task, never a substring in a notes field. `entity` is the blocker; the payload
 names what it blocks. Version 1.
 
@@ -453,7 +498,7 @@ open-blockers panel is the second question the command center answers.
 
 ### `blocker.resolved`
 
-**Emitted by** `backend/apps/work/services/blocker.py` when `resolved_at` is set. Resolving an already
+**Emitted by** `backend/apps/work/services/resolve_blocker.py` when `resolved_at` is set. Resolving an already
 resolved blocker is a no-op and emits nothing. Version 1.
 
 | Field | Type | Required |
@@ -491,7 +536,7 @@ resolved blocker is a no-op and emits nothing. Version 1.
 
 ### `note.added`
 
-**Emitted by** `backend/apps/work/services/note.py`. A note is activity, so it resets the staleness
+**Emitted by** `backend/apps/work/services/add_note.py`. A note is activity, so it resets the staleness
 signal — which is why the engine groups consume it even though a note changes no field.
 Version 1.
 
@@ -531,9 +576,12 @@ crosses its target date, or goes stale, without anybody touching it, and a purel
 change-driven system never notices. The clock therefore has to be an explicit participant
 rather than an assumption.
 
-**Emitted by** the `ticker` compose service, on a fixed interval (`TICKER_INTERVAL_SECONDS`,
-default 300) and once at the local day boundary. It writes to the outbox like every other
-producer; it does not publish to Redis directly.
+**Emitted by** two Celery Beat tasks: `events.emit_interval_tick`, scheduled every
+`TICKER_INTERVAL_SECONDS` (default 300), and `events.emit_day_boundary_tick`, scheduled at
+`crontab(hour=0, minute=0)`. Beat schedules them and the `celery-worker` service runs them —
+`celery-worker` is not `worker`, which runs the Redis Streams consumer groups. Both tasks write
+to the outbox like every other producer; they do not publish to Redis directly, and Celery
+carries no domain events.
 
 **Payload**
 
@@ -579,7 +627,7 @@ a group that fails does not stop the others, and no group is ever shared across 
 
 | Group | Subscribes to | What it does | Emits | Idempotency key |
 |---|---|---|---|---|
-| `priority-recalculator` | `project.created`, `project.updated`, `project.state_changed`, `task.created`, `task.state_changed`, `blocker.raised`, `blocker.resolved`, `note.added`, `clock.ticked` | Recomputes `PriorityScore` for the affected project under the active `PriorityPolicy`, persisting `value`, `policy_version` and `breakdown` | `project.priority.recalculated`, only when value or breakdown changed | `(event.id, "priority-recalculator")` |
+| `priority-recalculator` | `project.created`, `project.updated`, `project.state_changed`, `task.created`, `task.updated`, `task.state_changed`, `blocker.raised`, `blocker.resolved`, `note.added`, `clock.ticked` | Recomputes `PriorityScore` for the affected project under the active `PriorityPolicy`, persisting `value`, `policy_version` and `breakdown` | `project.priority.recalculated`, only when value or breakdown changed | `(event.id, "priority-recalculator")` |
 | `risk-evaluator` | same set as above, including `clock.ticked` | Re-runs the risk specifications and rewrites the project's `RiskFlag` set; derives health from the flags | `project.risk.changed`, only when the flag set or health changed | `(event.id, "risk-evaluator")` |
 | `snapshot-builder` | every topic (§8 read model) | Rebuilds the `ProjectSnapshot` row for the project named by `entity.id` or `payload.project_code`: score, flags, owner load, task counts | nothing | `(event.id, "snapshot-builder")` |
 | `sse-fanout` | every topic on the allowlist | `PUBLISH aztec.sse` with the envelope unchanged, for `GET /api/stream` to frame | nothing | `(event.id, "sse-fanout")` |
@@ -591,7 +639,7 @@ Notes:
 - `priority-recalculator` and `risk-evaluator` do not consume the topics they emit. Derived
   topics feed only `snapshot-builder` and `sse-fanout`, which emit nothing — the graph has no
   cycle by construction.
-- Every topic except `clock.ticked` is on the `sse-fanout` allowlist, because each of those ten
+- Every topic except `clock.ticked` is on the `sse-fanout` allowlist, because each of those eleven
   changes something a view renders. `clock.ticked` is the standing example of the opposite case: it
   triggers recomputation and is never forwarded, since a browser has its own clock. The allowlist still exists and defaults to off: a topic that only triggers internal
   recomputation must not be forwarded, and a topic added to the fanout without being added to

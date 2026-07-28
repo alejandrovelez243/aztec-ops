@@ -55,7 +55,7 @@ change required — do not invent a field in the fixture.
 7. The `Team` sheet counters (`projects_in_portfolio`, `open_tasks_assigned`,
    `blocked_tasks_assigned`, `high_or_critical_open`, `diagnostico_projects`,
    `proyecto_projects`, `mantenimiento_projects`) are NOT imported. They are a projection the
-   system recomputes. Import only `member_alias` and `role` into `TeamMember`. The counters may
+   system recomputes. Import only `member_alias` and `role` into `accounts.User` (with `set_unusable_password()`, `username == code`). The counters may
    be used as an assertion in a test, never as a data source.
 8. Every seeded row gets an `ActivityRecord` with `verb: SEEDED`, `actor: "system"`, and an
    `occurred_at` fixed by the generator (not `now()`), so the fixture stays deterministic.
@@ -103,7 +103,7 @@ change required — do not invent a field in the fixture.
 2. Emit taxonomies and workflows first (`catalog`, `workflows`), from the distinct values
    found in step 1 plus the states the workflow graph needs. These are hand-curated: codes,
    labels, `order`, `weight`, `category`, transitions.
-3. Emit `portfolio` (Client, TeamMember, Project), then `work` (Task, TaskDependency,
+3. Emit `accounts` (User), then `portfolio` (Client, Project), then `work` (Task, TaskDependency,
    Blocker, Note). Dependencies resolve only after all tasks exist — two passes.
 4. Emit `activity` last: one `SEEDED` record per seeded entity.
 5. Verify coverage. The dataset must retain examples of: at least one project per engagement

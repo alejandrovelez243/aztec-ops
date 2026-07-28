@@ -295,7 +295,7 @@ on `code` to decide which component to mount. A seventh flag added on the backen
 legend block with no new component.
 
 **ISP — narrowest props.** `ScoreBreakdown` takes `readonly BreakdownEntry[]`, not `QueueItem`.
-`OwnerLoadCell` takes `{ alias, label, loadPoints, capacityPoints }`, not `TeamMember`. A props
+`OwnerLoadCell` takes `{ alias, label, loadPoints, capacityPoints }`, not `User`. A props
 interface that names the entity is usually asking for too much.
 
 **DIP — depend on the client and the store.** Components import `apiClient` from

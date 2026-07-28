@@ -51,12 +51,12 @@ class Project(models.Model):
 
 `cast()` is acceptable when the stub is genuinely weaker than the runtime guarantee and the
 guarantee is visible in the same function — for example after `select_related("owner")` plus an
-`owner__isnull=False` filter, where the field is `Optional[TeamMember]` in the model but cannot be
+`owner__isnull=False` filter, where the field is `Optional[User]` in the model but cannot be
 `None` in that queryset. It is a lie when it asserts something the code has not established:
 
 ```python
 # WRONG — nothing here guarantees the project has an owner
-owner = cast(TeamMember, project.owner)
+owner = cast(User, project.owner)
 
 # RIGHT — the absence is a domain fact, so handle it
 if project.owner is None:
@@ -152,7 +152,7 @@ def transition_project(project_code: str, to_state_code: str, actor: str, reason
     Args:
         project_code: Business code, e.g. "PRJ-01".
         to_state_code: WorkflowState.code inside the project's bound workflow.
-        actor: TeamMember.code, or "system" when the engine caused the change.
+        actor: accounts.User.code, or "system" when the engine caused the change.
         reason: Free text. Required when the transition sets requires_reason.
 
     Returns:

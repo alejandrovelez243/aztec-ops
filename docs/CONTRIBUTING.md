@@ -73,11 +73,22 @@ Then bring the system up:
 ```bash
 cp .env.example .env
 
-make up                                             # postgres, redis, api, relay, worker, ticker, frontend
+make up                                             # postgres, redis, api, relay, worker, beat, celery-worker, frontend
 docker compose exec api python manage.py migrate
 make seed                                           # loaddata fixtures + recompute scores
 docker compose exec api python manage.py createsuperuser
 ```
+
+Three of those services are easy to confuse, so name them precisely:
+
+| Service | What it is |
+|---|---|
+| `worker` | Redis Streams consumer groups (`manage.py run_consumer`). The event bus. |
+| `celery-worker` | Executes scheduled Celery tasks. Only ever runs the clock ticks. |
+| `beat` | Celery Beat. Holds the schedule, executes nothing. |
+
+Celery does scheduling only. It is not the bus and carries no domain events: a scheduled task
+writes an `OutboxEvent` like any service, and the relay publishes it.
 
 Then verify:
 

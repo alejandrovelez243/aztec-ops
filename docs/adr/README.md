@@ -21,6 +21,7 @@ a new one — an ADR is never edited to match code that drifted.
 | [0006](0006-workflows-and-taxonomies-as-data.md) | Workflows and taxonomies as data, not enums | Accepted 2026-07-28 |
 | [0007](0007-django-fixtures-for-seed-data.md) | Django fixtures for seed data, not a custom importer | Accepted 2026-07-28 |
 | [0008](0008-astro-with-islands.md) | Astro 7 with islands instead of an SPA | Accepted 2026-07-28 |
+| [0009](0009-celery-beat-for-scheduling.md) | Celery Beat for scheduling, not for the bus | Accepted 2026-07-28 |
 
 ## Writing a new one
 

@@ -31,7 +31,7 @@ X-Actor: camila
 ```
 
 - Required on every `POST` and `PATCH`. Missing or empty → `422 validation_error`.
-- Value is the `TeamMember.alias` slug (`camila`, `daniel`, `laura`, `mateo`, `santiago`), or the
+- Value is the `accounts.User.code` slug (`camila`, `daniel`, `laura`, `mateo`, `santiago`), or the
   literal `system` when the engine acted. The API rejects `system` from an HTTP client: only
   consumers write it.
 - The middleware puts it on `request.actor`; routers pass it explicitly to the service. Services
@@ -69,7 +69,7 @@ Shared filters on project-list surfaces:
 | Param | Type | Meaning |
 |---|---|---|
 | `client` | str | `Client.alias` slug. Repeatable → OR. |
-| `owner` | str | `TeamMember.alias` slug. Repeatable → OR. |
+| `owner` | str | `accounts.User.code` slug. Repeatable → OR. |
 | `engagement_type` | str | `EngagementType.code`. Repeatable. |
 | `project_type` | str | `ProjectType.code`. |
 | `stage` | str | `Stage.code`. |
@@ -333,7 +333,7 @@ client: str                     # required, Client.alias
 engagement_type: str            # required, EngagementType.code
 project_type: str               # required, ProjectType.code
 stage: str                      # required, Stage.code
-owner: str                      # required, TeamMember.alias
+owner: str                      # required, accounts.User.code
 start_date: date | null
 target_date: date | null
 business_value: int             # >= 0
@@ -478,7 +478,7 @@ Headers: `X-Actor`. Body:
 ```
 title: str                 # required
 detail: str | null
-assignee: str | null       # TeamMember.alias
+assignee: str | null       # accounts.User.code
 priority: str              # required, Priority.code
 due_date: date | null
 depends_on: str[]          # task codes within the same project; unresolved text goes to raw_label
@@ -518,7 +518,7 @@ Headers: `X-Actor`. Body:
 ```
 kind: str              # EXTERNAL_DEPENDENCY | ACCESS | DECISION | TECHNICAL
 description: str       # required
-owner: str | null      # TeamMember.alias responsible for clearing it
+owner: str | null      # accounts.User.code responsible for clearing it
 task_code: str | null  # attach to a task instead of the project
 ```
 

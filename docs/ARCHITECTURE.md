@@ -33,6 +33,7 @@ Minimum requirements from the challenge:
 | 6 | States and workflows in the database, not enums | The operation must be able to evolve; adding a state cannot require a deploy | `TextChoices` on the model |
 | 7 | Django fixtures for seed data | Built into Django, versioned in git, deterministic, and `loaddata` is one command. Reviewers can read the data as JSON | A custom xlsx importer — more code to maintain and to trust |
 | 8 | Astro 7 + islands | Server render for a fast first paint; only the live regions hydrate and listen to SSE | Full SPA — unnecessary weight for four views |
+| 9 | Celery Beat for scheduling only | The schedule is declarative and stateless — `crontab(hour=0, minute=0)` replaces a loop that had to remember the last local date to detect a rollover, state that is wrong after a restart and duplicated by a second replica | A hand-rolled ticker loop; or Celery as the bus — a task queue makes the producer name every consumer, so adding a reactor would edit the producer |
 
 ## 3. Domain model
 
@@ -77,8 +78,12 @@ Hard rules:
 ### 3.3 Portfolio and work (`portfolio`, `work` apps)
 
 - `Client` — `alias`, notes.
-- `TeamMember` — `alias`, `role`, `weekly_capacity_points`. Actual load is computed, never
-  stored denormalized (the dataset's `Team` sheet is a projection, not a source of truth).
+- There is **no person model here**. The people who own projects and are assigned tasks are
+  `accounts.User` rows (§3.3b); `Project.owner`, `Task.assignee` and `Blocker.owner` are foreign
+  keys to `AUTH_USER_MODEL`. What stays in `portfolio` is the *question* about a person that only
+  this context can answer: `OwnerLoadRepository.load_for_codes` derives owner load from `work.Task`
+  rows over `User.weekly_capacity_points`. Actual load is computed, never stored denormalized (the
+  dataset's `Team` sheet is a projection, not a source of truth).
 - `Project` — `code`, `name`, `client`, `engagement_type`, `project_type`, `stage`,
   `workflow_state`, `owner`, `start_date`, `target_date`, `business_value`, `currency`,
   `summary`, `next_step`, `is_archived`.
@@ -97,6 +102,45 @@ Domain invariants:
 - A project is **blocked** if it has at least one open `Blocker`, or its state category is
   `BLOCKED`, or at least one of its tasks is in a `BLOCKED` state.
 - A null `target_date` is not harmless missing data — it is a risk signal (`NO_TARGET_DATE`).
+
+### 3.3b Identity (`accounts` app)
+
+`accounts.User` extends `AbstractUser` and **is the person**. It exists on day one because
+`AUTH_USER_MODEL` cannot be changed after the first migration without hand-written surgery
+across every table holding a user foreign key — the cost now is zero, the cost later is a
+weekend.
+
+Beyond what `AbstractUser` supplies it carries:
+
+- `code` — stable slug, unique, the identifier the event bus, the fixtures and every payload use
+  (`camila.torres`). `username` mirrors it.
+- `alias` — display name from the source data (`Camila Torres`).
+- `role` — FK to `catalog.Role`, nullable, `on_delete=SET_NULL`.
+- `weekly_capacity_points` — `smallint`, constrained positive, the *denominator* of owner load.
+
+There is no separate `TeamMember`. Whoever is assigned a task is whoever signs in to move it, so
+they are one entity. The earlier design gave `TeamMember` a nullable one-to-one to the account: a
+nullable link that is never null lies in the schema and forces a `request.user.team_member` hop
+that can be `None` at every permission check.
+
+The cost is written down rather than hidden: identity now carries two operational attributes
+(`role`, `weekly_capacity_points`). One row per person beats a nullable one-to-one that is never
+null, and the alternative — a profile table joined on every read — buys purity paid for on every
+query.
+
+Two things did **not** move into `accounts`:
+
+- **Owner load.** `weekly_capacity_points` describes the person, but the numerator is an
+  aggregation over `work.Task`. That query stays in `portfolio/repositories.py` — "who is
+  overloaded" is a portfolio question, and `accounts` must not learn about `work`.
+- **`ActivityRecord.actor`.** It stays a string rather than a foreign key precisely so the
+  prioritization engine and the stream consumers can write records as `system`. A foreign key
+  would force a fake user row to exist to satisfy it. `Note.author` is a string for the same
+  reason, plus one more: a note must survive its author leaving the roster.
+
+The five people in the source dataset are real assignees with no password. Seed fixtures create
+them with `set_unusable_password()` — which is exactly what that method exists for — so no
+credentials are invented for seed data.
 
 ### 3.4 Audit trail and timeline (`activity` app)
 
@@ -162,8 +206,15 @@ covered by the event flow in §6 and needs nothing extra.
 project can cross its target date, or go stale, without a single mutation. Nothing in an
 event-driven system notices that on its own, so a clock has to be an explicit participant:
 
-- A `ticker` service publishes `clock.ticked` on a fixed interval (default 5 minutes) and once at
-  the local day boundary. It is a compose service like the relay, not a cron on someone's laptop.
+- Celery Beat holds the schedule: `events.emit_interval_tick` every `TICKER_INTERVAL_SECONDS`
+  (default 5 minutes) and `events.emit_day_boundary_tick` at `crontab(hour=0, minute=0)`. Beat
+  only schedules. The `celery-worker` compose service runs the task, the task writes a
+  `clock.ticked` `OutboxEvent`, and the relay publishes it like any other event. `celery-worker`
+  is not `worker`: `worker` runs the Redis Streams consumer groups under `manage.py run_consumer`.
+  Celery is not the bus and carries no domain events.
+- Beat rather than a loop because the crontab entry removes the in-process date state: a loop had
+  to remember the last local date it saw to detect a rollover, and that state is wrong after every
+  restart and duplicated the moment a second replica exists.
 - Recomputing all 22 projects on every tick would work at this size and would be the wrong shape
   at any other. Instead each `PriorityScore` persists `valid_until`: the earliest future instant
   at which any time-dependent signal would change bucket — the target date itself, the start of
@@ -249,8 +300,9 @@ Stable event envelope:
 ```
 
 Initial topics: `project.created`, `project.updated`, `project.state_changed`,
-`project.priority.recalculated`, `project.risk.changed`, `task.created`, `task.state_changed`,
-`blocker.raised`, `blocker.resolved`, `note.added`.
+`project.priority.recalculated`, `project.risk.changed`, `task.created`, `task.updated`,
+`task.state_changed`, `blocker.raised`, `blocker.resolved`, `note.added`. Payload schemas live in
+`docs/EVENTS.md` §4.
 
 Rules:
 

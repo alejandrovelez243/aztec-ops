@@ -71,7 +71,24 @@ so the lockfile can never drift from `pyproject.toml`. Install the hooks once, b
 5. **Consumers are idempotent.** Deduplicate on `event.id`. At-least-once: the same event
    will arrive twice.
 6. **Layers.** `domain/` is pure (no Django). `api/` never imports `models`, it calls
-   `services/`. Queries live in `repositories.py`. See §7 of ARCHITECTURE.
+   `services/`. See §7 of ARCHITECTURE.
+   **Named queries live on the model's `QuerySet`, exposed through its `Manager`** —
+   `Task.objects.assigned_to(user).open().overdue()`. Use `Manager.from_queryset()` so every
+   named query composes and stays lazy. A module-level `open_tasks_for(user) -> list[Task]`
+   cannot be filtered further, so every new combination needs a new function; that is the same
+   combinatorial fragmentation that keeps converters off free functions. Django already gives us
+   the right tool, and the query belongs on the model you are already holding.
+   A `repositories.py` module survives for exactly one case: a query that **spans contexts** and
+   therefore belongs to no single model — owner load aggregates `work.Task` keyed by user, and
+   `accounts` must not learn that `work.Task` exists. That module lives in the context that
+   *consumes* the query, not the one that owns the rows. Anything else goes on the manager.
+   **A model knows how to describe itself.** Converting a row into its domain value object is a
+   method on the model — `ActivityRecord.to_entry()`, `Project.to_summary()` — never a private
+   `_to_entry(record)` function sitting in `repositories.py`. The object owns the mapping of its
+   own fields; a free function that reads twelve attributes off an object it was handed is
+   procedural code wearing a module for a class, and it fragments as soon as a second caller
+   needs the same projection. This is a projection of self, not a business rule, so it does not
+   violate "models.py holds persistence only".
 7. **Prioritization is deterministic and explainable.** Every score persists its `breakdown`
    with a reason per signal. No LLM in the ranking.
 8. **Adding a prioritization signal or a risk criterion = one class + one registry entry.**
@@ -132,7 +149,10 @@ All code, comments, documentation, agents, skills, commit messages and identifie
 ## Commands
 
 ```bash
-make up          # docker compose up: postgres, redis, api, relay, worker, ticker, frontend
+make up          # docker compose up: postgres, redis, api, relay, worker, beat, celery-worker, frontend
+                 # worker = Redis Streams consumer groups (run_consumer), the event bus
+                 # celery-worker = executes scheduled Celery tasks, only the clock ticks
+                 # beat = Celery Beat, holds the schedule, executes nothing
 make seed        # loaddata fixtures + recompute scores (idempotent)
 make test        # pytest
 make lint        # ruff + mypy

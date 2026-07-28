@@ -10,8 +10,16 @@ fails with connection refused and is not worth debugging.
 
 ## 1. Compose topology
 
-Six services in `docker-compose.yml`. `api`, `relay` and `worker` share one image and differ only
-in `command` — one build, three processes.
+Eight services in `docker-compose.yml`. `api`, `relay`, `worker`, `beat` and `celery-worker` share
+one image and differ only in `command` — one build, five processes.
+
+`worker` and `celery-worker` are different processes and are never interchangeable:
+
+| Service | What it is |
+|---|---|
+| `worker` | Redis Streams consumer groups (`manage.py run_consumer`). The event bus. |
+| `celery-worker` | Executes scheduled Celery tasks. Only ever runs the clock ticks. |
+| `beat` | Celery Beat. Holds the schedule, executes nothing. |
 
 | Service | Responsibility | Depends on | Port |
 |---|---|---|---|
@@ -20,6 +28,8 @@ in `command` — one build, three processes.
 | `api` | Django 6 + django-ninja under uvicorn (ASGI). REST API, `GET /api/stream` (SSE), Django admin. Applies migrations on start, then serves | `postgres` healthy, `redis` healthy | 8000 |
 | `relay` | Outbox relay. The **only** process allowed to `XADD`. Polls `OutboxEvent` where `published_at IS NULL` with `SELECT ... FOR UPDATE SKIP LOCKED`, publishes to `aztec.events`, stamps `published_at` | `postgres` healthy, `redis` healthy | — |
 | `worker` | Consumer groups on `aztec.events`: `priority-recalculator`, `risk-evaluator`, `sse-fanout`, plus the `ProjectSnapshot` rebuild. Creates the groups with `XGROUP CREATE ... MKSTREAM` on start. Moves an entry to `aztec.events.dlq` after N failed retries | `postgres` healthy, `redis` healthy | — |
+| `beat` | `celery -A config beat`. Holds `CELERY_BEAT_SCHEDULE`: `emit-interval-tick` every `TICKER_INTERVAL_SECONDS`, `emit-day-boundary-tick` at `crontab(hour=0, minute=0)`. Enqueues, executes nothing, keeps no domain state | `redis` healthy | — |
+| `celery-worker` | `celery -A config worker`. Executes the scheduled tasks in `apps/events/tasks.py`; each one calls `Ticker().emit(...)` and writes an `OutboxEvent`. Not the stream consumer — it never reads `aztec.events` | `postgres` healthy, `redis` healthy | — |
 | `web` | Astro 7 (Node >= 22.12) serving `/` and `/projects/{code}`. SSR fetches the API by compose service name; the browser reaches the API on `localhost:8000` | `api` healthy | 4321 |
 
 Startup ordering is `depends_on: condition: service_healthy` throughout: `pg_isready` for
@@ -51,7 +61,7 @@ git clone <repo> aztec-challenge && cd aztec-challenge
 cp .env.example .env && make up && make seed
 ```
 
-`make up` builds the images, starts the six services, waits for health, and the `api` container
+`make up` builds the images, starts the eight services, waits for health, and the `api` container
 applies migrations before uvicorn binds. `make seed` loads the fixtures and recomputes scores.
 There is no third step; if you need one, the setup is broken and belongs to the `devops-engineer`
 agent.
@@ -101,12 +111,12 @@ tested property:
 docker compose exec api pytest -k seed_idempotency
 ```
 
-Expected after a clean seed: 22 projects, 82 tasks, 5 team members, 16 clients.
+Expected after a clean seed: 22 projects, 82 tasks, 5 people (`accounts.User`), 16 clients.
 
 ```bash
 docker compose exec api python manage.py shell -c \
-  "from apps.portfolio.models import Project, Client, TeamMember; from apps.work.models import Task; \
-   print(Project.objects.count(), Task.objects.count(), TeamMember.objects.count(), Client.objects.count())"
+  "from apps.accounts.models import User; from apps.portfolio.models import Project, Client; from apps.work.models import Task; \
+   print(Project.objects.count(), Task.objects.count(), User.objects.count(), Client.objects.count())"
 ```
 
 Fixtures are generated, not hand-edited. If the source data changes, regenerate them with
@@ -206,6 +216,20 @@ curl -s -X POST localhost:8000/api/projects/PRJ-01/transition \
 ```
 
 When you are done: `docker compose start relay`.
+
+### Driving the clock by hand
+
+There is no foreground ticker any more — `manage.py run_ticker` is gone and `Ticker` is stateless.
+The schedule lives in `beat`, the execution in `celery-worker`. To do by hand what they do:
+
+```bash
+docker compose exec api celery -A config call events.emit_interval_tick     # force one tick
+docker compose logs -f beat                                                 # is it scheduling
+docker compose exec api celery -A config inspect scheduled                  # what is queued
+```
+
+`celery ... call` enqueues the task; `celery-worker` is what runs it. If the call returns an id and
+nothing happens, `celery-worker` is down — that is the point of the two being separate services.
 
 ---
 
@@ -527,3 +551,57 @@ version may have moved. Every `PriorityScore` persists `policy_version` and its 
 `breakdown`; compare the two rows before blaming the engine, and check whether a
 `PriorityOverride` is in play — an override is labelled as manual and never rendered as a
 computed score.
+
+## 16. Scores are not refreshing on their own
+
+**Symptom.** Nothing is wrong with the data and a manual change still propagates fine, but a score
+that should move only because time passed does not: an overdue project stays at its old
+`deadline_pressure`, a stale one never picks up `staleness`, and the day boundary comes and goes
+with no recompute. Nobody touched anything, so nothing was emitted — that is exactly what the
+clock exists to fix.
+
+**Checks.** Walk the chain in order and stop at the first break.
+
+```bash
+# 1. is beat running and logging its schedule?
+docker compose ps beat
+docker compose logs --tail=50 beat
+
+# 2. is celery-worker consuming what beat enqueues?
+docker compose ps celery-worker
+docker compose logs --tail=50 celery-worker
+docker compose exec api celery -A config inspect scheduled
+docker compose exec api celery -A config call events.emit_interval_tick
+
+# 3. did the task write an OutboxEvent?
+docker compose exec api python manage.py shell -c \
+  "from apps.events.models import OutboxEvent; \
+   print(OutboxEvent.objects.filter(topic='clock.ticked').order_by('-id')[:3].values('id','published_at'))"
+
+# 4. did the relay publish it?
+docker compose exec redis redis-cli XREVRANGE aztec.events + - COUNT 3
+
+# 5. is anything in the DLQ?
+docker compose exec redis redis-cli XLEN aztec.events.dlq
+```
+
+**Fix**, by where it broke:
+
+- `beat` down or crash-looping → nothing is scheduled at all. Read its log; a bad `crontab` entry
+  or an unreachable broker fails at startup. `docker compose up -d beat`.
+- `beat` logging sends but no `OutboxEvent` → `celery-worker` is not consuming. Check it is up and
+  that both point at the same `REDIS_URL`. `celery -A config call` returning an id while nothing
+  runs is the same finding.
+- `OutboxEvent` written but `published_at` stays null → this is the relay, not the clock. §8.
+- Published but scores unchanged → `priority-recalculator` is not processing `clock.ticked`. §9.
+- Entries in `aztec.events.dlq` → the handler fails deterministically on the tick payload. §10.
+
+Two ticks are scheduled and they fail differently: `emit-interval-tick` runs every
+`TICKER_INTERVAL_SECONDS`, so its absence shows up within a minute; `emit-day-boundary-tick` runs
+at `crontab(hour=0, minute=0)` under `CELERY_TIMEZONE`, so a wrong timezone looks like a working
+system that recomputes the day at the wrong hour. Compare `CELERY_TIMEZONE` with `TIME_ZONE`
+before blaming the schedule.
+
+`CELERY_TASK_ACKS_LATE = False`, so a tick lost to a `celery-worker` crash is not redelivered. That
+is deliberate — a tick is worthless once the next one is due. Do not chase a single missing tick;
+chase a pattern of them.

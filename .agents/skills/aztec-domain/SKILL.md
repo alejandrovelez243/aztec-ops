@@ -20,7 +20,7 @@ questions every morning (`ARCHITECTURE.md` §1):
 This is the build order and the acceptance test for any feature. Question 1 is the
 prioritization engine plus the `breakdown` shown next to the number. Question 2 is the risk
 specifications and the blockers / no-next-step panels. Question 3 is computed owner load
-against `TeamMember.weekly_capacity_points`. A feature that does not serve one of the three
+against `accounts.User.weekly_capacity_points`. A feature that does not serve one of the three
 belongs in §12 "deliberately out of scope", not in the repo.
 
 ## 2. Engagement type
@@ -88,7 +88,7 @@ mandatory reason, labeled as an override in the UI (§4.2).
 ## 5. The source dataset
 
 Normalized export: `data/raw/dataset.json`, four sheets — `Projects` (22), `Tasks` (82),
-`Team` (5), `Notas` (junk, ignore). 16 distinct clients, 5 team members.
+`Team` (5), `Notas` (junk, ignore). 16 distinct clients, 5 people.
 
 Traps, all of which `backend/scripts/xlsx_to_fixtures.py` resolves once at fixture-generation time so
 that no runtime code ever sees them:

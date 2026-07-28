@@ -1,0 +1,265 @@
+"""Immutable values that cross the portfolio boundary.
+
+Every structured value entering or leaving a service is a frozen ``pydantic.BaseModel``: commands
+in, results out, and the snapshot projection down into the repository. Pydantic rather than a
+record type because it is the same type system django-ninja uses, so an API schema does not have to
+restate these fields, and because the value is validated at construction instead of at the boundary
+(PATTERNS_BACKEND §9).
+
+Nothing here names a workflow state, a state category or an event topic: those belong to the
+contexts that own them (``apps.workflow.models.StateCategory``,
+``apps.events.domain.envelope``), and copying them into this module would create a second
+definition that drifts.
+"""
+
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+#: Derived project health, mirroring ``ProjectSnapshot.Health``.
+Health = Literal["HEALTHY", "AT_RISK", "BLOCKED"]
+
+
+class OwnerLoad(BaseModel):
+    """What one person is actually carrying, derived from task rows.
+
+    Never persisted beside ``weekly_capacity_points``: the source ``Team`` sheet's counters are a
+    stale projection of the same task rows and importing them would let the roster and the work
+    disagree. The numerator is recomputed on every read; ``weekly_capacity_points``, a column of
+    ``accounts.User``, is the only stored half.
+
+    ``member_code`` is ``accounts.User.code``. The field keeps its name because it names the role
+    the code plays here — the person carrying work — not the table it was read from.
+
+    ``load_points`` is one point per open task. That is a deliberate simplification stated here
+    rather than hidden in a query: the operation has no per-task estimate, so counting open work is
+    the only honest measure available.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    member_code: str
+    open_task_count: int = Field(ge=0)
+    blocked_task_count: int = Field(ge=0)
+    urgent_open_task_count: int = Field(ge=0)
+    weekly_capacity_points: int = Field(gt=0)
+
+    @property
+    def load_points(self) -> int:
+        """Return the load numerator, in the same unit as ``weekly_capacity_points``."""
+        return self.open_task_count
+
+    @property
+    def is_overloaded(self) -> bool:
+        """Whether the member is carrying more open work than their weekly capacity.
+
+        This is the fact ``OwnerOverloaded`` flags on. It never lowers a project's score: priority
+        belongs to the work, not to who happens to be free (ARCHITECTURE §4.1).
+        """
+        return self.load_points > self.weekly_capacity_points
+
+
+class RiskFlagEntry(BaseModel):
+    """One raised risk flag as it is stored inside ``ProjectSnapshot.risk_flags``.
+
+    Modelled rather than left as a bare mapping so the GIN-indexed JSON keys have exactly one
+    definition; the authoritative rows remain ``prioritization_riskflag``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+    severity: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+    detail: str = ""
+
+
+class CreateProjectCommand(BaseModel):
+    """Input of the create-project use case, addressed entirely by business codes.
+
+    Codes rather than numeric ids because the API, the fixtures, the event envelope and the audit
+    trail all speak codes; accepting ids here would make the service the one place that does not.
+    A code that resolves to nothing raises a typed ``*NotFound`` rather than an integrity error.
+
+    ``workflow_state`` is absent on purpose: the initial state is resolved from the engagement
+    type's ``WorkflowBinding``, never chosen by the caller.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    code: str = Field(min_length=1, max_length=16)
+    name: str = Field(min_length=1, max_length=160)
+    client_code: str = Field(min_length=1, max_length=32)
+    engagement_type_code: str = Field(min_length=1, max_length=32)
+    project_type_code: str | None = None
+    stage_code: str | None = None
+    owner_code: str | None = None
+    start_date: date | None = None
+    target_date: date | None = None
+    business_value: Decimal | None = None
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    summary: str = ""
+    next_step: str = Field(default="", max_length=255)
+    imported_health: str = Field(default="", max_length=16)
+
+
+class UpdateProjectCommand(BaseModel):
+    """Input of the update-project use case, with absent-versus-null semantics.
+
+    Every field defaults to ``None``, so ``None`` alone cannot mean "clear this". What separates the
+    two is ``model_fields_set``: a field the caller did not send is left untouched, a field sent as
+    ``null`` is cleared. That distinction is the whole reason this is a model and not a ``**kwargs``
+    dict — with a dict, "unset the target date" and "do not touch the target date" are the same
+    call, and a portfolio silently loses its deadlines.
+
+    ``workflow_state`` is not updatable here at all; ``transition_project`` is the only writer.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    code: str = Field(min_length=1, max_length=16)
+    name: str | None = Field(default=None, max_length=160)
+    client_code: str | None = None
+    engagement_type_code: str | None = None
+    project_type_code: str | None = None
+    stage_code: str | None = None
+    owner_code: str | None = None
+    start_date: date | None = None
+    target_date: date | None = None
+    business_value: Decimal | None = None
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    summary: str | None = None
+    next_step: str | None = Field(default=None, max_length=255)
+    is_archived: bool | None = None
+
+    def was_provided(self, field_name: str) -> bool:
+        """Whether the caller explicitly sent this field, including sending it as ``null``.
+
+        Args:
+            field_name: Attribute name on this command.
+
+        Returns:
+            True when the field was present in the payload the command was built from.
+        """
+        return field_name in self.model_fields_set
+
+
+class ProjectResult(BaseModel):
+    """What a portfolio write use case returns to its caller.
+
+    A projection of the aggregate, not the Django instance: a service returning a model would let
+    the router lazily trigger queries after the transaction closed, and would tie the HTTP response
+    shape to the column list. Nothing here is nullable-by-accident — a null ``target_date`` or
+    ``owner_code`` is the operational signal itself.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+    name: str
+    client_code: str
+    client_alias: str
+    engagement_type_code: str
+    project_type_code: str | None
+    stage_code: str | None
+    state_code: str
+    state_label: str
+    state_category: str
+    owner_code: str | None
+    start_date: date | None
+    target_date: date | None
+    business_value: Decimal | None
+    currency: str
+    summary: str
+    next_step: str
+    is_archived: bool
+
+
+class ProjectStateChange(BaseModel):
+    """Result of a state transition: the new aggregate plus the edge that was traversed.
+
+    The from/to pair is returned rather than re-derived, because after the transition the previous
+    state is only recoverable from the audit trail, and the caller needs it to render "moved from X
+    to Y" without a second query.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    project: ProjectResult
+    from_state_code: str
+    to_state_code: str
+    reason: str
+
+
+class SnapshotQueueFilters(BaseModel):
+    """The facets and window of one command-center queue read.
+
+    Bundled into a value object rather than passed as seven keyword arguments so the repository
+    signature does not grow every time the UI gains a facet, and so an unfiltered read is spelled
+    ``SnapshotQueueFilters()`` instead of seven ``None`` literals. ``None`` means "do not filter";
+    the empty string is a real value for ``owner_code`` and matches unowned projects.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    health: Health | None = None
+    state_category: str | None = None
+    engagement_type_code: str | None = None
+    owner_code: str | None = None
+    risk_flag_code: str | None = None
+    limit: int = Field(default=25, ge=1, le=200)
+    offset: int = Field(default=0, ge=0)
+
+
+class ProjectSnapshotValues(BaseModel):
+    """The full projection written into one ``ProjectSnapshot`` row.
+
+    Produced by the ``snapshot-rebuild`` consumer from ``Project``, ``Task``, ``Blocker``,
+    ``PriorityScore``, ``RiskFlag`` and ``ActivityRecord``, then handed to
+    :meth:`apps.portfolio.repositories.ProjectSnapshotRepository.write`. It is a complete row, never
+    a patch: a partial rebuild would leave columns from two different deliveries in one row, and
+    ``last_event_id`` would then name a delivery that did not produce all of it.
+
+    ``breakdown`` is typed loosely because it is a verbatim copy of ``PriorityScore.breakdown``
+    (DATA_MODEL §6.3), owned and validated by the prioritization context.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    project_code: str
+    project_id: int
+    name: str
+    client_alias: str
+    engagement_type_code: str
+    engagement_type_label: str
+    project_type_code: str = ""
+    stage_code: str = ""
+    state_code: str
+    state_label: str
+    state_category: str
+    owner_code: str = ""
+    owner_alias: str = ""
+    owner_load_points: int = 0
+    owner_capacity_points: int = 0
+    start_date: date | None = None
+    target_date: date | None = None
+    business_value: Decimal | None = None
+    currency: str = "USD"
+    next_step: str = ""
+    priority_score: Decimal = Decimal("0")
+    priority_policy_version: str = ""
+    breakdown: dict[str, object] = Field(default_factory=dict)
+    has_override: bool = False
+    override_position: int | None = None
+    override_reason: str = ""
+    risk_flags: tuple[RiskFlagEntry, ...] = ()
+    health: Health = "HEALTHY"
+    open_task_count: int = 0
+    overdue_task_count: int = 0
+    blocked_task_count: int = 0
+    urgent_open_task_count: int = 0
+    open_blocker_count: int = 0
+    oldest_blocker_age_days: int | None = None
+    last_activity_at: datetime | None = None
+    is_archived: bool = False

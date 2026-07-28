@@ -15,7 +15,7 @@ Conventions used throughout:
   `WorkflowState.category`. Never against `label` — labels are Spanish operator-editable data.
 - Timestamps are `timestamptz`. `created_at` is `auto_now_add`, `updated_at` is `auto_now`.
 
-Apps in dependency order: `catalog` → `workflow` → `portfolio` → `work` → `activity` →
+Apps in dependency order: `catalog` → `accounts` → `workflow` → `portfolio` → `work` → `activity` →
 `prioritization` → `events`. `events` depends on nothing; every other app writes to it.
 
 ---
@@ -65,9 +65,9 @@ column is `Activo` on all 22 rows.
 
 Seeded: `critica` (13 tasks), `alta` (38), `media` (23), `baja` (8).
 
-### `catalog_role` — team member role
+### `catalog_role` — the role a person holds
 
-Base columns only. FK target of `TeamMember.role`.
+Base columns only. FK target of `accounts.User.role` (`on_delete=SET_NULL`, `related_name="members"`).
 
 ---
 
@@ -129,7 +129,34 @@ recurring maintenance engagement without any code change.
 
 ---
 
-## 3. `backend/apps/portfolio` — clients, people, projects, read model
+## 3. `backend/apps/accounts` + `backend/apps/portfolio` — the person, clients, projects, read model
+
+The person lives in `accounts` and everything else in this section lives in `portfolio`. They are
+documented together because every foreign key below that names a person points at
+`AUTH_USER_MODEL`.
+
+### `accounts_user` — identity, and the person work is assigned to
+
+`AbstractUser`, so `username`, `password`, `email`, `first_name`, `last_name`, `is_active`,
+`is_staff`, `is_superuser`, `last_login`, `date_joined`, `groups` and `user_permissions` are
+inherited. Added on top:
+
+| Column | Type | Null | Default | Index | Meaning |
+|---|---|---|---|---|---|
+| `code` | `varchar(32)` | no | — | unique | Stable slug (`camila.torres`); also the `actor` string in `ActivityRecord` and in the event envelope, and the `author` of a note. `username` mirrors it. |
+| `alias` | `varchar(96)` | no | — | — | Display name from the source data (`Camila Torres`). Ordering column. |
+| `role_id` | `bigint` FK → `catalog_role` | yes | `null` | FK index | `on_delete=SET_NULL`, `related_name="members"`. |
+| `weekly_capacity_points` | `smallint` | no | `20` | — | Denominator of owner load, constrained `> 0`. The numerator is computed from `work_task`, never stored here. |
+
+There is no `portfolio_teammember`. Whoever is assigned a task is whoever signs in to move it, so
+they are one row (`ARCHITECTURE` §3.3b). `is_active` comes from `AbstractUser` rather than being
+duplicated. Seed users are created with `set_unusable_password()`: they are real assignees who
+simply have no password yet.
+
+The source `Team` sheet counters (`open_tasks_assigned`, `blocked_tasks_assigned`,
+`high_or_critical_open`, `*_projects`) are **not** columns and are **not** imported. They are a
+stale projection of the task rows; load is recomputed by
+`portfolio.repositories.OwnerLoadRepository`.
 
 ### `portfolio_client` — the counterparty
 
@@ -140,20 +167,6 @@ recurring maintenance engagement without any code change.
 | `notes` | `text` | no | `''` | — | Free context. |
 | `is_active` | `boolean` | no | `true` | — | |
 | `created_at` | `timestamptz` | no | `auto_now_add` | — | |
-
-### `portfolio_teammember` — a person who can own projects and tasks
-
-| Column | Type | Null | Default | Index | Meaning |
-|---|---|---|---|---|---|
-| `code` | `varchar(32)` | no | — | unique | Stable slug; also the `actor` string in `ActivityRecord` and in the event envelope. |
-| `alias` | `varchar(96)` | no | — | — | Display name. |
-| `role_id` | `bigint` FK → `catalog_role` | yes | `null` | FK index | `on_delete=SET_NULL`. |
-| `weekly_capacity_points` | `smallint` | no | `20` | — | Denominator of owner load. The numerator is computed from `Task`, never stored here. |
-| `is_active` | `boolean` | no | `true` | — | |
-
-The source `Team` sheet counters (`open_tasks_assigned`, `blocked_tasks_assigned`,
-`high_or_critical_open`, `*_projects`) are **not** columns and are **not** imported. They are a
-stale projection of the task rows; load is recomputed.
 
 ### `portfolio_project` — the aggregate root
 
@@ -166,7 +179,7 @@ stale projection of the task rows; load is recomputed.
 | `project_type_id` | `bigint` FK → `catalog_projecttype` | yes | `null` | FK index | Source `project_type_api`. |
 | `stage_id` | `bigint` FK → `catalog_stage` | yes | `null` | FK index | Descubrimiento / Ejecucion. |
 | `workflow_state_id` | `bigint` FK → `workflow_workflowstate` | no | — | `(is_archived, workflow_state)` | Current node. Assigned **only** by the transition service. `on_delete=PROTECT`. |
-| `owner_id` | `bigint` FK → `portfolio_teammember` | yes | `null` | `(owner, is_archived)` | `on_delete=SET_NULL`. Null owner is itself an operational signal. |
+| `owner_id` | `bigint` FK → `accounts_user` | yes | `null` | `(owner, is_archived)` | `on_delete=SET_NULL`. Null owner is itself an operational signal. |
 | `start_date` | `date` | yes | `null` | — | Null on 9 source projects. Never backfilled. |
 | `target_date` | `date` | yes | `null` | `(target_date)` | Null on 5 source projects, and that null raises `NO_TARGET_DATE`. Never backfilled with `today()` or a sentinel. |
 | `business_value` | `numeric(12,2)` | yes | `null` | — | Contract value. Arrives as a string in the source and is cast at fixture generation. Log-normalized in the engine. |
@@ -202,7 +215,7 @@ is a single indexed scan instead of a six-table join plus per-row aggregates.
 | `owner_code` | `varchar(32)` | no | `''` | `(owner_code)` | "Show me my portfolio". |
 | `owner_alias` | `varchar(96)` | no | `''` | — | |
 | `owner_load_points` | `smallint` | no | `0` | — | Computed load of the owner at rebuild time. |
-| `owner_capacity_points` | `smallint` | no | `0` | — | Copy of `TeamMember.weekly_capacity_points`. |
+| `owner_capacity_points` | `smallint` | no | `0` | — | Copy of `accounts.User.weekly_capacity_points`. |
 | `start_date` | `date` | yes | `null` | — | |
 | `target_date` | `date` | yes | `null` | `(target_date)` | Timeline sort. |
 | `business_value` | `numeric(12,2)` | yes | `null` | — | |
@@ -237,7 +250,7 @@ is a single indexed scan instead of a six-table join plus per-row aggregates.
 |---|---|---|---|---|---|
 | `code` | `varchar(16)` | no | — | unique | Business identifier (`TSK-014`). |
 | `project_id` | `bigint` FK → `portfolio_project` | no | — | `(project, workflow_state)` | `on_delete=CASCADE`. Tasks have no life outside a project. |
-| `assignee_id` | `bigint` FK → `portfolio_teammember` | yes | `null` | `(assignee, workflow_state)` | `on_delete=SET_NULL`. The owner-load numerator is computed from this column. |
+| `assignee_id` | `bigint` FK → `accounts_user` | yes | `null` | `(assignee, workflow_state)` | `on_delete=SET_NULL`. The owner-load numerator is computed from this column. |
 | `priority_id` | `bigint` FK → `catalog_priority` | no | — | FK index | `on_delete=PROTECT`. |
 | `workflow_state_id` | `bigint` FK → `workflow_workflowstate` | no | — | `(project, workflow_state)` | Assigned only by the transition service. |
 | `due_date` | `date` | yes | `null` | `(due_date)` | Overdue is derived from this against `now`. The source `is_overdue` string (`Si`/`No`) is not imported. |
@@ -268,24 +281,48 @@ delete 61 rows worth of the operation's own notes.
 
 | Column | Type | Null | Default | Index | Meaning |
 |---|---|---|---|---|---|
+| `code` | `varchar(16)` | no | `nextval('work_blocker_code_seq')`, rendered | unique | Business identifier (`BLK-0142`). What the event envelope carries as `entity.id` (`EVENTS` §4), so a consumer names a blocker without a foreign key into `work`. Assigned on insert and never renumbered. |
 | `project_id` | `bigint` FK → `portfolio_project` | no | — | partial `(project) WHERE resolved_at IS NULL` | Always set, including for task-level blockers (see §7.1). `on_delete=CASCADE`. |
 | `task_id` | `bigint` FK → `work_task` | yes | `null` | FK index | Set when the blocker was raised on a specific task. |
 | `description` | `text` | no | — | — | Prose from the source, or what the operator typed. |
 | `kind` | `varchar(24)` | no | — | `(kind)` | `EXTERNAL_DEPENDENCY` \| `ACCESS` \| `DECISION` \| `TECHNICAL`. `TextChoices` — structural, not operator-editable. |
 | `raised_at` | `timestamptz` | no | `auto_now_add` | `(raised_at)` | Age of the oldest open blocker drives the `blockage` signal. |
 | `resolved_at` | `timestamptz` | yes | `null` | partial index above | Null means open. Openness is this column, never a substring match on prose. |
-| `owner_id` | `bigint` FK → `portfolio_teammember` | yes | `null` | FK index | Who is expected to clear it. |
+| `owner_id` | `bigint` FK → `accounts_user` | yes | `null` | FK index | Who is expected to clear it. |
 | `resolution_reason` | `varchar(255)` | no | `''` | — | Required by the service when resolving; copied into the `ActivityRecord`. |
 
 ### `work_note` — chronological comment
 
 | Column | Type | Null | Default | Index | Meaning |
 |---|---|---|---|---|---|
+| `code` | `varchar(16)` | no | `nextval('work_note_code_seq')`, rendered | unique | Business identifier (`NOTE-0391`), the envelope's `entity.id` for `note.added`. Same rule as `Blocker.code`: assigned on insert, never renumbered. |
 | `project_id` | `bigint` FK → `portfolio_project` | no | — | `(project, -created_at)` | Always set, same rule as `Blocker`. |
 | `task_id` | `bigint` FK → `work_task` | yes | `null` | FK index | Set for task-scoped notes. |
 | `body` | `text` | no | — | — | |
-| `author` | `varchar(32)` | no | — | — | `TeamMember.code`, or `system`. Denormalized string, not a FK: a note must survive its author leaving the roster. |
+| `author` | `varchar(32)` | no | — | — | `accounts.User.code`, or `system`. Denormalized string, not a FK: a note must survive its author leaving the roster. |
 | `created_at` | `timestamptz` | no | `auto_now_add` | `(project, -created_at)` | |
+
+### Sequences behind `Blocker.code` and `Note.code`
+
+Two PostgreSQL sequences, `work_blocker_code_seq` and `work_note_code_seq`, both created by
+raw SQL in `work.0001_initial` with a matching `reverse_sql` that drops them. They live in the
+same migration as the tables because `makemigrations` cannot author a sequence — no model state
+describes one — so a hand-written operation kept apart from the tables it serves is the one that
+gets lost the next time the migration set is regenerated. The value is
+drawn with `nextval` in the model's `save()` on insert and rendered as `BLK-` / `NOTE-` plus the
+number zero-padded to four digits — a floor, not a limit, so the ten-thousandth row is `BLK-10000`.
+
+A sequence and not `max(pk) + 1` and not a Python counter, because both of those read a value,
+decide, then write: two concurrent inserts compute the same number and the second dies on the
+unique constraint, or silently reuses a code if the constraint is ever missing. `nextval` is
+atomic and non-transactional, so it never hands the same number to two callers. Its counterpart is
+that a rolled-back insert burns its number; that gap is kept, because codes are never reused and
+never renumbered — a trail that renumbers is not a trail. Only the code is immutable: unlike
+`ActivityRecord`, these rows *are* updated (a blocker is resolved by writing `resolved_at`), so
+neither `save()` refuses an update.
+
+`loaddata` bypasses `save()`, so fixture rows must carry their own `code` and the sequences must be
+advanced past the seeded values.
 
 ---
 
@@ -299,7 +336,7 @@ delete 61 rows worth of the operation's own notes.
 | `entity_id` | `varchar(32)` | no | — | same composite | The **business code** (`PRJ-01`), matching `entity.id` in the event envelope, not a numeric primary key. |
 | `verb` | `varchar(24)` | no | — | `(verb, -occurred_at)` | `CREATED`, `STATE_CHANGED`, `PRIORITY_CHANGED`, `BLOCKER_RAISED`, `BLOCKER_RESOLVED`, `OWNER_CHANGED`, `NEXT_STEP_SET`, `TASK_ADDED`, `NOTE_ADDED`, `SEEDED`. |
 | `origin` | `varchar(8)` | no | `'SYSTEM'` | — | `MANUAL` (a human forced it; `reason` mandatory) \| `POLICY` (the engine recomputed; `metadata` names the signal that moved) \| `SYSTEM`. |
-| `actor` | `varchar(32)` | no | — | `(actor, -occurred_at)` | `TeamMember.code`, or `system` when the engine caused the change. |
+| `actor` | `varchar(32)` | no | — | `(actor, -occurred_at)` | `accounts.User.code`, or `system` when the engine caused the change. |
 | `from_value` | `varchar(255)` | no | `''` | — | Point-in-time copy of the previous value, as text. |
 | `to_value` | `varchar(255)` | no | `''` | — | Point-in-time copy of the new value, as text. |
 | `reason` | `varchar(500)` | no | `''` | — | Mandatory when the transition or the override requires it. |
@@ -597,9 +634,11 @@ outside.
 | `workflow_workflowstate` | `UNIQUE (workflow_id) WHERE is_initial` | Exactly one entry node. |
 | `workflow_workflowtransition` | `UNIQUE (from_state_id, to_state_id)` | One edge per ordered pair. Re-enabling is `is_active = true`, not a second row. |
 | `workflow_workflowbinding` | `UNIQUE (applies_to, engagement_type_id)` | One binding per engagement type per entity kind; the null row is the per-kind default. |
-| `portfolio_client` / `portfolio_teammember` / `portfolio_project` | `UNIQUE (code)` | |
+| `accounts_user` / `portfolio_client` / `portfolio_project` | `UNIQUE (code)` | |
 | `portfolio_projectsnapshot` | `PRIMARY KEY (project_code)`, `UNIQUE (project_id)` | One snapshot per project; the upsert key is the business code. |
 | `work_task` | `UNIQUE (code)` | |
+| `work_blocker` | `UNIQUE (code)` | `BLK-0142` is what the event envelope publishes as `entity.id`; two rows answering to one code would make an event ambiguous. |
+| `work_note` | `UNIQUE (code)` | Same, for `NOTE-0391`. |
 | `work_taskdependency` | `UNIQUE (task_id, depends_on_id) WHERE depends_on_id IS NOT NULL` | No duplicate resolved edges. Unresolved rows repeat freely — the same prose can appear twice. |
 | `prioritization_prioritypolicy` | `UNIQUE (version)`, `UNIQUE ((true)) WHERE is_active` | One active policy at a time. |
 | `prioritization_priorityscore` | `UNIQUE (project_id)` | Current score only. |
@@ -615,7 +654,7 @@ outside.
 | `catalog_engagementtype`, `catalog_priority` | `weight > 0` | A zero weight would silently delete a signal's effect. |
 | `portfolio_project` | `start_date IS NULL OR target_date IS NULL OR start_date <= target_date` | Nulls allowed on purpose; an inverted pair is data corruption. |
 | `portfolio_project` | `business_value IS NULL OR business_value >= 0` | |
-| `portfolio_teammember` | `weekly_capacity_points > 0` | It is a divisor. |
+| `accounts_user` | `weekly_capacity_points > 0` | It is a divisor. |
 | `work_taskdependency` | `depends_on_id IS NOT NULL OR raw_label <> ''` | A dependency row that points nowhere and says nothing is noise. |
 | `work_taskdependency` | `depends_on_id IS NULL OR depends_on_id <> task_id` | Self-dependency. The only cycle a `CHECK` can catch. |
 | `work_blocker` | `resolved_at IS NULL OR resolved_at >= raised_at` | |

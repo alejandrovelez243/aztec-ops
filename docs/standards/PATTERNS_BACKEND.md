@@ -447,7 +447,7 @@ class ProjectFactory(DjangoModelFactory):
     client = SubFactory(ClientFactory)
     engagement_type = SubFactory(EngagementTypeFactory)
     workflow_state = SubFactory(WorkflowStateFactory, category="IN_PROGRESS")
-    owner = SubFactory(TeamMemberFactory)
+    owner = SubFactory(UserFactory)
     target_date = None        # 5 of 22 source projects have none — the default is honest
     next_step = ""            # empty string, matching the column
 ```

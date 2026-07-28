@@ -1,0 +1,1 @@
+"""The work bounded context."""

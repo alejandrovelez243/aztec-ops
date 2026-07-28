@@ -46,8 +46,11 @@ docker compose exec api python manage.py migrate
 make seed
 ```
 
-`make up` starts seven services: `postgres`, `redis`, `api` (Django on ASGI), `relay` (outbox
-relay), `worker` (consumer groups), `ticker` (emits `clock.ticked`), `frontend` (Astro). `make seed` runs
+`make up` starts eight services: `postgres`, `redis`, `api` (Django on ASGI), `relay` (outbox
+relay), `worker` (Redis Streams consumer groups — the event bus, `manage.py run_consumer`), `beat`
+(Celery Beat: holds the schedule, executes nothing), `celery-worker` (executes the scheduled Celery
+tasks — only ever the clock ticks that emit `clock.ticked`), `frontend` (Astro). `worker` and
+`celery-worker` are different processes and are never interchangeable. `make seed` runs
 `loaddata catalog workflows portfolio work activity` followed by `make recompute`, which
 computes `PriorityScore`, risk flags and `ProjectSnapshot`. Fixtures use explicit stable primary
 keys, so running `make seed` twice leaves the database identical.
@@ -88,7 +91,9 @@ uv run python manage.py loaddata catalog workflows portfolio work activity
 uv run python manage.py recompute
 uv run uvicorn config.asgi:application --port 8000
 uv run python manage.py run_outbox_relay  # separate shell
-uv run python manage.py run_consumers     # separate shell
+uv run python manage.py run_consumers     # separate shell — Redis Streams consumer groups
+uv run celery -A config beat              # separate shell — the schedule
+uv run celery -A config worker            # separate shell — runs the scheduled tasks
 
 cd web && npm install && npm run dev      # http://localhost:4321
 ```
@@ -285,7 +290,7 @@ actor and one reason, and so the same id links the change to the events it produ
 backend/apps/
   catalog/          # editable taxonomies: EngagementType, ProjectType, Stage, Priority, Role
   workflow/         # Workflow, WorkflowState, WorkflowTransition, WorkflowBinding + transition service
-  portfolio/        # Client, TeamMember, Project
+  portfolio/        # Client, Project (people are accounts.User)
   work/             # Task, TaskDependency, Blocker, Note
   activity/         # ActivityRecord (append-only) and the timeline read side
   prioritization/   # signal strategies, PriorityPolicy, PriorityScore, PriorityOverride, risk specifications
@@ -369,7 +374,7 @@ Stated here rather than hidden, with what each would actually take.
 
 - **Real authentication and multi-tenancy.** Requests identify the actor with an `X-Actor`
   header and the admin uses Django auth. Doing it properly means a real user model wired to
-  `TeamMember`, an organization FK on every aggregate, and a default queryset scoped by it —
+  `accounts.User`, an organization FK on every aggregate, and a default queryset scoped by it —
   which is a data model change, not a middleware change, and would rewrite every fixture.
 - **External notifications (Slack, email).** The bus already carries everything a notifier would
   need. It is one more consumer group on `aztec.events` plus a per-user subscription table

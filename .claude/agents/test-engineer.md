@@ -13,7 +13,7 @@ Does:
 - Database-free unit tests for `backend/apps/prioritization/domain/` (signal strategies, policy weighting)
   and for the risk Specifications in `backend/apps/*/domain/specifications.py`. This is where coverage
   should be high.
-- Factories under `tests/factories/` for `Client`, `TeamMember`, `Project`, `Task`, `Blocker`,
+- Factories under `tests/factories/` for `Client`, `User`, `Project`, `Task`, `Blocker`,
   `WorkflowState`, `WorkflowTransition` and the `catalog` taxonomies.
 - The four integration tests that matter: illegal transition rejected, seed idempotent,
   consumer idempotent, outbox row reaches a consumer.
