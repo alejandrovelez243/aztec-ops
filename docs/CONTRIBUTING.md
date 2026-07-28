@@ -267,10 +267,13 @@ ones above it. Owning skill: `.agents/skills/django-clean-arch/`. Worked example
    `pydantic.BaseModel`) if the topic is new. Reuse the spellings listed in `ARCHITECTURE.md` §6; do not invent a variant.
 3. **`backend/apps/<context>/models.py` + migration** — only if the use case needs a field that does not
    exist. Fields, constraints, indexes. No business rules on the model.
-4. **`backend/apps/<context>/repositories.py`** — the query the service needs, with its
-   `select_related` / `select_for_update`. Skip this step for a plain primary-key lookup with no
-   joins; add it the moment the same filter appears twice or a business rule ("what counts as an
-   open blocker") is encoded in a `filter()`.
+4. **`backend/apps/<context>/models.py`, on the model's `QuerySet`** — the named query the
+   service needs, with its `select_related` (`with_relations()`) / `select_for_update`
+   (`locked()`). Each method returns the queryset type, so the service composes them:
+   `Blocker.objects.locked().with_relations().open()`. Skip this step for a plain primary-key or
+   `code` lookup with no joins — a service may call the manager directly; add the method the moment
+   the same filter appears twice or a business rule ("what counts as an open blocker") is encoded
+   in a `filter()`. A `repositories.py` module is only for a query that spans contexts.
 5. **`backend/apps/<context>/services/<use_case>.py`** — one module, one public function, decorated
    `@transaction.atomic`. In this order inside the transaction: mutate the aggregate, write the
    `ActivityRecord`, write the `OutboxEvent`. No Redis import anywhere under `services/`; the
@@ -291,7 +294,7 @@ ones above it. Owning skill: `.agents/skills/django-clean-arch/`. Worked example
     | Layer touched in this walkthrough | Base class | What it proves |
     |---|---|---|
     | step 1–2, `domain/errors.py`, `domain/events.py` | `django.test.SimpleTestCase` | The error condition and the payload model hold with no database. `SimpleTestCase` forbids database access, so the purity of `domain/` is enforced by the base class. |
-    | step 4–5, `repositories.py` and `services/` | `django.test.TestCase` | Exactly one `ActivityRecord` and one `OutboxEvent` written, zero of both after a rollback. Each test is wrapped in a transaction and rolled back. |
+    | step 4–5, queryset methods and `services/` | `django.test.TestCase` | Exactly one `ActivityRecord` and one `OutboxEvent` written, zero of both after a rollback. Each test is wrapped in a transaction and rolled back. |
     | step 7–8, `api/` | `django.test.TestCase` | The route returns the error status code and the output schema. |
     | step 6 and 10, the outbox actually reaching the relay or a consumer | `django.test.TransactionTestCase` | Real commits, so `on_commit` fires and the relay's `SELECT ... FOR UPDATE SKIP LOCKED` on a second connection sees the row. On `TestCase` the transaction never commits and this test passes while proving nothing. |
 
@@ -553,7 +556,7 @@ A change is done when all of these hold. Not four out of five.
 
 - [ ] `make test` passes, and every new test is a `TestCase` class grouped by behaviour with the
       right base: `SimpleTestCase` for new pure logic (signals, specifications, value objects,
-      policy maths), `TestCase` for repositories, services, routes, transitions and seed
+      policy maths), `TestCase` for queryset methods, services, routes, transitions and seed
       idempotency, `TransactionTestCase` for anything touching the outbox, `on_commit` or the
       relay. No module-level `def test_...`, no `pytest.mark.django_db`, no bare `assert`.
 - [ ] `make lint` passes: ruff check, ruff format, mypy strict over `domain/` and `services/`.

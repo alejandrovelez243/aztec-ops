@@ -156,7 +156,8 @@ simply have no password yet.
 The source `Team` sheet counters (`open_tasks_assigned`, `blocked_tasks_assigned`,
 `high_or_critical_open`, `*_projects`) are **not** columns and are **not** imported. They are a
 stale projection of the task rows; load is recomputed by
-`portfolio.repositories.OwnerLoadRepository`.
+`portfolio.repositories.owner_load_for_codes` — the one query that spans contexts and so lives in
+the context that consumes it rather than on a manager.
 
 ### `portfolio_client` — the counterparty
 

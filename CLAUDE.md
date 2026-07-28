@@ -122,7 +122,7 @@ Non-negotiable on both sides:
     the function.
 14. **SOLID is checked at review, per side.** Backend: one use case per service; a new priority
     signal or risk criterion is a class plus a registry line, never a new `elif`; services depend
-    on repository and outbox interfaces, not on Redis or a concrete query. Frontend: components
+    on the outbox interface and on named queries, not on Redis or an inline `filter()`. Frontend: components
     receive data and emit intent, never fetch; transition buttons and risk flags render from what
     the API returns, so a new workflow state needs zero frontend changes.
 15. **Tests are Django `TestCase` classes, grouped by behaviour under test.** No loose module-level

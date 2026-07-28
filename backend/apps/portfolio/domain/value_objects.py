@@ -217,7 +217,7 @@ class ProjectSnapshotValues(BaseModel):
 
     Produced by the ``snapshot-rebuild`` consumer from ``Project``, ``Task``, ``Blocker``,
     ``PriorityScore``, ``RiskFlag`` and ``ActivityRecord``, then handed to
-    :meth:`apps.portfolio.repositories.ProjectSnapshotRepository.write`. It is a complete row, never
+    :meth:`apps.portfolio.models.ProjectSnapshotQuerySet.upsert`. It is a complete row, never
     a patch: a partial rebuild would leave columns from two different deliveries in one row, and
     ``last_event_id`` would then name a delivery that did not produce all of it.
 

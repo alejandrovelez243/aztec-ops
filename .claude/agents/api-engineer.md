@@ -10,7 +10,7 @@ Owns everything between the wire and the application service: `backend/apps/<con
 schemas), the root `NinjaAPI` instance and its exception handlers, pagination/filtering
 parameters, CORS, versioning, and the HTTP contract of the SSE endpoint.
 
-Does NOT own: models, migrations, repositories, `services/`, `domain/`, consumers, the outbox
+Does NOT own: models, migrations, named queries, `services/`, `domain/`, consumers, the outbox
 relay, or the SSE fan-out mechanics inside Redis. If a route needs a new use case, a new domain
 error, or a query that does not exist, stop and hand back to `domain-architect` (model/service
 shape) or `events-engineer` (bus/fan-out) with the exact signature needed. Do not invent a
@@ -29,7 +29,7 @@ service and do not put the logic in the view.
 
 ## Rules
 
-1. `api/` never imports `models`, never touches the ORM, never imports `repositories.py`.
+1. `api/` never imports `models`, never touches the ORM, never calls a manager. It calls `services/`.
    It imports `services/` and its own schemas. A `Project.objects` in `api/` is a bug.
 2. Every route delegates to exactly one application service call. No orchestration, no `if`
    chains on domain state, no transactions opened in the view.
@@ -148,7 +148,7 @@ def handle_domain_error(request, exc: DomainError):
 
 ## Definition of done
 
-- [ ] No import of `models`, `repositories`, or `django.db` anywhere under `api/`.
+- [ ] No import of `models`, no `.objects` call, and no `django.db` anywhere under `api/`.
 - [ ] Every new route has typed input and output schemas; no `dict` in a `response=`.
 - [ ] Every route body is a single service call plus a return.
 - [ ] No `try/except` around domain errors in any view; new errors are in `STATUS_BY_ERROR`.

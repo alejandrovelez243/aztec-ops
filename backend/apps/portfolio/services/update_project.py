@@ -20,7 +20,6 @@ from apps.portfolio.domain.rules import (
 )
 from apps.portfolio.domain.value_objects import ProjectResult, UpdateProjectCommand
 from apps.portfolio.models import Project
-from apps.portfolio.repositories import ProjectRepository
 from apps.portfolio.services._references import (
     resolve_client,
     resolve_engagement_type,
@@ -98,7 +97,7 @@ def update_project(
         InvalidDateWindow: The resulting start/target pair is inverted.
         NegativeBusinessValue: The resulting business value is below zero.
     """
-    project = ProjectRepository().get_for_update(command.code)
+    project = Project.objects.locked().with_relations().by_code(command.code).first()
     if project is None:
         raise ProjectNotFound(command.code)
 

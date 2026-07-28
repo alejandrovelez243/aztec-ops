@@ -16,7 +16,6 @@ from apps.portfolio.domain.rules import (
 )
 from apps.portfolio.domain.value_objects import CreateProjectCommand, ProjectResult
 from apps.portfolio.models import Project
-from apps.portfolio.repositories import ProjectRepository
 from apps.portfolio.services._references import (
     resolve_client,
     resolve_engagement_type,
@@ -24,8 +23,7 @@ from apps.portfolio.services._references import (
     resolve_project_type,
     resolve_stage,
 )
-from apps.workflow import repositories as workflow_repositories
-from apps.workflow.models import AppliesTo
+from apps.workflow.models import AppliesTo, Workflow, WorkflowState
 
 
 @transaction.atomic
@@ -70,19 +68,18 @@ def create_project(
         InvalidDateWindow: ``start_date`` is after ``target_date``.
         NegativeBusinessValue: ``business_value`` is below zero.
     """
-    repository = ProjectRepository()
-    if repository.code_exists(command.code):
+    if Project.objects.by_code(command.code).exists():
         raise DuplicateProjectCode(command.code)
 
     ensure_valid_date_window(command.start_date, command.target_date)
     ensure_non_negative_business_value(command.business_value)
 
     engagement_type = resolve_engagement_type(command.engagement_type_code)
-    workflow = workflow_repositories.resolve_workflow(
+    workflow = Workflow.objects.resolve(
         applies_to=AppliesTo.PROJECT,
         engagement_type_id=engagement_type.pk,
     )
-    initial_state = workflow_repositories.initial_state(workflow_id=workflow.pk)
+    initial_state = WorkflowState.objects.entry_state(workflow_id=workflow.pk)
 
     project = Project.objects.create(
         code=command.code,

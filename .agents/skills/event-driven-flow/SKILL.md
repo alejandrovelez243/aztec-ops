@@ -39,7 +39,7 @@ at the first line that reads it — no `envelope["payload"]["from"]` reaching in
 django-ninja already uses, so an envelope or payload crosses to the API without a parallel schema
 restating its fields, and a malformed payload fails at construction rather than at the boundary.
 
-**No bare `except`, nothing swallowed** (BACKEND §5, `BLE` in ruff). Services and repositories never
+**No bare `except`, nothing swallowed** (BACKEND §5, `BLE` in ruff). Services and queryset methods never
 catch `Exception`. The consumer boundary is the one permitted catch-all, and only in the full shape:
 log with `event_id` and consumer group, publish to `aztec.events.dlq`, `XACK` in `finally`.
 `except IntegrityError` on the `ProcessedEvent` claim is the only silent path, and only after a
@@ -240,7 +240,7 @@ class ConsumerIdempotencyTests(TransactionTestCase):
 One caveat when writing these: `setUpTestData` is a `TestCase` optimisation and does not exist
 on `TransactionTestCase`, which truncates the tables between tests. Build the shared rows with
 factories in `setUp` here, and keep `setUpTestData` for the ordinary database tests around this
-path — the API route that lists the DLQ, the repository behind `ProcessedEvent` — which are
+path — the API route that lists the DLQ, the `ProcessedEvent` queries — which are
 plain `TestCase`. Anything purely about the envelope or the payload models (validation, version
 bump, topic naming) is `SimpleTestCase`: no database, so the purity of `domain/events.py` is
 enforced by the base class.
@@ -294,7 +294,7 @@ that payload. Everything empty and the UI still stale → the service never wrot
 - **Untyped envelope.** A payload passed around as `dict[str, Any]` past the layer that reads the
   JSONB column, or a handler indexing `envelope["payload"]["from"]` instead of a model field.
   The field names are then invisible to the next consumer and to mypy (BACKEND §1).
-- **`except Exception` outside the consumer boundary** — in a service, a repository, the relay's
+- **`except Exception` outside the consumer boundary** — in a service, a queryset method, the relay's
   claim query. And at the boundary, a catch-all that skips one of log, DLQ, `XACK`: each omission
   loses the failure, the evidence or the slot (BACKEND §5).
 - **An outbox test written on `TestCase`.** It is a false pass. The test transaction never

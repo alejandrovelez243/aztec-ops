@@ -15,12 +15,11 @@ from apps.work.domain.errors import (
     BlockerNotFound,
     ResolutionReasonRequired,
 )
-from apps.work.repositories import blocker_repository
+from apps.work.models import Blocker
 from apps.work.services import ORIGIN_MANUAL
 
 if TYPE_CHECKING:
     from apps.work.domain.commands import ResolveBlockerCommand
-    from apps.work.models import Blocker
 
 #: ``ActivityRecord.entity_type`` for a fact about a blocker; ``entity_id`` is the project code.
 ACTIVITY_ENTITY_BLOCKER: Final = "blocker"
@@ -60,7 +59,7 @@ def resolve_blocker(command: ResolveBlockerCommand) -> Blocker:
         BlockerAlreadyResolved: It was closed before this call reached it.
         ResolutionReasonRequired: The reason was whitespace only.
     """
-    blocker = blocker_repository.get_for_update(command.blocker_id)
+    blocker = Blocker.objects.locked().with_relations().filter(pk=command.blocker_id).first()
     if blocker is None:
         raise BlockerNotFound(command.blocker_id)
     if blocker.resolved_at is not None:

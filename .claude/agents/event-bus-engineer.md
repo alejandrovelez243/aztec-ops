@@ -77,7 +77,7 @@ Not in scope, hand back instead:
     and the relay's `SELECT ... FOR UPDATE SKIP LOCKED` on a second connection cannot see the
     row: **an outbox test written on `TestCase` is a false pass** — it proves nothing and must be
     rewritten, not kept for speed. `TestCase` is right for the ordinary database work around the
-    path (the DLQ admin route, a repository query); `SimpleTestCase` for the envelope and payload
+    path (the DLQ admin route, a queryset method); `SimpleTestCase` for the envelope and payload
     models, where it forbids database access and so enforces the purity of `domain/events.py`.
     No module-level `def test_...`, no `pytest.mark.django_db`, no pytest fixtures — the base
     class is the declaration. Note that `setUpTestData` does not exist on `TransactionTestCase`,

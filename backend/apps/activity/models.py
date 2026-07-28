@@ -1,12 +1,12 @@
 """Persistence of the audit trail.
 
 One table, ``activity_activityrecord``, and the two overrides that make "append-only" a
-property of the code rather than a sentence in a document. Fields, ``Meta`` and ``__str__``
-only: what a record *means* is decided by the service that writes it, and every query lives in
-``repositories.py``.
+property of the code rather than a sentence in a document. Fields, ``Meta``, ``__str__`` and the
+named reads of the trail: what a record *means* is still decided by the service that writes it.
 """
 
 from typing import Any, ClassVar
+from uuid import UUID
 
 from django.db import models
 from django.utils import timezone
@@ -15,7 +15,84 @@ from apps.activity.domain.errors import (
     ActivityRecordCannotBeDeleted,
     ActivityRecordIsAppendOnly,
 )
-from apps.activity.domain.value_objects import ActivityEntry
+from apps.activity.domain.value_objects import TIMELINE_PAGE_SIZE, ActivityEntry
+
+
+class ActivityRecordQuerySet(models.QuerySet["ActivityRecord"]):
+    """The named reads of the audit trail.
+
+    Every selection here composes; only :meth:`as_entries` and :meth:`recent` end the chain, and
+    both say so. The two questions the product asks — "what happened to this project" and "what
+    else moved as part of this decision" — are the same table read through different predicates,
+    which is why they are two methods on one queryset rather than two functions.
+    """
+
+    def for_entity(self, entity_type: str, entity_id: str) -> "ActivityRecordQuerySet":
+        """Narrow to the facts about one entity.
+
+        ``entity_id`` is the business code (``PRJ-01``), never a primary key, which is what lets
+        a task or blocker record be found without joining into another context. Together with
+        :meth:`newest_first` this matches ``activity_entity_recent_idx`` exactly.
+
+        Args:
+            entity_type: ``project`` | ``task`` | ``blocker``, from
+                :class:`ActivityRecord.EntityType`.
+            entity_id: Business code of the entity.
+        """
+        return self.filter(entity_type=entity_type, entity_id=entity_id)
+
+    def for_project(self, project_code: str) -> "ActivityRecordQuerySet":
+        """Narrow to the facts about one project.
+
+        Spelled separately from :meth:`for_entity` because the entity type is a constant the
+        caller should not have to remember — a caller passing ``"projects"`` would silently get
+        an empty timeline instead of an error.
+
+        Args:
+            project_code: ``Project.code``, e.g. ``PRJ-01``.
+        """
+        return self.for_entity(ActivityRecord.EntityType.PROJECT, project_code)
+
+    def for_correlation(self, correlation_id: UUID) -> "ActivityRecordQuerySet":
+        """Narrow to every record written under one ``correlation_id``.
+
+        This is what makes a reprioritization defensible: "project B was raised" and "project A
+        was lowered to make room" are separate rows, and only this predicate shows they were one
+        decision. Read it with :meth:`oldest_first`, since a decision is a sequence of
+        consequences rather than a feed.
+
+        Args:
+            correlation_id: The id threaded through the use case that produced the records.
+        """
+        return self.filter(correlation_id=correlation_id)
+
+    def newest_first(self) -> "ActivityRecordQuerySet":
+        """Order as a feed: most recent fact first, ties broken by insertion order."""
+        return self.order_by("-occurred_at", "-id")
+
+    def oldest_first(self) -> "ActivityRecordQuerySet":
+        """Order as a narrative: the first consequence first."""
+        return self.order_by("occurred_at", "id")
+
+    def recent(self, limit: int = TIMELINE_PAGE_SIZE) -> "ActivityRecordQuerySet":
+        """Take the first ``limit`` rows of the current ordering.
+
+        Ends the chain for filtering: the queryset is still lazy but sliced, so no caller can
+        add a predicate after it. Applied on top of :meth:`newest_first` the limit stops the
+        index scan instead of sorting the table.
+
+        Args:
+            limit: Page size. Defaults to the rows the detail view renders.
+        """
+        return self[:limit]
+
+    def as_entries(self) -> list[ActivityEntry]:
+        """Materialise the selection as the frozen values the reads render.
+
+        Ends the chain: the query executes here, so nothing downstream can resolve a field
+        lazily after the transaction that produced the rows has closed.
+        """
+        return [record.to_entry() for record in self]
 
 
 class ActivityRecord(models.Model):
@@ -69,6 +146,8 @@ class ActivityRecord(models.Model):
     metadata = models.JSONField(default=dict, blank=True)
     occurred_at = models.DateTimeField(default=timezone.now)
     correlation_id = models.UUIDField()
+
+    objects = ActivityRecordQuerySet.as_manager()
 
     class Meta:
         """Ordering and the four indexes DATA_MODEL §10.2 names, each for a stated query."""
@@ -127,11 +206,12 @@ class ActivityRecord(models.Model):
         """Describe this row as the frozen value the timeline reads render.
 
         Every read of the trail returns this projection rather than the instance itself:
-        ``repositories.project_timeline`` for ``GET /api/v1/projects/{code}/timeline`` and
-        ``repositories.decision_trail`` for the "why did this move" panel, which both serialize
-        outside the transaction that queried them. Handing the model out instead would let the
-        router resolve fields lazily after that transaction closed, and would tie the response
-        shape to the column list.
+        ``objects.for_project(code).newest_first().recent().as_entries()`` for
+        ``GET /api/v1/projects/{code}/timeline`` and
+        ``objects.for_correlation(id).oldest_first().as_entries()`` for the "why did this move"
+        panel, which both serialize outside the transaction that queried them. Handing the model
+        out instead would let the router resolve fields lazily after that transaction closed,
+        and would tie the response shape to the column list.
 
         Nothing is omitted: the value object carries every column, ``id`` included, because a
         caller that wrote a record through ``write_activity`` and a caller that queried one must

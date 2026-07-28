@@ -11,7 +11,7 @@ from apps.events.domain.envelope import ENTITY_PROJECT, TOPIC_PROJECT_STATE_CHAN
 from apps.events.services import enqueue_event
 from apps.portfolio.domain.errors import ProjectNotFound
 from apps.portfolio.domain.value_objects import ProjectStateChange
-from apps.portfolio.repositories import ProjectRepository
+from apps.portfolio.models import Project
 from apps.workflow.services.transition import validate_transition
 
 #: ``ActivityRecord.origin`` for a move a human justified, and for one they did not. The audit
@@ -68,8 +68,7 @@ def transition_project(
         RequiredFieldMissing: A field named in ``requires_fields`` is empty, e.g. ``next_step``.
         GuardRejected: The edge's registered guard refused the move.
     """
-    repository = ProjectRepository()
-    project = repository.get_for_update(project_code)
+    project = Project.objects.locked().with_relations().by_code(project_code).first()
     if project is None:
         raise ProjectNotFound(project_code)
 
@@ -122,7 +121,7 @@ def transition_project(
 
     # Re-read so the returned projection carries the new state's label and category rather than the
     # stale related object still cached on the instance from before the assignment.
-    moved = repository.get_by_code(project_code)
+    moved = Project.objects.with_relations().by_code(project_code).first()
     if moved is None:  # pragma: no cover - the row is locked inside this transaction
         raise ProjectNotFound(project_code)
 

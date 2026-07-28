@@ -5,18 +5,119 @@ priorities and roles. They are rows rather than Python enums so the operation ca
 reorder or retire a value from the admin without a deploy, which is why nothing in this module
 carries a business rule — the rules read ``code``, ``weight`` or ``is_urgent`` from these rows.
 
-Queries live in :mod:`apps.catalog.repositories`; this module holds fields, constraints and
-indexes only.
+Named queries live on :class:`TaxonomyQuerySet` and are exposed through each taxonomy's manager
+(CLAUDE.md rule 6): the five tables share one abstract base, so they share one queryset and
+``EngagementType.objects.active().indexed_by_code()`` means the same thing everywhere. Beyond the
+queryset this module holds fields, constraints and indexes only.
 """
 
 from decimal import Decimal
-from typing import ClassVar
+from typing import ClassVar, Self
 
 from django.db import models
+
+from apps.catalog.domain.errors import UnknownCode
 
 #: Default multiplier for the taxonomies the prioritization engine reads. A weight of 1.00 is the
 #: neutral element of the modifier product, so a freshly created row cannot silently move a score.
 NEUTRAL_WEIGHT = Decimal("1.00")
+
+
+class TaxonomyQuerySet[TaxonomyT: "TaxonomyBase"](models.QuerySet[TaxonomyT]):
+    """The questions every taxonomy is asked, written once for all five tables.
+
+    Generic over the concrete model so a chain keeps its type: ``Stage.objects.active()`` is a
+    queryset of :class:`Stage`, not of the abstract base, and mypy rejects reading a field the
+    concrete table does not have.
+
+    Ordering is not restated here: :class:`TaxonomyBase.Meta` already orders by ``(order, code)``,
+    with ``code`` breaking ties so two rows sharing an ``order`` cannot swap places between
+    requests and make the picker look like it is flickering.
+    """
+
+    def active(self) -> Self:
+        """The rows an operator may pick today.
+
+        Retirement is ``is_active = False``, never a delete, so this is the picker's view and not
+        the history's: rows already referenced by a project keep resolving through their foreign
+        key. Served by the ``(is_active, order)`` index.
+        """
+        return self.filter(is_active=True)
+
+    def find_by_code(self, code: str) -> TaxonomyT | None:
+        """Resolve a slug, or ``None`` when this taxonomy carries no such row.
+
+        For the callers whose whole job is to decide whether a code exists — a fixture check, an
+        admin form — where absence is an answer rather than a failure. Materialises: it ends the
+        chain.
+
+        Args:
+            code: Stable ASCII slug, e.g. ``"proyecto"``.
+
+        Returns:
+            The matching row, or ``None``.
+        """
+        return self.filter(code=code).first()
+
+    def by_code(self, code: str) -> TaxonomyT:
+        """Resolve a slug to its row, refusing to carry a missing one forward.
+
+        Logic compares against ``code``, so a code that does not resolve is a broken contract
+        rather than an empty result; returning ``None`` here would let a caller carry a missing
+        engagement type into a score, where it becomes a wrong number instead of an error.
+
+        Called on the unfiltered manager it resolves retired rows too, on purpose: a project
+        created last quarter still points at an engagement type that has since been deactivated,
+        and refusing to read it would break the history rather than the picker. Chain
+        :meth:`active` first when only a currently pickable row will do. Materialises: it ends the
+        chain.
+
+        Args:
+            code: Stable ASCII slug.
+
+        Returns:
+            The matching row.
+
+        Raises:
+            UnknownCode: No row in this taxonomy carries that code.
+        """
+        row = self.find_by_code(code)
+        if row is None:
+            raise UnknownCode(str(self.model._meta.verbose_name), code)
+        return row
+
+    def indexed_by_code(self) -> dict[str, TaxonomyT]:
+        """Index the selected rows by their slug.
+
+        The shape a batch job wants: resolving 82 tasks against four priorities is one query plus
+        dictionary lookups instead of 82 round trips. Materialises: it ends the chain.
+
+        Returns:
+            Mapping of ``code`` to row, over whatever the chain selected.
+        """
+        return {row.code: row for row in self}
+
+    def codes(self) -> frozenset[str]:
+        """The slugs of the selected rows, for membership tests.
+
+        Materialises: it ends the chain.
+
+        Returns:
+            The codes, deduplicated; empty when the chain selected nothing.
+        """
+        return frozenset(self.values_list("code", flat=True))
+
+
+class PriorityQuerySet(TaxonomyQuerySet["Priority"]):
+    """The taxonomy questions, plus the one only priorities are asked."""
+
+    def urgent(self) -> Self:
+        """The priorities the ``criticality`` signal counts at all.
+
+        Read from ``is_urgent`` rather than from a literal set of codes, so adding or renaming a
+        priority is a fixture row and never a Python change (``DATA_MODEL`` §12).
+        """
+        return self.filter(is_urgent=True)
 
 
 class TaxonomyBase(models.Model):
@@ -77,6 +178,10 @@ class EngagementType(TaxonomyBase):
 
     weight = models.DecimalField(max_digits=4, decimal_places=2, default=NEUTRAL_WEIGHT)
 
+    #: Parameterised with the concrete model so a chain keeps its type: the shared queryset is
+    #: generic, and an unsubscripted ``as_manager()`` would resolve every row to ``TaxonomyBase``.
+    objects = TaxonomyQuerySet["EngagementType"].as_manager()
+
     class Meta(TaxonomyBase.Meta):
         """Adds the positive-weight check to the inherited base constraints."""
 
@@ -97,6 +202,8 @@ class ProjectType(TaxonomyBase):
     filtered and displayed. Optional on ``Project``, because the source leaves it empty.
     """
 
+    objects = TaxonomyQuerySet["ProjectType"].as_manager()
+
     class Meta(TaxonomyBase.Meta):
         """Base shape unchanged; only the admin naming differs."""
 
@@ -111,6 +218,8 @@ class Stage(TaxonomyBase):
     ``WorkflowState`` by this ordering. Reordering stages in the admin therefore changes what a
     future seed produces, and nothing already persisted.
     """
+
+    objects = TaxonomyQuerySet["Stage"].as_manager()
 
     class Meta(TaxonomyBase.Meta):
         """Base shape unchanged; the inherited ordering is the delivery order."""
@@ -132,6 +241,9 @@ class Priority(TaxonomyBase):
 
     weight = models.DecimalField(max_digits=4, decimal_places=2, default=NEUTRAL_WEIGHT)
     is_urgent = models.BooleanField(default=False)
+
+    #: Overrides the inherited manager with the one that also knows :meth:`PriorityQuerySet.urgent`.
+    objects = PriorityQuerySet.as_manager()
 
     class Meta(TaxonomyBase.Meta):
         """Adds the positive-weight check, and the plural Django cannot guess."""
@@ -155,6 +267,8 @@ class Role(TaxonomyBase):
     person is now the account itself, since whoever is assigned a task is whoever signs in to
     move it.
     """
+
+    objects = TaxonomyQuerySet["Role"].as_manager()
 
     class Meta(TaxonomyBase.Meta):
         """Base shape unchanged."""

@@ -1,9 +1,15 @@
 """Persistence for the prioritization context: policy, score, override and risk flag.
 
-Fields, constraints and indexes only. The arithmetic lives in ``domain/`` and the queries live in
-``repositories.py``; a business rule here would be a rule that also runs on every instance the
-ORM builds during an unrelated query.
+Fields, constraints, indexes and the named queries of each table. The arithmetic lives in
+``domain/``; a business rule here would be a rule that also runs on every instance the ORM builds
+during an unrelated query.
+
+Two definitions live on these querysets and nowhere else: "open flag" is ``cleared_at IS NULL``
+and "live override" is ``revoked_at IS NULL``. Re-deriving either in a service, a consumer and the
+admin is how the three come to disagree.
 """
+
+from datetime import datetime
 
 from django.db import models
 
@@ -12,6 +18,101 @@ from .domain.types import Severity
 #: Severity choices for ``RiskFlag``, derived from the domain enum so the database and the
 #: registry can never disagree about the four values that exist.
 SEVERITY_CHOICES = [(severity.value, severity.value.title()) for severity in Severity]
+
+
+class PriorityPolicyQuerySet(models.QuerySet["PriorityPolicy"]):
+    """Named reads of the scoring criterion."""
+
+    def active(self) -> "PriorityPolicyQuerySet":
+        """Narrow to the policy currently in force.
+
+        A partial unique index guarantees at most one row matches, so the caller ends this with
+        ``.first()`` and raises ``ActivePolicyNotFound`` on ``None`` rather than scoring against
+        an implicit default.
+        """
+        return self.filter(is_active=True)
+
+
+class PriorityScoreQuerySet(models.QuerySet["PriorityScore"]):
+    """Named reads of the computed ranking."""
+
+    def for_project(self, project_id: int) -> "PriorityScoreQuerySet":
+        """Narrow to one project's score row.
+
+        Args:
+            project_id: Numeric primary key of the project.
+        """
+        return self.filter(project=project_id)
+
+    def stale_at(self, moment: datetime) -> "PriorityScoreQuerySet":
+        """Narrow to the scores whose time-dependent signals have crossed a bucket boundary.
+
+        This is the whole cost of a clock tick: one scan of ``prioritization_score_valid``,
+        ordered by the same column so the plan carries no sort node. A quiet tick matches
+        nothing and nothing is recomputed. Rows with no ``valid_until`` never expire and are
+        excluded rather than treated as due.
+
+        Args:
+            moment: The tick instant.
+        """
+        return self.filter(valid_until__isnull=False, valid_until__lte=moment).order_by(
+            "valid_until"
+        )
+
+    def project_ids(self) -> list[int]:
+        """Materialise the selection as project ids, ending the chain.
+
+        Returned instead of the rows because the caller enqueues recomputations, and holding
+        score rows across that hand-off would carry values that the recomputation is about to
+        replace.
+        """
+        return list(self.values_list("project_id", flat=True))
+
+
+class PriorityOverrideQuerySet(models.QuerySet["PriorityOverride"]):
+    """Named reads of the manual forcings."""
+
+    def for_project(self, project_id: int) -> "PriorityOverrideQuerySet":
+        """Narrow to one project's overrides, revoked ones included.
+
+        Args:
+            project_id: Numeric primary key of the project.
+        """
+        return self.filter(project=project_id)
+
+    def live(self) -> "PriorityOverrideQuerySet":
+        """Narrow to the overrides still in force.
+
+        "In force" is ``revoked_at IS NULL``. Expiry is deliberately not evaluated here: a
+        query must not read a clock its caller did not choose, so the service compares
+        ``expires_at`` against its own ``now``.
+        """
+        return self.filter(revoked_at__isnull=True)
+
+
+class RiskFlagQuerySet(models.QuerySet["RiskFlag"]):
+    """Named reads of the risk detections."""
+
+    def for_project(self, project_id: int) -> "RiskFlagQuerySet":
+        """Narrow to one project's flags, cleared episodes included.
+
+        Args:
+            project_id: Numeric primary key of the project.
+        """
+        return self.filter(project=project_id)
+
+    def open(self) -> "RiskFlagQuerySet":
+        """Narrow to the flags currently raised.
+
+        ``cleared_at IS NULL`` is the definition of "raised", and it is the condition of the
+        ``prioritization_open_flags`` partial index, so this selection never touches a cleared
+        row.
+        """
+        return self.filter(cleared_at__isnull=True)
+
+    def oldest_first(self) -> "RiskFlagQuerySet":
+        """Order by detection, earliest first, so the UI can say how long each has been true."""
+        return self.order_by("detected_at")
 
 
 class PriorityPolicy(models.Model):
@@ -29,6 +130,8 @@ class PriorityPolicy(models.Model):
     modifiers = models.JSONField(default=dict, blank=True)
     notes = models.TextField(default="", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = PriorityPolicyQuerySet.as_manager()
 
     class Meta:
         verbose_name = "priority policy"
@@ -67,6 +170,8 @@ class PriorityScore(models.Model):
     computed_at = models.DateTimeField()
     input_hash = models.CharField(max_length=64, default="", blank=True)
     valid_until = models.DateTimeField(null=True, blank=True)
+
+    objects = PriorityScoreQuerySet.as_manager()
 
     class Meta:
         verbose_name = "priority score"
@@ -110,6 +215,8 @@ class PriorityOverride(models.Model):
     expires_at = models.DateTimeField(null=True, blank=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = PriorityOverrideQuerySet.as_manager()
 
     class Meta:
         verbose_name = "priority override"
@@ -162,6 +269,8 @@ class RiskFlag(models.Model):
     detail = models.CharField(max_length=255, default="", blank=True)
     detected_at = models.DateTimeField()
     cleared_at = models.DateTimeField(null=True, blank=True)
+
+    objects = RiskFlagQuerySet.as_manager()
 
     class Meta:
         verbose_name = "risk flag"

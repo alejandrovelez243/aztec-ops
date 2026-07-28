@@ -4,14 +4,16 @@
 > says what the system is, `docs/DATA_MODEL.md` says what the tables are, `docs/CONTRIBUTING.md`
 > says how work moves. Where a rule here is enforced by a tool, §8 names the tool.
 
-Layers per app, from `ARCHITECTURE` §7: `domain/` (pure), `models.py`, `repositories.py`,
-`services/`, `api/`, `consumers/`. Every rule below is stated against those directories.
+Layers per app, from `ARCHITECTURE` §7: `domain/` (pure), `models.py` (persistence *and* the
+named queries, as `QuerySet`/`Manager` methods), `services/`, `api/`, `consumers/`. Every rule
+below is stated against those directories.
 
 ## 1. Typing
 
 Every function is annotated, parameters and return type, including `-> None`. This holds in
-`domain/`, `services/`, `repositories.py`, `api/`, `consumers/` and test helpers. `models.py` is
-annotated for methods; Django field assignments are typed by `django-stubs`.
+`domain/`, `services/`, `api/`, `consumers/` and test helpers. `models.py` is
+annotated for methods — queryset methods included — and Django field assignments are typed by
+`django-stubs`.
 
 mypy runs in strict mode over `backend/apps/*/domain/` and `backend/apps/*/services/`, and in
 non-strict mode elsewhere. `domain/` has no excuse: it imports no Django, so nothing in it is
@@ -19,9 +21,11 @@ untypeable.
 
 ### ORM typing that is honest
 
-Annotate what the ORM actually returns. `Project.objects.filter(...)` is a `QuerySet[Project]`, and
-a repository that promises a `list[Project]` must materialize it — returning a lazy queryset behind
-a `list` annotation is a lie that shows up as a query executed inside a template.
+Annotate what the ORM actually returns. A queryset method that narrows returns its own queryset
+type — `def open(self) -> "TaskQuerySet"` — which is what lets
+`Task.objects.assigned_to(user).open().overdue(as_of=today)` type-check as one lazy query. A method
+that promises a `list[Project]` must materialize it: returning a lazy queryset behind a `list`
+annotation is a lie that shows up as a query executed inside a template.
 
 ```python
 # WRONG — the annotation says list, the value is a lazy queryset, and get() can raise
@@ -65,7 +69,7 @@ if project.owner is None:
 
 ### Pydantic models, not dicts, across a boundary
 
-A `dict[str, Any]` crossing from `repositories.py` into a signal strategy erases every field name
+A `dict[str, Any]` crossing from a query into a signal strategy erases every field name
 the reader needs.
 
 ```python
@@ -116,7 +120,7 @@ No bare `Any` without an adjacent comment giving the reason (third-party stub ga
 ## 2. Docstrings
 
 Google style. Mandatory on every public module, class, service function, signal strategy,
-specification, repository function and consumer handler. Not required on private helpers whose name
+specification, queryset/manager method and consumer handler. Not required on private helpers whose name
 and signature already say everything, on `Meta` classes, on Django `__str__`, or on test classes and
 test methods (the class name and the method name are the sentence).
 
@@ -173,7 +177,7 @@ and raises NO_TARGET_DATE rather than being treated as distant."
 
 Names say intent. No abbreviations (`proj`, `wf`, `prio`), no Hungarian prefixes (`str_code`,
 `b_active`), no `data`/`info`/`obj` for a domain concept. No module named `utils.py`, `helpers.py`
-or `managers.py` — a function that does not belong to `domain/`, `repositories.py` or `services/`
+or `managers.py` — a function that does not belong to `domain/`, a model's queryset or `services/`
 usually means the layer is wrong, not that a dumping ground is missing.
 
 A function does one thing at one level of abstraction. Guard clauses replace nesting:
@@ -181,7 +185,7 @@ A function does one thing at one level of abstraction. Guard clauses replace nes
 ```python
 # WRONG
 def resolve_blocker(blocker_id: int, reason: str, actor: str) -> Blocker:
-    blocker = repository.get(blocker_id)
+    blocker = Blocker.objects.locked().filter(pk=blocker_id).first()
     if blocker is not None:
         if blocker.resolved_at is None:
             if reason:
@@ -195,7 +199,7 @@ def resolve_blocker(blocker_id: int, reason: str, actor: str) -> Blocker:
 
 # RIGHT
 def resolve_blocker(blocker_id: int, reason: str, actor: str) -> Blocker:
-    blocker = repository.get(blocker_id)
+    blocker = Blocker.objects.locked().filter(pk=blocker_id).first()
     if blocker is None:
         raise BlockerNotFound(blocker_id)
     if blocker.resolved_at is not None:
@@ -374,10 +378,10 @@ def transition_project(...) -> Project:
 ```python
 # RIGHT
 from apps.events.outbox import enqueue_event        # the outbox port
-from apps.portfolio.repositories import ProjectRepository
+from apps.portfolio.models import Project
 
-def transition_project(repository: ProjectRepository, ...) -> Project:
-    project = repository.get_for_update(project_code)
+def transition_project(*, project_code: str, ...) -> Project:
+    project = Project.objects.locked().with_relations().by_code(project_code).get()
     ...
     enqueue_event(topic="project.state_changed", ...)
 ```
@@ -440,16 +444,17 @@ router that will disagree with the service.
 Sizes are smells, not limits. A service function past ~40 lines, a class past ~150, a module past
 ~400, a branch depth past 3, or more than 5 parameters: stop and look. The usual cause of an
 oversized service is that it grew a second use case (split it) or is doing query assembly that
-belongs in `repositories.py` (move it) or arithmetic that belongs in `domain/` (extract it as a pure
-function and unit-test it without a database).
+belongs on the model's `QuerySet` (move it) or arithmetic that belongs in `domain/` (extract it as a
+pure function and unit-test it without a database).
 
 Module layout inside an app, from `ARCHITECTURE` §7:
 
 ```
 backend/apps/<context>/
   domain/          errors.py, events.py, value_objects.py, policies.py, specifications.py
-  models.py        fields, constraints, indexes, __str__. No business rules.
-  repositories.py  queries, select_related, select_for_update. One function per named query.
+  models.py        fields, constraints, indexes, __str__, and the QuerySet/Manager that carry
+                   every named query (select_related, select_for_update). No business rules.
+  repositories.py  rare. Only a query spanning contexts, living in the context that consumes it.
   services/        one module per use case, one public function, @transaction.atomic
   api/             routers.py, schemas.py
   consumers/       one module per consumer group
@@ -471,7 +476,7 @@ test may touch.
 | Base | For | What it gives you |
 |---|---|---|
 | `django.test.SimpleTestCase` | pure domain logic: priority signals, risk `Specification`s, value objects, policy maths | Forbids database access. The purity of `domain/` is enforced by the base class instead of by discipline. Coverage should be high here (`ARCHITECTURE` §11). |
-| `django.test.TestCase` | repositories, services, API routes, workflow transitions, seed idempotency | Each test runs inside a transaction that is rolled back, so it is fast. |
+| `django.test.TestCase` | queryset methods, services, API routes, workflow transitions, seed idempotency | Each test runs inside a transaction that is rolled back, so it is fast. |
 | `django.test.TransactionTestCase` | the outbox, `transaction.on_commit`, the relay, anything using a second database connection | Real commits and real truncation between tests. |
 
 The third row is the one people get wrong, so state it plainly: `TestCase` wraps each test in a

@@ -1,8 +1,10 @@
 """Persistence for the portfolio context: clients, projects and the read model.
 
-This module holds fields, constraints, indexes and ``__str__`` only. Business rules live in
-``apps.portfolio.services``, queries in ``apps.portfolio.repositories`` (ARCHITECTURE §7). Three
-invariants are visible here and nowhere else:
+This module holds fields, constraints, indexes, ``__str__`` and the named queries of each table.
+Business rules live in ``apps.portfolio.services`` (ARCHITECTURE §7). The one query that is *not*
+here is owner load, which aggregates ``work.Task`` and therefore belongs to no single model; it
+stays a module-level function in ``apps.portfolio.repositories``. Three invariants are visible here
+and nowhere else:
 
 * ``Project.workflow_state`` is written **only** by the transition service. The column is a plain
   FK because a database constraint cannot express "an active WorkflowTransition exists"; the
@@ -17,11 +19,154 @@ invariants are visible here and nowhere else:
   ``apps.portfolio.repositories`` — "who is overloaded?" is a portfolio question.
 """
 
+from typing import TYPE_CHECKING
+from uuid import UUID
+
 from django.conf import settings
 from django.contrib.postgres.indexes import GinIndex
 from django.db import models
 
 from apps.portfolio.domain.value_objects import ProjectResult
+
+if TYPE_CHECKING:
+    from apps.portfolio.domain.value_objects import ProjectSnapshotValues, SnapshotQueueFilters
+
+#: Joins every projection of a project reads. Kept in one place so a caller cannot half-populate a
+#: result and then pay for the rest one lazy query at a time.
+_PROJECT_RELATIONS = (
+    "client",
+    "engagement_type",
+    "project_type",
+    "stage",
+    "workflow_state",
+    "owner",
+)
+
+
+class ProjectQuerySet(models.QuerySet["Project"]):
+    """Named reads and locks of the project aggregate."""
+
+    def with_relations(self) -> "ProjectQuerySet":
+        """Load every relation :meth:`Project.to_result` reads.
+
+        The projection is serialized after its transaction closes, so a relation left lazy
+        becomes a query outside that transaction. Chained by every read that ends in a
+        projection rather than applied automatically, so an existence check stays a single
+        index probe.
+        """
+        return self.select_related(*_PROJECT_RELATIONS)
+
+    def by_code(self, project_code: str) -> "ProjectQuerySet":
+        """Narrow to the project carrying this business code.
+
+        Args:
+            project_code: ``Project.code``, e.g. ``"PRJ-01"``.
+        """
+        return self.filter(code=project_code)
+
+    def locked(self) -> "ProjectQuerySet":
+        """Row-lock the selection for the duration of the enclosing transaction.
+
+        Every write use case chains this so two concurrent updates serialize instead of
+        last-write-wins on a read-modify-write. It requires an open transaction: evaluating the
+        queryset outside ``transaction.atomic()`` raises ``TransactionManagementError``.
+
+        Only the project row is locked (``of="self"``). Three of the relations
+        :meth:`with_relations` joins are nullable, and PostgreSQL refuses ``FOR UPDATE`` on the
+        nullable side of an outer join; locking the taxonomy rows would also serialize every
+        other project sharing a stage. The aggregate root is the row a concurrent write would
+        corrupt.
+        """
+        return self.select_for_update(of=("self",))
+
+    def active(self) -> "ProjectQuerySet":
+        """Narrow to the projects still in the operation's attention: the unarchived ones."""
+        return self.filter(is_archived=False)
+
+
+class ProjectSnapshotQuerySet(models.QuerySet["ProjectSnapshot"]):
+    """Named reads and the single write of the command-center read model."""
+
+    def in_attention(self) -> "ProjectSnapshotQuerySet":
+        """Narrow to the projects the operation is still paying attention to.
+
+        Archived projects are excluded by every queue read and this is not a parameter: they are
+        out of the operation's attention by definition, and making it optional would invite a
+        caller to rank them.
+        """
+        return self.filter(is_archived=False)
+
+    def matching(self, filters: "SnapshotQueueFilters") -> "ProjectSnapshotQuerySet":
+        """Apply the command center's facets. A facet left ``None`` does not filter.
+
+        Args:
+            filters: The requested facets. The window (``offset``/``limit``) is not applied
+                here — chain :meth:`page` — so a caller can count before paging.
+        """
+        queryset = self
+        if filters.health is not None:
+            queryset = queryset.filter(health=filters.health)
+        if filters.state_category is not None:
+            queryset = queryset.filter(state_category=filters.state_category)
+        if filters.engagement_type_code is not None:
+            queryset = queryset.filter(engagement_type_code=filters.engagement_type_code)
+        if filters.owner_code is not None:
+            queryset = queryset.filter(owner_code=filters.owner_code)
+        if filters.risk_flag_code is not None:
+            # GIN containment, so ?flag=BLOCKED never joins prioritization_riskflag.
+            queryset = queryset.filter(risk_flags__contains=[{"code": filters.risk_flag_code}])
+        return queryset
+
+    def in_queue_order(self) -> "ProjectSnapshotQuerySet":
+        """Order as the queue: score descending, ties broken by code so paging is stable.
+
+        Matches the ``(is_archived, priority_score DESC)`` index, so combined with
+        :meth:`in_attention` the plan carries no sort node.
+        """
+        return self.order_by("-priority_score", "project_code")
+
+    def page(self, *, offset: int, limit: int) -> "ProjectSnapshotQuerySet":
+        """Take one window of the current ordering.
+
+        Ends the chain for filtering: the queryset stays lazy but sliced, so no caller can add a
+        predicate after the window was decided.
+
+        Args:
+            offset: Rows to skip.
+            limit: Rows to take.
+        """
+        return self[offset : offset + limit]
+
+    def by_code(self, project_code: str) -> "ProjectSnapshotQuerySet":
+        """Narrow to one snapshot by business code.
+
+        Args:
+            project_code: ``Project.code``, e.g. ``"PRJ-01"``.
+        """
+        return self.filter(project_code=project_code)
+
+    def upsert(self, values: "ProjectSnapshotValues", last_event_id: UUID | None = None) -> None:
+        """Replace one snapshot row from a fully-built projection. Writes; ends the chain.
+
+        Keyed on ``project_code`` rather than a numeric id so the rebuild consumer never has to
+        resolve the write side first, which is also what lets the read model survive the write
+        side being rebuilt. The row is replaced wholesale: a partial write would mix columns
+        from two deliveries while ``last_event_id`` claimed a single one.
+
+        The only permitted caller is the ``snapshot-rebuild`` consumer group. A write path that
+        edits a snapshot instead of emitting its event has removed the only thing that keeps the
+        row reproducible (PATTERNS §8).
+
+        Args:
+            values: The complete projection for this project.
+            last_event_id: Envelope id of the event that produced the projection, for tracing a
+                stale row back to its delivery. ``None`` only when rebuilding outside the
+                stream, such as from ``make recompute``.
+        """
+        defaults = values.model_dump(exclude={"project_code", "risk_flags"})
+        defaults["risk_flags"] = [flag.model_dump() for flag in values.risk_flags]
+        defaults["last_event_id"] = last_event_id
+        self.update_or_create(project_code=values.project_code, defaults=defaults)
 
 
 class Client(models.Model):
@@ -107,6 +252,8 @@ class Project(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = ProjectQuerySet.as_manager()
+
     class Meta:
         verbose_name = "project"
         verbose_name_plural = "projects"
@@ -153,8 +300,8 @@ class Project(models.Model):
         ``ProjectSnapshot``, so exposing the imported column here would offer callers a second,
         stale answer to the same question.
 
-        The six relations read below must already be loaded: ``ProjectRepository`` selects every
-        one of them. On an instance fetched without them this is still correct but each attribute
+        The six relations read below must already be loaded: ``ProjectQuerySet.with_relations``
+        selects every one of them. On an instance fetched without them this is still correct but each attribute
         triggers its own lazy query, which is exactly the escape from the transaction the
         projection exists to prevent.
 
@@ -253,6 +400,8 @@ class ProjectSnapshot(models.Model):
     is_archived = models.BooleanField(default=False)
     rebuilt_at = models.DateTimeField(auto_now=True)
     last_event_id = models.UUIDField(null=True, blank=True)
+
+    objects = ProjectSnapshotQuerySet.as_manager()
 
     class Meta:
         verbose_name = "project snapshot"

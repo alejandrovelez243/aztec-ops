@@ -68,7 +68,7 @@ class ProjectRiskInput(BaseModel):
 class SignalInput(BaseModel):
     """Every fact the scoring engine needs about one project at one instant.
 
-    Assembled once per recomputation from the repositories of the other contexts and then passed
+    Assembled once per recomputation from the named queries of the other contexts and then passed
     unchanged to every strategy. Counts are non-negative by construction, ``next_step`` is the
     empty string rather than ``None`` (matching the column, so "no next step" is one predicate),
     and ``now`` is explicit so the same input always yields the same score.

@@ -47,10 +47,11 @@ class BlockerKind(StrEnum):
 class ProjectTaskCounts(BaseModel):
     """The per-project task aggregates the prioritization engine and the snapshot need.
 
-    Produced by one grouped query in ``repositories.py`` rather than by four, because the
-    four definitions must agree: "open" is ``WorkflowState.category NOT IN (DONE,
-    CANCELLED)`` everywhere, and computing them apart is how one caller starts counting a
-    cancelled task as open.
+    Produced by one grouped query — ``Task.objects.for_project(...).counts()`` — rather than by
+    four, because the four definitions must agree: "open" is ``WorkflowState.category NOT IN
+    (DONE, CANCELLED)`` everywhere, and computing them apart is how one caller starts counting a
+    cancelled task as open. That method is where the chain ends: it aggregates, so nothing can be
+    narrowed after it.
     """
 
     model_config = ConfigDict(frozen=True)

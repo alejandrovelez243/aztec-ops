@@ -319,21 +319,42 @@ Rules:
 backend/apps/<context>/
   domain/          # pure logic. No django.db imports. Testable with no database.
                    #   specifications.py, policies.py, value_objects.py, events.py, errors.py
-  models.py        # persistence (Django ORM). No business rules.
-  repositories.py  # data access behind an interface. Queries live here, not in views.
-  services/        # use cases. Orchestrate repos + domain + outbox + activity. Transactional.
+  models.py        # persistence (Django ORM) + the named queries, as QuerySet/Manager methods.
+                   #   No business rules.
+  repositories.py  # rare. Only a query that spans contexts and so belongs to no single model.
+  services/        # use cases. Orchestrate queries + domain + outbox + activity. Transactional.
   api/             # ninja routers + schemas. Translates HTTP ↔ services. Zero logic.
   admin.py         # admin configuration
   consumers/       # event handlers (only in contexts that consume)
 ```
 
+**Named queries live on the model's `QuerySet`, exposed through its `Manager`.** A query is a
+method on the queryset of the model that owns the rows, and the manager is built with
+`QuerySet.as_manager()` — or `Manager.from_queryset(...)` when the manager also needs behaviour
+that is not a query. Every method returns the queryset type, so the vocabulary composes:
+
+```python
+Task.objects.assigned_to(user).open().overdue(as_of=today)   # one lazy query, filters ANDed
+```
+
+A module-level `open_tasks_for(user) -> list[Task]` cannot be narrowed further, so every new
+combination needs a new function — the same combinatorial fragmentation that keeps row-to-value-
+object converters off free functions. A method that must materialise (a count, an aggregate, a
+dict) is fine, but its docstring says so, because it ends the chain.
+
+`repositories.py` survives for **exactly one case**: a query that spans contexts and therefore
+belongs to no single model. Owner load is the example — it aggregates `work.Task` keyed by user
+against `accounts.User.weekly_capacity_points`, and `accounts` must never learn that `work.Task`
+exists. Such a module lives in the context that *consumes* the query, not the one that owns the
+rows. Everything else goes on the manager.
+
 Dependency rules — enforced, not suggested:
 
 - `domain/` imports neither Django nor other apps.
 - `api/` does not import `models`; it talks to `services/`.
-- `services/` does not import `api/`.
-- Contexts talk to each other through events or explicit interfaces, never through a hidden
-  FK into another context's internal models.
+- `services/` does not import `api/`. It may call a manager directly.
+- Contexts talk to each other through events or through the published queries of the owning
+  model's manager, never through a hidden FK into another context's internal models.
 
 ## 8. Read side (CQRS-lite)
 

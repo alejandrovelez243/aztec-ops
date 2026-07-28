@@ -1,9 +1,9 @@
-"""Assemble the facts one project is scored from, reading only other contexts' repositories.
+"""Assemble the facts one project is scored from, reading only other contexts' named queries.
 
-This module is the single place where the prioritization context looks outside itself. It reads
-``portfolio``, ``work`` and ``activity`` through their ``repositories`` modules — never through
-their models and never through a query written here — so "open task" keeps exactly one definition,
-owned by the context that owns tasks.
+This module is the single place where the prioritization context looks outside itself. Every fact
+comes from a queryset method on the model that owns the rows — ``Project.objects``,
+``ActivityRecord.objects``, ``Task.objects``, ``Blocker.objects`` — never from a query written
+here, so "open task" keeps exactly one definition, owned by the context that owns tasks.
 
 Collecting everything up front is what keeps the engine pure: once this function returns, no
 strategy and no specification needs a database, a clock or a setting.
@@ -16,20 +16,17 @@ portfolio question whose numerator comes from ``work.Task``, and it keeps its on
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING
 
 from django.conf import settings
 from pydantic import BaseModel, ConfigDict
 
-from apps.activity import repositories as activity_repositories
-from apps.portfolio.repositories import OwnerLoadRepository, ProjectRepository
-from apps.work.repositories import BlockerRepository, TaskRepository
+from apps.activity.models import ActivityRecord
+from apps.portfolio.models import Project
+from apps.portfolio.repositories import owner_load_for_codes
+from apps.work.models import Blocker, Task
 
 from ..domain.errors import ProjectNotFound
 from ..domain.types import SignalInput
-
-if TYPE_CHECKING:
-    from apps.portfolio.models import Project
 
 #: ``WorkflowState.category`` for work that is actively moving. Read here — never a state ``code``
 #: — so the operation can add a state from the admin without this assembly changing.
@@ -65,12 +62,12 @@ def collect_project_facts(*, project_code: str, now: datetime) -> ProjectFacts:
         ProjectNotFound: No project carries that code. For a consumer this means an event about a
             deleted aggregate, which retrying will not fix.
     """
-    project = ProjectRepository().get_by_code(project_code)
+    project = Project.objects.with_relations().by_code(project_code).first()
     if project is None:
         raise ProjectNotFound(project_code)
 
-    task_counts = TaskRepository().counts_for_project(project.pk, today=now.date())
-    blockers = BlockerRepository().open_summary_for_project(project.pk)
+    task_counts = Task.objects.for_project(project.pk).counts(today=now.date())
+    blockers = Blocker.objects.for_project(project.pk).open().summary()
     last_activity_at = _last_activity_at(project.code)
     owner_load, owner_capacity = _owner_load(project)
 
@@ -102,7 +99,7 @@ def collect_project_facts(*, project_code: str, now: datetime) -> ProjectFacts:
     return ProjectFacts(project_id=project.pk, signal_input=signal_input)
 
 
-def _owner_load(project: "Project") -> tuple[int, int]:
+def _owner_load(project: Project) -> tuple[int, int]:
     """Current load and capacity of the project's owner, or zeros when it has none.
 
     An unowned project is a real state in this portfolio, so the absence is handled rather than
@@ -119,7 +116,7 @@ def _owner_load(project: "Project") -> tuple[int, int]:
     owner = project.owner
     if owner is None:
         return 0, 0
-    load = OwnerLoadRepository().load_for_codes([owner.code]).get(owner.code)
+    load = owner_load_for_codes([owner.code]).get(owner.code)
     if load is None:
         return 0, int(owner.weekly_capacity_points)
     return load.load_points, load.weekly_capacity_points
@@ -128,14 +125,13 @@ def _owner_load(project: "Project") -> tuple[int, int]:
 def _has_task_in_progress(project_id: int) -> bool:
     """Whether any task of the project sits in the ``IN_PROGRESS`` category.
 
-    Read through ``work``'s own task listing: the counts query answers four other questions but
-    not this one, and inventing the query here would put a second definition of "in progress"
-    outside the context that owns tasks.
+    Composed from ``work``'s own vocabulary rather than from a filter written here: the counts
+    aggregate answers four other questions but not this one, and spelling the join out locally
+    would put a second definition of "in progress" outside the context that owns tasks. The
+    existence check stays in the database — the previous listing loaded every task of the project
+    to look at the first one that matched.
     """
-    return any(
-        task.workflow_state.category == IN_PROGRESS_CATEGORY
-        for task in TaskRepository().list_for_project(project_id)
-    )
+    return Task.objects.for_project(project_id).in_state_category(IN_PROGRESS_CATEGORY).exists()
 
 
 def _last_activity_at(project_code: str) -> datetime | None:
@@ -144,7 +140,9 @@ def _last_activity_at(project_code: str) -> datetime | None:
     ``None`` means nothing has ever been recorded, which ``IsStale`` treats as longer than any
     threshold rather than as freshness.
     """
-    timeline = activity_repositories.project_timeline(project_code=project_code, limit=1)
+    timeline = (
+        ActivityRecord.objects.for_project(project_code).newest_first().recent(1).as_entries()
+    )
     if not timeline:
         return None
     return timeline[0].occurred_at

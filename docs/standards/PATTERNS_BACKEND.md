@@ -52,42 +52,78 @@ UI means a service forgot to write the outbox at all.
 
 ---
 
-## 2. Repository
+## 2. Named query on a QuerySet, exposed through a Manager
 
 **Problem.** The same query — "open blockers of this project", "tasks whose state category is not
 `DONE` or `CANCELLED`" — encodes a business definition. Spread across views and services, those
 definitions drift, and `open` starts meaning three different things.
 
-**Where.** `backend/apps/<context>/repositories.py`. Queries live here, not in `api/`, not inline in
-a service.
+**Where.** `backend/apps/<context>/models.py`, on the queryset of the model that owns the rows.
+Queries live there, not in `api/`, not inline in a service.
 
 ```python
-# backend/apps/work/repositories.py
-class BlockerRepository:
-    def open_for_project(self, project_id: int) -> list[Blocker]:
-        return list(
-            Blocker.objects.filter(project_id=project_id, resolved_at__isnull=True)
-            .select_related("owner", "task")
-            .order_by("raised_at")
-        )
+# backend/apps/work/models.py
+CLOSED_CATEGORIES: Final = (StateCategory.DONE, StateCategory.CANCELLED)
 
-    def get_for_update(self, blocker_id: int) -> Blocker:
-        return Blocker.objects.select_for_update().get(pk=blocker_id)
+
+class TaskQuerySet(models.QuerySet["Task"]):
+    def assigned_to(self, user: User | str) -> "TaskQuerySet":
+        """Narrow to the tasks carried by one person, named by row or by ``User.code``."""
+        ...
+
+    def open(self) -> "TaskQuerySet":
+        """Tasks still live: their state's category is neither ``DONE`` nor ``CANCELLED``."""
+        return self.exclude(workflow_state__category__in=CLOSED_CATEGORIES)
+
+    def overdue(self, as_of: date) -> "TaskQuerySet":
+        """Tasks whose due date has already passed at ``as_of``. Undated is never overdue."""
+        return self.filter(due_date__lt=as_of)
+
+
+class Task(models.Model):
+    objects = TaskQuerySet.as_manager()
 ```
 
+**Why a queryset and not a module-level function.** Because it composes:
+
+```python
+Task.objects.assigned_to(user).open().overdue(as_of=today)
+```
+
+collapses into **one** lazy query whose predicates are ANDed in a single `WHERE`. The free-function
+form, `open_tasks_for(user) -> list[Task]`, is materialised and therefore a dead end: every new
+combination of person, state, date and priority needs another function, and the definition of
+"open" is re-typed each time. That is the same combinatorial fragmentation that keeps
+row-to-value-object converters off free functions and on the model (§9). Django already ships the
+right tool.
+
+**Manager or `as_manager()`.** Use `TaskQuerySet.as_manager()` when nothing but queryset methods
+are needed. Use `Manager.from_queryset(TaskQuerySet)` when the manager also needs behaviour that is
+not a filter over its own table — `Workflow.objects.resolve(...)` reads `WorkflowBinding` first, so
+it is a manager method, not a queryset method.
+
 **Rule for extending.** Add a method when the same filter appears twice, when the filter encodes a
-domain rule, or when the service needs `select_for_update`. Return model instances or plain data —
-never a `QuerySet` the caller can extend, because a lazily-extended queryset moves the query back
-out of this file.
+domain rule, or when the service needs `select_for_update` (`locked()`). Every method returns the
+queryset type, so chaining type-checks under `mypy --strict`. A method that must materialise — a
+count, an aggregate, a `dict` — is legitimate, but its docstring says so, because it ends the
+chain. Docstrings state what the query means in domain terms, not what the ORM call does.
 
-**When it is not worth it.** A primary-key or `code` lookup with no joins and no domain predicate:
-`Project.objects.get(code=code)` in a service is fine and wrapping it adds a file for nothing.
-Do not create an abstract base class or a `Protocol` for a repository that has one implementation —
-see §11 on premature abstraction. The interface here is the method set, not an ABC.
+**The one exception: `repositories.py`.** A query that **spans contexts** belongs to no single
+model, and only that query keeps a module. Owner load aggregates `work.Task` keyed by assignee
+against `accounts.User.weekly_capacity_points`: on `accounts` it would teach identity that
+`work.Task` exists, on `work` it would put a portfolio question inside the context that merely owns
+the rows. So it is a module-level function in `apps/portfolio/repositories.py` — the context that
+*consumes* the answer, never the one that owns the rows. There is exactly one such module.
 
-**Smell.** `.filter(...)` inside `api/routers.py`. A repository method named `get_queryset`. A
-repository that imports another context's models: cross-context reads go through the published
-aggregate (`Project`) or through events, never into `work`'s internals from outside.
+**What we do not do.** No abstract base class or `Protocol` over a manager with one implementation
+(see §11 on premature abstraction) — the persistence engine is not being swapped and the domain is
+tested pure with `SimpleTestCase`, so the usual justifications for a repository layer are benefits
+this project never collects.
+
+**Smell.** `.filter(...)` inside `api/routers.py`. A queryset method that does not return a
+queryset without saying why in its docstring. A queryset method on one context's model that
+imports another context's models: cross-context reads go through the published aggregate
+(`Project`) or through events, never into `work`'s internals from outside.
 
 ---
 
@@ -108,7 +144,7 @@ def resolve_blocker(
     *, blocker_id: int, actor: str, reason: str, correlation_id: UUID, now: datetime,
 ) -> Blocker:
     # 1. validate — typed domain errors, raised, never caught here
-    blocker = blocker_repository.get_for_update(blocker_id)
+    blocker = Blocker.objects.locked().with_relations().get(pk=blocker_id)
     if blocker.resolved_at is not None:
         raise BlockerAlreadyResolved(blocker.pk)
     if not reason.strip():
@@ -262,8 +298,11 @@ def transition_project(
     *, project: Project, to_state_code: str, actor: str, reason: str,
     correlation_id: UUID, now: datetime,
 ) -> Project:
-    edge = transition_repository.active_edge(
-        from_state=project.workflow_state, to_state_code=to_state_code
+    edge = (
+        WorkflowTransition.objects.active()
+        .from_state(project.workflow_state_id)
+        .to_state_code(to_state_code)
+        .first()
     )
     if edge is None:
         raise TransitionNotAllowed(project.workflow_state.code, to_state_code)
@@ -493,5 +532,5 @@ has no invariant to protect, either the use case is wrong or the endpoint should
 **Premature abstraction of a single implementation.** An ABC with one subclass, a `Protocol` with
 one implementer, a `BaseSignalEvaluator` before the second evaluator exists. The registries and the
 `Specification` protocol earn their abstraction because there are six of each and the seventh is
-expected. One repository does not need an interface — extract it when the second implementation
+expected. One manager does not need an interface — extract it when the second implementation
 arrives, not in anticipation of it.

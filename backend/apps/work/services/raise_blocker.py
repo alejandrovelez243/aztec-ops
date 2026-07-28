@@ -6,25 +6,23 @@ from typing import TYPE_CHECKING, Final
 
 from django.db import transaction
 
-from apps.accounts.repositories import user_by_code
+from apps.accounts.models import User
 from apps.activity.domain.value_objects import ActivityCommand
 from apps.activity.services import write_activity
 from apps.events.domain.envelope import ENTITY_BLOCKER, TOPIC_BLOCKER_RAISED
 from apps.events.services import enqueue_event
+from apps.portfolio.models import Project
 from apps.work.domain.errors import (
     PersonNotFound,
     ProjectNotFound,
     TaskNotFound,
     TaskOutsideProject,
 )
-from apps.work.models import Blocker
-from apps.work.repositories import project_by_code, task_repository
+from apps.work.models import Blocker, Task
 from apps.work.services import ORIGIN_MANUAL
 
 if TYPE_CHECKING:
-    from apps.accounts.models import User
     from apps.work.domain.commands import RaiseBlockerCommand
-    from apps.work.models import Task
 
 #: ``ActivityRecord.entity_type`` for a fact about a blocker. ``entity_id`` stays the
 #: *project* code, so the project timeline shows the impediment without a second query.
@@ -66,7 +64,7 @@ def raise_blocker(command: RaiseBlockerCommand) -> Blocker:
         TaskOutsideProject: The named task belongs to a different project.
         PersonNotFound: ``owner_code`` was given and is not on the roster.
     """
-    project = project_by_code(command.project_code)
+    project = Project.objects.filter(code=command.project_code).first()
     if project is None:
         raise ProjectNotFound(command.project_code)
 
@@ -122,7 +120,7 @@ def raise_blocker(command: RaiseBlockerCommand) -> Blocker:
 def _resolve_task(task_code: str | None, *, project_id: int, project_code: str) -> Task | None:
     if task_code is None:
         return None
-    task = task_repository.get_by_code(task_code)
+    task = Task.objects.for_code(task_code).first()
     if task is None:
         raise TaskNotFound(task_code)
     if task.project_id != project_id:
@@ -133,7 +131,7 @@ def _resolve_task(task_code: str | None, *, project_id: int, project_code: str) 
 def _resolve_owner(owner_code: str | None) -> User | None:
     if owner_code is None:
         return None
-    owner = user_by_code(owner_code)
+    owner = User.objects.with_role().by_code(owner_code).first()
     if owner is None:
         raise PersonNotFound(owner_code)
     return owner

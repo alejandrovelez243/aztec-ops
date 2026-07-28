@@ -6,20 +6,20 @@ from typing import TYPE_CHECKING, Final
 
 from django.db import transaction
 
-from apps.accounts.repositories import user_by_code
+from apps.accounts.models import User
 from apps.activity.domain.value_objects import ActivityCommand
 from apps.activity.services import write_activity
+from apps.catalog.models import Priority
 from apps.events.domain.changes import render_change_value
 from apps.events.domain.envelope import ENTITY_TASK, TOPIC_TASK_UPDATED
 from apps.events.services import enqueue_event
 from apps.work.domain.errors import PersonNotFound, PriorityNotFound, TaskNotFound
 from apps.work.domain.value_objects import FieldChange
-from apps.work.repositories import priority_by_code, task_repository
+from apps.work.models import Task
 from apps.work.services import ORIGIN_SYSTEM
 
 if TYPE_CHECKING:
     from apps.work.domain.commands import UpdateTaskCommand
-    from apps.work.models import Task
 
 #: ``ActivityRecord.entity_type`` for a fact about a task.
 ACTIVITY_ENTITY_TASK: Final = "task"
@@ -68,7 +68,7 @@ def update_task(command: UpdateTaskCommand) -> Task:
         PriorityNotFound: ``priority_code`` was given and is not in the taxonomy.
         PersonNotFound: ``assignee_code`` was given and is not on the roster.
     """
-    task = task_repository.get_for_update(command.task_code)
+    task = Task.objects.locked().with_relations().for_code(command.task_code).first()
     if task is None:
         raise TaskNotFound(command.task_code)
 
@@ -163,7 +163,7 @@ def _apply_priority_change(task: Task, command: UpdateTaskCommand) -> tuple[Fiel
     if command.priority_code == task.priority.code:
         return ()
 
-    priority = priority_by_code(command.priority_code)
+    priority = Priority.objects.filter(code=command.priority_code).first()
     if priority is None:
         raise PriorityNotFound(command.priority_code)
 
@@ -190,7 +190,7 @@ def _apply_assignee_change(task: Task, command: UpdateTaskCommand) -> tuple[Fiel
         task.assignee = None
         return (change,)
 
-    assignee = user_by_code(command.assignee_code)
+    assignee = User.objects.with_role().by_code(command.assignee_code).first()
     if assignee is None:
         raise PersonNotFound(command.assignee_code)
 

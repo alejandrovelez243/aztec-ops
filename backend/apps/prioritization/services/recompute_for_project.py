@@ -12,13 +12,12 @@ from decimal import Decimal
 from django.db import transaction
 from pydantic import BaseModel, ConfigDict
 
-from .. import repositories
 from ..domain.errors import ActivePolicyNotFound
 from ..domain.policies import load_policy
 from ..domain.scoring import compute_breakdown, compute_input_hash, compute_valid_until
 from ..domain.specifications import derive_health, evaluate_risk
 from ..domain.types import Health, RiskFlag
-from ..models import PriorityScore
+from ..models import PriorityPolicy, PriorityScore
 from ..models import RiskFlag as RiskFlagRow
 from .collect_project_facts import collect_project_facts
 
@@ -69,7 +68,7 @@ def recompute_for_project(*, project_code: str, now: datetime) -> RecomputeResul
         PolicySignalMismatch: The active policy and the signal registry disagree.
         PolicyWeightsNotNormalized: The active policy's weights do not sum to 1.0.
     """
-    policy_row = repositories.get_active_policy()
+    policy_row = PriorityPolicy.objects.active().first()
     if policy_row is None:
         raise ActivePolicyNotFound
 
@@ -85,7 +84,7 @@ def recompute_for_project(*, project_code: str, now: datetime) -> RecomputeResul
     breakdown = compute_breakdown(data=data, policy=policy, flags=flags)
     input_hash = compute_input_hash(data)
 
-    stored = repositories.get_score(facts.project_id)
+    stored = PriorityScore.objects.for_project(facts.project_id).first()
     previous_value = stored.value if stored is not None else None
     if (
         stored is not None
@@ -144,7 +143,9 @@ def _reconcile_flags(
     history stays reconstructible.
     """
     satisfied = {flag.code: flag for flag in flags}
-    open_rows = {row.code: row for row in repositories.open_flags(project_id)}
+    open_rows = {
+        row.code: row for row in RiskFlagRow.objects.for_project(project_id).open().oldest_first()
+    }
 
     cleared: list[str] = []
     for code, stale_row in open_rows.items():

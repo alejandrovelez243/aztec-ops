@@ -1,7 +1,19 @@
 """Persistence for the ``work`` context: tasks, dependencies, blockers and notes.
 
-Fields, constraints, indexes and ``__str__`` only. Every query lives in
-``repositories.py`` and every rule that spans two rows lives in ``services/`` — the
+Fields, constraints, indexes, ``__str__`` — and the named queries, which live on each
+model's ``QuerySet`` and reach callers through its manager (CLAUDE.md rule 6). A named
+query here is a *business definition*, not a filter: "open" is ``WorkflowState.category NOT
+IN (DONE, CANCELLED)`` and "open blocker" is ``resolved_at IS NULL``, and those definitions
+drift the moment they are written twice. On the queryset they compose —
+``Task.objects.for_project(pk).open().overdue(today)`` is one lazy query — where a
+module-level ``open_tasks_for(project)`` would materialise and force a new function for
+every new combination.
+
+Every method returns its own queryset type so the chain stays typed, except the few that
+must materialise (``counts``, ``summary``, ``adjacency``); each of those says so in its
+docstring, because it ends the chain.
+
+Business *rules* are not here. Every rule that spans two rows lives in ``services/`` — the
 cross-row invariants this module cannot express (a blocker's project matching its task's,
 the acyclicity of the dependency graph) are listed in ``DATA_MODEL`` §9.3 with the reason
 each one is enforced in Python.
@@ -9,13 +21,22 @@ each one is enforced in Python.
 
 from __future__ import annotations
 
-from typing import Any, Final
+from collections import defaultdict
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any, Final
 
 from django.conf import settings
 from django.db import connection, models
-from django.db.models import F, Q
+from django.db.models import Count, F, Min, Q
 
-from apps.work.domain.value_objects import BlockerKind
+from apps.work.domain.value_objects import BlockerKind, OpenBlockerSummary, ProjectTaskCounts
+from apps.workflow.models import StateCategory
+
+if TYPE_CHECKING:
+    from datetime import date, datetime
+
+    from apps.accounts.models import User
+    from apps.portfolio.models import Project
 
 #: ``choices`` rendered from the domain enum, so the closed set is declared once. It is a
 #: structural vocabulary, not a taxonomy: adding a member is a migration, by design.
@@ -32,6 +53,16 @@ NOTE_CODE_PREFIX: Final = "NOTE"
 #: Minimum width of the numeric part (``BLK-0142``). It is a floor, not a limit: the 10000th
 #: blocker is ``BLK-10000`` and stays sortable as a number, which is why nothing truncates here.
 CODE_DIGITS: Final = 4
+
+#: ``WorkflowState.category`` values that mean the work has stopped for good. "Open" is the
+#: complement of this set, read from the workflow context's own vocabulary rather than re-listed
+#: as state codes — a state invented from the admin is open by default instead of being invisible
+#: to every count (DATA_MODEL §12).
+CLOSED_CATEGORIES: Final = (StateCategory.DONE, StateCategory.CANCELLED)
+
+#: The joins every projection of a task reads. Kept in one bundle so no caller half-populates a
+#: task and then pays for the rest one lazy query at a time.
+TASK_RELATIONS: Final = ("project", "workflow_state", "priority", "assignee")
 
 
 def _next_business_code(sequence: str, prefix: str) -> str:
@@ -62,6 +93,138 @@ def _next_business_code(sequence: str, prefix: str) -> str:
         cursor.execute("SELECT nextval(%s)", [sequence])
         row = cursor.fetchone()
     return f"{prefix}-{int(row[0]):0{CODE_DIGITS}d}"
+
+
+class TaskQuerySet(models.QuerySet["Task"]):
+    """The vocabulary of ``work_task``: what "open", "overdue" and "urgent" mean, once.
+
+    Every method is chainable, so the three counts the prioritization engine needs are the
+    same chain counted three ways rather than three bespoke queries. :meth:`counts` is the
+    exception and says so: it aggregates and ends the chain.
+    """
+
+    def with_relations(self) -> TaskQuerySet:
+        """Join the rows every caller of a task immediately touches.
+
+        Project, state, priority and assignee are rendered or logged wherever a task is, so
+        leaving them lazy turns one read into four.
+        """
+        return self.select_related(*TASK_RELATIONS)
+
+    def locked(self) -> TaskQuerySet:
+        """Row-lock the selected tasks for the rest of the transaction.
+
+        ``of=("self",)`` locks the task alone: locking the joined project and catalog rows as
+        well would serialize unrelated tasks of the same project behind each other. Requires an
+        open transaction — outside one, evaluating this raises ``TransactionManagementError``.
+        """
+        return self.select_for_update(of=("self",))
+
+    def for_code(self, task_code: str) -> TaskQuerySet:
+        """Narrow to the task carrying this business code (``TSK-0007``), or to nothing."""
+        return self.filter(code=task_code)
+
+    def for_project(self, project: Project | int | str) -> TaskQuerySet:
+        """Narrow to the tasks of one project, named by row, primary key or business code.
+
+        Args:
+            project: The project instance, its primary key, or its ``code``. All three occur —
+                a service holds the row, an aggregation holds the id, a caller from another
+                context holds only the code — and resolving them here is what keeps the join
+                spelling out of six call sites.
+        """
+        if isinstance(project, str):
+            return self.filter(project__code=project)
+        if isinstance(project, int):
+            return self.filter(project_id=project)
+        return self.filter(project=project)
+
+    def assigned_to(self, user: User | str) -> TaskQuerySet:
+        """Narrow to the tasks carried by one person, named by row or by ``User.code``.
+
+        Unassigned tasks are excluded by construction: nobody carries them, which is a
+        different fact from carrying nothing.
+        """
+        if isinstance(user, str):
+            return self.filter(assignee__code=user)
+        return self.filter(assignee=user)
+
+    def in_state_category(self, category: str) -> TaskQuerySet:
+        """Narrow to the tasks whose state belongs to one ``StateCategory``.
+
+        The general form of :meth:`open`, :meth:`closed` and :meth:`blocked`, for the callers
+        that ask about a category those three do not name — ``IN_PROGRESS``, say.
+        """
+        return self.filter(workflow_state__category=category)
+
+    def open(self) -> TaskQuerySet:
+        """Tasks still live: their state's category is neither ``DONE`` nor ``CANCELLED``."""
+        return self.exclude(workflow_state__category__in=CLOSED_CATEGORIES)
+
+    def closed(self) -> TaskQuerySet:
+        """Tasks that have stopped for good, whether they were finished or abandoned."""
+        return self.filter(workflow_state__category__in=CLOSED_CATEGORIES)
+
+    def blocked(self) -> TaskQuerySet:
+        """Tasks sitting in a ``BLOCKED`` state.
+
+        This is the workflow's answer, not the blocker table's: a task can be impeded without
+        anyone having raised a ``Blocker`` row, and the state is what the board shows.
+        """
+        return self.in_state_category(StateCategory.BLOCKED)
+
+    def overdue(self, as_of: date) -> TaskQuerySet:
+        """Tasks whose due date has already passed at ``as_of``.
+
+        Undated tasks are never overdue — no date is not a missed one. ``as_of`` is required
+        rather than defaulted to today because the engine's notion of now must be the one that
+        produced the rest of its ``SignalInput``; a replay must reproduce the old answer.
+
+        Chain onto :meth:`open` to exclude work that is past its date but already cancelled,
+        which would otherwise inflate the overdue signal forever.
+        """
+        return self.filter(due_date__lt=as_of)
+
+    def urgent(self) -> TaskQuerySet:
+        """Tasks whose priority is flagged urgent in the taxonomy.
+
+        Read from ``Priority.is_urgent`` and never from a list of codes, so the operation can
+        add a priority above ``critica`` from the admin without a migration and without a grep
+        for hardcoded codes (CLAUDE.md rule 1).
+        """
+        return self.filter(priority__is_urgent=True)
+
+    def in_board_order(self) -> TaskQuerySet:
+        """Order by workflow position then code, the order the project detail view renders."""
+        return self.order_by("workflow_state__order", "code")
+
+    def counts(self, *, today: date) -> ProjectTaskCounts:
+        """Aggregate the four task counts the priority engine and the snapshot both read.
+
+        **Ends the chain**: this materialises one grouped query and returns a frozen value
+        object, not a queryset. Chain the scope first — ``Task.objects.for_project(pk)``.
+
+        One query rather than four round trips, and the four definitions are the same ones
+        :meth:`open`, :meth:`overdue`, :meth:`urgent` and :meth:`blocked` express: overdue and
+        urgent are counted *within* the open set, so a task past its due date but cancelled
+        stops inflating ``overdue_work``.
+
+        Args:
+            today: The date "overdue" is measured against, in the caller's timezone.
+
+        Returns:
+            Counts that are all zero over an empty selection, never ``None``.
+        """
+        is_open = ~Q(workflow_state__category__in=CLOSED_CATEGORIES)
+        aggregates = self.aggregate(
+            open_task_count=Count("pk", filter=is_open),
+            overdue_task_count=Count("pk", filter=is_open & Q(due_date__lt=today)),
+            urgent_open_task_count=Count("pk", filter=is_open & Q(priority__is_urgent=True)),
+            blocked_task_count=Count(
+                "pk", filter=Q(workflow_state__category=StateCategory.BLOCKED)
+            ),
+        )
+        return ProjectTaskCounts(**aggregates)
 
 
 class Task(models.Model):
@@ -97,6 +260,8 @@ class Task(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    objects = TaskQuerySet.as_manager()
+
     class Meta:
         verbose_name = "task"
         verbose_name_plural = "tasks"
@@ -112,6 +277,47 @@ class Task(models.Model):
 
     def __str__(self) -> str:
         return f"{self.code} {self.title}"
+
+
+class TaskDependencyQuerySet(models.QuerySet["TaskDependency"]):
+    """Reads over the dependency edges, whose only consumer is the pure cycle check."""
+
+    def for_project(self, project: Project | int | str) -> TaskDependencyQuerySet:
+        """Narrow to the edges of one project, named by row, primary key or business code.
+
+        A dependency may not cross projects (``DATA_MODEL`` §9.3), so the project *is* the
+        natural scope of the graph: no correct caller ever wants the edges of two at once.
+        """
+        if isinstance(project, str):
+            return self.filter(task__project__code=project)
+        if isinstance(project, int):
+            return self.filter(task__project_id=project)
+        return self.filter(task__project=project)
+
+    def resolved(self) -> TaskDependencyQuerySet:
+        """Edges that point at a real task, excluding the ones still carrying only prose.
+
+        ``depends_on IS NOT NULL`` rather than the stored ``is_resolved`` mirror: the column
+        exists so the admin can filter without a null scan, but the pointer is the truth.
+        """
+        return self.filter(depends_on__isnull=False)
+
+    def adjacency(self) -> dict[str, tuple[str, ...]]:
+        """Aggregate the selected edges into the mapping the cycle check consumes.
+
+        **Ends the chain**: this materialises. Chain the scope and the resolution first —
+        ``TaskDependency.objects.for_project(pk).resolved().adjacency()``.
+
+        Keyed by dependent code, valued by the codes it waits on. Tasks with no prerequisites
+        are simply absent rather than mapped to an empty tuple, which is the shape
+        ``domain.dependencies`` walks.
+        """
+        edges = self.values_list("task__code", "depends_on__code")
+
+        adjacency: defaultdict[str, list[str]] = defaultdict(list)
+        for task_code, depends_on_code in edges:
+            adjacency[task_code].append(depends_on_code)
+        return {task_code: tuple(targets) for task_code, targets in adjacency.items()}
 
 
 class TaskDependency(models.Model):
@@ -131,6 +337,8 @@ class TaskDependency(models.Model):
     raw_label = models.CharField(max_length=255, default="", blank=True)
     is_resolved = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = TaskDependencyQuerySet.as_manager()
 
     class Meta:
         verbose_name = "task dependency"
@@ -157,6 +365,79 @@ class TaskDependency(models.Model):
     def __str__(self) -> str:
         target = self.depends_on.code if self.depends_on is not None else self.raw_label
         return f"{self.task.code} depends on {target}"
+
+
+class BlockerQuerySet(models.QuerySet["Blocker"]):
+    """Reads over ``work_blocker``. Openness is ``resolved_at IS NULL`` and nothing else."""
+
+    def with_relations(self) -> BlockerQuerySet:
+        """Join owner, task and project — the three rows the panel and the audit both read."""
+        return self.select_related("project", "task", "owner")
+
+    def locked(self) -> BlockerQuerySet:
+        """Row-lock the selected blockers for the rest of the transaction.
+
+        The lock is what makes "already resolved" a real check: without it two concurrent
+        resolutions both read an open row and the second overwrites the first's reason.
+        """
+        return self.select_for_update(of=("self",))
+
+    def for_project(self, project: Project | int | str) -> BlockerQuerySet:
+        """Narrow to the blockers of one project, named by row, primary key or business code.
+
+        ``project`` is populated even on a task-level blocker, so this never joins ``Task``.
+        """
+        if isinstance(project, str):
+            return self.filter(project__code=project)
+        if isinstance(project, int):
+            return self.filter(project_id=project)
+        return self.filter(project=project)
+
+    def open(self) -> BlockerQuerySet:
+        """Blockers nobody has resolved yet — the one definition of an impediment that counts.
+
+        Backed by the partial ``work_blocker_open`` index, so the panel, the ``blockage``
+        signal and the ``IsBlocked`` specification all read the same rows the same way.
+        """
+        return self.filter(resolved_at__isnull=True)
+
+    def resolved(self) -> BlockerQuerySet:
+        """Blockers that were closed, each one carrying the reason it was closed with."""
+        return self.filter(resolved_at__isnull=False)
+
+    def older_than(self, days: int, *, as_of: datetime) -> BlockerQuerySet:
+        """Blockers raised more than ``days`` before ``as_of``.
+
+        Age is measured from ``raised_at`` and never from the resolution, so this composes with
+        both :meth:`open` and :meth:`resolved`. ``as_of`` is a parameter, not ``now()``, because
+        a query whose answer depends on when it runs cannot be replayed or tested.
+        """
+        return self.filter(raised_at__lt=as_of - timedelta(days=days))
+
+    def oldest_first(self) -> BlockerQuerySet:
+        """Order by when the blocker was raised, oldest first.
+
+        The order the panel renders and the order that makes ``[0]`` the blocker driving the
+        score — which is why it is not left to the model's newest-first default.
+        """
+        return self.order_by("raised_at")
+
+    def summary(self) -> OpenBlockerSummary:
+        """Aggregate how many blockers are selected and when the oldest was raised.
+
+        **Ends the chain**: this materialises. Chain the scope first —
+        ``Blocker.objects.for_project(pk).open().summary()``.
+
+        The counting form of the panel's read, for the snapshot rebuild and the priority
+        engine, which need the number and the age but never the prose. ``oldest_raised_at`` is
+        ``None`` exactly when the count is zero. The value object names its count ``open`` after
+        the only selection worth summarising, so chain :meth:`open` before calling it.
+        """
+        aggregates = self.aggregate(
+            open_blocker_count=Count("pk"),
+            oldest_raised_at=Min("raised_at"),
+        )
+        return OpenBlockerSummary(**aggregates)
 
 
 class Blocker(models.Model):
@@ -198,6 +479,8 @@ class Blocker(models.Model):
         related_name="blockers",
     )
     resolution_reason = models.CharField(max_length=255, default="", blank=True)
+
+    objects = BlockerQuerySet.as_manager()
 
     class Meta:
         verbose_name = "blocker"
@@ -251,6 +534,32 @@ class Blocker(models.Model):
         super().save(*args, **kwargs)
 
 
+class NoteQuerySet(models.QuerySet["Note"]):
+    """Reads over ``work_note``, all of them chronological."""
+
+    def for_project(self, project: Project | int | str) -> NoteQuerySet:
+        """Narrow to a project's notes, task-scoped ones included.
+
+        ``project`` is copied onto task-level notes when they are written, so the project
+        timeline never joins ``Task`` to find them.
+        """
+        if isinstance(project, str):
+            return self.filter(project__code=project)
+        if isinstance(project, int):
+            return self.filter(project_id=project)
+        return self.filter(project=project)
+
+    def recent(self, limit: int) -> NoteQuerySet:
+        """The newest ``limit`` notes of the current selection, newest first.
+
+        Backed by the ``(project, -created_at)`` index, so ``limit`` stops the scan after that
+        many index entries however large the table grows. Slicing is what makes this the last
+        *filtering* step: the result is still lazy, but Django refuses further ``filter()``
+        calls on it, so chain the scope — ``Note.objects.for_project(pk).recent(20)``.
+        """
+        return self.select_related("task").order_by("-created_at")[:limit]
+
+
 class Note(models.Model):
     """A chronological comment on a project, or on one task of it.
 
@@ -277,6 +586,8 @@ class Note(models.Model):
     body = models.TextField()
     author = models.CharField(max_length=32)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = NoteQuerySet.as_manager()
 
     class Meta:
         verbose_name = "note"

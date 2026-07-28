@@ -306,8 +306,8 @@ Makefile
 ```
 
 Inside each app: `domain/` (pure logic, no Django imports, testable with no database),
-`models.py` (persistence only), `repositories.py` (all queries), `services/` (transactional use
-cases), `api/` (ninja routers and schemas, zero logic), `consumers/` (event handlers). `api/`
+`models.py` (persistence and the named queries, as `QuerySet`/`Manager` methods),
+`services/` (transactional use cases), `api/` (ninja routers and schemas, zero logic), `consumers/` (event handlers). `api/`
 never imports `models`; `domain/` imports neither Django nor another app.
 
 ### Further documentation

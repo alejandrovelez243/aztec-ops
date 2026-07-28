@@ -6,11 +6,13 @@ from typing import TYPE_CHECKING, Final
 
 from django.db import transaction
 
-from apps.accounts.repositories import user_by_code
+from apps.accounts.models import User
 from apps.activity.domain.value_objects import ActivityCommand
 from apps.activity.services import write_activity
+from apps.catalog.models import Priority
 from apps.events.domain.envelope import ENTITY_TASK, TOPIC_TASK_CREATED
 from apps.events.services import enqueue_event
+from apps.portfolio.models import Project
 from apps.work.domain.dependencies import find_dependency_cycle
 from apps.work.domain.errors import (
     DependencyCycle,
@@ -21,15 +23,12 @@ from apps.work.domain.errors import (
     TaskNotFound,
 )
 from apps.work.models import Task, TaskDependency
-from apps.work.repositories import priority_by_code, project_by_code, task_repository
 from apps.work.services import ORIGIN_SYSTEM
-from apps.workflow import repositories as workflow_repositories
-from apps.workflow.models import AppliesTo
+from apps.workflow.models import AppliesTo, Workflow, WorkflowState
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from apps.accounts.models import User
     from apps.work.domain.commands import CreateTaskCommand, DependencySpec
 
 #: ``ActivityRecord.entity_type`` for a fact about a project. The audit trail's set is
@@ -69,19 +68,19 @@ def create_task(command: CreateTaskCommand) -> Task:
         WorkflowNotConfigured: No binding and no default workflow answers for tasks.
         InitialStateMissing: The resolved workflow has no state flagged ``is_initial``.
     """
-    project = project_by_code(command.project_code)
+    project = Project.objects.filter(code=command.project_code).first()
     if project is None:
         raise ProjectNotFound(command.project_code)
 
-    priority = priority_by_code(command.priority_code)
+    priority = Priority.objects.filter(code=command.priority_code).first()
     if priority is None:
         raise PriorityNotFound(command.priority_code)
 
     assignee = _resolve_assignee(command.assignee_code)
-    workflow = workflow_repositories.resolve_workflow(
+    workflow = Workflow.objects.resolve(
         applies_to=AppliesTo.TASK, engagement_type_id=project.engagement_type_id
     )
-    initial_state = workflow_repositories.initial_state(workflow_id=workflow.pk)
+    initial_state = WorkflowState.objects.entry_state(workflow_id=workflow.pk)
 
     task = Task.objects.create(
         code=command.code,
@@ -140,7 +139,7 @@ def create_task(command: CreateTaskCommand) -> Task:
 def _resolve_assignee(assignee_code: str | None) -> User | None:
     if assignee_code is None:
         return None
-    assignee = user_by_code(assignee_code)
+    assignee = User.objects.with_role().by_code(assignee_code).first()
     if assignee is None:
         raise PersonNotFound(assignee_code)
     return assignee
@@ -156,7 +155,7 @@ def _link_dependencies(*, task: Task, dependencies: Sequence[DependencySpec]) ->
     if not dependencies:
         return
 
-    adjacency = task_repository.dependency_adjacency_for_project(task.project_id)
+    adjacency = TaskDependency.objects.for_project(task.project_id).resolved().adjacency()
     rows: list[TaskDependency] = []
 
     for spec in dependencies:
@@ -164,7 +163,7 @@ def _link_dependencies(*, task: Task, dependencies: Sequence[DependencySpec]) ->
             rows.append(TaskDependency(task=task, raw_label=spec.raw_label, is_resolved=False))
             continue
 
-        target = task_repository.get_by_code(spec.depends_on_code)
+        target = Task.objects.for_code(spec.depends_on_code).first()
         if target is None:
             raise TaskNotFound(spec.depends_on_code)
         if target.project_id != task.project_id:

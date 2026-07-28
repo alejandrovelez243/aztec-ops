@@ -27,7 +27,7 @@ def write_activity(command: ActivityCommand) -> ActivityEntry:
     ``correlation_id`` is what turns several records into one decision. Deprioritizing A in
     order to prioritize B is two ``PRIORITY_CHANGED`` records written under the same
     ``correlation_id``; the detail view reconstructs the whole movement from either half
-    through ``repositories.decision_trail``. A caller that generates a fresh id per record
+    through ``ActivityRecord.objects.for_correlation(id)``. A caller that generates a fresh id per record
     destroys that link, so the id is threaded down from the API boundary, or forwarded from
     the incoming envelope inside a consumer.
 

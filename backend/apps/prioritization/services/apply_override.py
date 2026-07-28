@@ -12,9 +12,8 @@ from decimal import Decimal
 from django.db import transaction
 from pydantic import BaseModel, ConfigDict
 
-from apps.portfolio.repositories import ProjectRepository
+from apps.portfolio.models import Project
 
-from .. import repositories
 from ..domain.errors import (
     OverrideMechanismAmbiguous,
     OverrideReasonRequired,
@@ -88,7 +87,7 @@ def apply_override(*, command: ApplyOverrideCommand, now: datetime) -> OverrideR
 
     project_id = _resolve_project_id(command.project_code)
 
-    replaced = repositories.live_override(project_id)
+    replaced = PriorityOverride.objects.for_project(project_id).live().first()
     if replaced is not None:
         replaced.revoked_at = now
         replaced.save(update_fields=["revoked_at"])
@@ -113,8 +112,8 @@ def apply_override(*, command: ApplyOverrideCommand, now: datetime) -> OverrideR
 
 
 def _resolve_project_id(project_code: str) -> int:
-    """Numeric id of the project, through the portfolio context's own repository."""
-    project = ProjectRepository().get_by_code(project_code)
+    """Numeric id of the project, through the portfolio context's own named query."""
+    project = Project.objects.by_code(project_code).first()
     if project is None:
         raise ProjectNotFound(project_code)
     return int(project.pk)

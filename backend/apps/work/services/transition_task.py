@@ -11,13 +11,12 @@ from apps.activity.services import write_activity
 from apps.events.domain.envelope import ENTITY_TASK, TOPIC_TASK_STATE_CHANGED
 from apps.events.services import enqueue_event
 from apps.work.domain.errors import TaskNotFound
-from apps.work.repositories import task_repository
+from apps.work.models import Task
 from apps.work.services import ORIGIN_MANUAL, ORIGIN_SYSTEM
 from apps.workflow.services.transition import validate_transition
 
 if TYPE_CHECKING:
     from apps.work.domain.commands import TransitionTaskCommand
-    from apps.work.models import Task
 
 #: ``ActivityRecord.entity_type`` for a fact about a task.
 ACTIVITY_ENTITY_TASK: Final = "task"
@@ -54,7 +53,7 @@ def transition_task(command: TransitionTaskCommand) -> Task:
         RequiredFieldMissing: A field named in ``requires_fields`` is empty on the task.
         GuardRejected: The edge's registered guard refused the move.
     """
-    task = task_repository.get_for_update(command.task_code)
+    task = Task.objects.locked().with_relations().for_code(command.task_code).first()
     if task is None:
         raise TaskNotFound(command.task_code)
 

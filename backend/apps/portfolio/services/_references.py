@@ -6,12 +6,11 @@ place that turns "no such row" into the right typed error, so three use cases ca
 whether an unknown engagement type is a 404 or a 422.
 
 ``resolve_owner`` is the exception that proves the rule: the person it looks up belongs to another
-context, so it delegates to ``apps.accounts.repositories`` instead of touching that context's
-manager, and only the error mapping is done here.
+context, so it goes through that context's own named query — ``User.objects.by_code`` — instead of
+writing a predicate on ``accounts`` from here, and only the error mapping is done.
 """
 
 from apps.accounts.models import User
-from apps.accounts.repositories import user_by_code
 from apps.catalog.models import EngagementType, ProjectType, Stage
 from apps.portfolio.domain.errors import (
     ClientNotFound,
@@ -113,9 +112,8 @@ def resolve_owner(owner_code: str | None) -> User | None:
     None is a legitimate value, not a missing one: an unowned project is itself an operational
     signal and the queue is expected to surface it.
 
-    Inactive people still resolve, because ``apps.accounts.repositories.user_by_code`` deliberately
-    does not filter on ``is_active``: retiring someone must not make every project they own
-    unsaveable.
+    Inactive people still resolve, because ``User.objects.by_code`` deliberately does not filter
+    on ``is_active``: retiring someone must not make every project they own unsaveable.
 
     Args:
         owner_code: ``accounts.User.code``, or None to leave the project unowned.
@@ -128,7 +126,7 @@ def resolve_owner(owner_code: str | None) -> User | None:
     """
     if owner_code is None:
         return None
-    owner = user_by_code(owner_code)
+    owner = User.objects.with_role().by_code(owner_code).first()
     if owner is None:
         raise OwnerNotFound(owner_code)
     return owner

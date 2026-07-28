@@ -43,7 +43,7 @@ functions. The base class is a deliberate choice because it changes what the tes
 | Base class | Use it for | What it buys |
 | --- | --- | --- |
 | `django.test.SimpleTestCase` | pure domain logic: priority signals, risk Specifications, value objects, policy maths | it *forbids* database access, so the purity of `domain/` is enforced by the test base rather than by discipline. This is where coverage should be high. |
-| `django.test.TestCase` | ordinary database tests: repositories, services, API routes, workflow transitions, seed idempotency | each test runs inside a transaction that is rolled back, so it is fast |
+| `django.test.TestCase` | ordinary database tests: queryset methods, services, API routes, workflow transitions, seed idempotency | each test runs inside a transaction that is rolled back, so it is fast |
 | `django.test.TransactionTestCase` | anything involving the outbox, `transaction.on_commit`, the relay, or a second database connection | real commits, so `on_commit` callbacks fire and another connection can see the row |
 
 The `TransactionTestCase` trap matters and is easy to get wrong: `TestCase` wraps each test in a

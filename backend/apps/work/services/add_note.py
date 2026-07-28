@@ -6,19 +6,18 @@ from typing import TYPE_CHECKING, Final
 
 from django.db import transaction
 
-from apps.accounts.repositories import user_by_code
+from apps.accounts.models import User
 from apps.activity.domain.value_objects import ActivityCommand
 from apps.activity.services import write_activity
 from apps.events.domain.envelope import ENTITY_NOTE, TOPIC_NOTE_ADDED
 from apps.events.services import enqueue_event
+from apps.portfolio.models import Project
 from apps.work.domain.errors import ProjectNotFound, TaskNotFound, TaskOutsideProject
-from apps.work.models import Note
-from apps.work.repositories import project_by_code, task_repository
+from apps.work.models import Note, Task
 from apps.work.services import ORIGIN_SYSTEM
 
 if TYPE_CHECKING:
     from apps.work.domain.commands import AddNoteCommand
-    from apps.work.models import Task
 
 #: ``ActivityRecord.entity_type`` for a fact about a project.
 ACTIVITY_ENTITY_PROJECT: Final = "project"
@@ -55,7 +54,7 @@ def add_note(command: AddNoteCommand) -> Note:
         TaskNotFound: ``task_code`` was given and does not resolve.
         TaskOutsideProject: The named task belongs to a different project.
     """
-    project = project_by_code(command.project_code)
+    project = Project.objects.filter(code=command.project_code).first()
     if project is None:
         raise ProjectNotFound(command.project_code)
 
@@ -108,14 +107,14 @@ def _author_alias(author_code: str) -> str:
     Returns:
         The person's display alias, or ``author_code`` unchanged when it names nobody.
     """
-    member = user_by_code(author_code)
+    member = User.objects.with_role().by_code(author_code).first()
     return member.alias if member is not None else author_code
 
 
 def _resolve_task(task_code: str | None, *, project_id: int, project_code: str) -> Task | None:
     if task_code is None:
         return None
-    task = task_repository.get_by_code(task_code)
+    task = Task.objects.for_code(task_code).first()
     if task is None:
         raise TaskNotFound(task_code)
     if task.project_id != project_id:
