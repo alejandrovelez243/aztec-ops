@@ -51,6 +51,10 @@ def create_task(command: CreateTaskCommand) -> Task:
     appearing. The event is emitted against the task and carries ``project_code``, so the
     snapshot rebuild resolves it to a project without reading this context's tables.
 
+    ``command.code`` left empty means "allocate one": the code is minted as
+    ``{project_code}-T{NN}`` inside this transaction, so a rollback frees the number and the
+    caller never has to guess one. The HTTP API always leaves it empty; a fixture pins its own.
+
     Args:
         command: Validated input. ``now`` is domain time and ``correlation_id`` chains this
             creation to whatever movement caused it.
@@ -82,8 +86,10 @@ def create_task(command: CreateTaskCommand) -> Task:
     )
     initial_state = WorkflowState.objects.entry_state(workflow_id=workflow.pk)
 
+    # An empty code means "allocate one": the HTTP API never accepts a task code from a client,
+    # while a fixture pins its own. Minted inside this transaction, so a rollback frees the number.
     task = Task.objects.create(
-        code=command.code,
+        code=command.code or Task.objects.next_code_for(project.code),
         project=project,
         assignee=assignee,
         priority=priority,

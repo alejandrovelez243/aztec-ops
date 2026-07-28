@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "celery[redis]>=5.3.1",
     "django>=6.0.7",
+    "django-cors-headers>=4.9.0",
     "django-ninja>=1.6.2",
     "psycopg[binary]>=3.3.4",
     "pydantic-settings>=2.14.2",
@@ -119,10 +120,11 @@ disallow_any_generics = true
 module = ["*.migrations.*", "*.tests.*"]
 ignore_errors = true
 
-# Celery ships no py.typed marker and there is no stub package for it, so mypy cannot see any of
-# its signatures. Scoped to celery itself: the rest of the tree stays strict about missing imports.
+# Celery and its transport library kombu ship no py.typed marker and have no stub package, so mypy
+# cannot see any of their signatures. Scoped to those two: the rest of the tree stays strict about
+# missing imports.
 [[tool.mypy.overrides]]
-module = ["celery.*"]
+module = ["celery.*", "kombu.*"]
 ignore_missing_imports = true
 
 # Consequence of the above: @shared_task is an untyped decorator, and mypy therefore treats every

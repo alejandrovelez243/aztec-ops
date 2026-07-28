@@ -5,6 +5,11 @@ usable rather than merely registered. The roster is not edited here: a project o
 ``accounts.User``, registered by ``apps.accounts.admin``. ``ProjectAdmin.autocomplete_fields``
 depends on that registration supplying ``search_fields``, which it does.
 
+One deliberate reach across contexts: ``ProjectAdmin`` offers a *Recompute priority* action, which
+calls a ``prioritization`` service. The action belongs on ``Project`` because that is the list an
+operator is looking at when a score looks wrong, and the admin is a composition layer in the same
+way ``config/api.py`` is — it calls services, never another context's models.
+
 Two deliberate restrictions:
 
 * ``Project.workflow_state`` is read-only. The admin is the most tempting place to bypass the
@@ -16,10 +21,13 @@ Two deliberate restrictions:
   event, which is worse than being impossible.
 """
 
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.db.models import QuerySet
 from django.http import HttpRequest
 
 from apps.portfolio.models import Client, Project, ProjectSnapshot
+from apps.prioritization.domain.errors import ActivePolicyNotFound
+from apps.prioritization.services import recompute_projects
 
 
 @admin.register(Client)
@@ -44,6 +52,7 @@ class ProjectAdmin(admin.ModelAdmin[Project]):
     autocomplete_fields = ("client", "owner")
     date_hierarchy = "target_date"
     ordering = ("code",)
+    actions = ("recompute_priority",)
     readonly_fields = ("workflow_state", "created_at", "updated_at")
     fieldsets = (
         (None, {"fields": ("code", "name", "client", "summary")}),
@@ -58,6 +67,38 @@ class ProjectAdmin(admin.ModelAdmin[Project]):
             {"fields": ("is_archived", "imported_health", "created_at", "updated_at")},
         ),
     )
+
+    @admin.action(description="Recompute priority for selected projects")
+    def recompute_priority(self, request: HttpRequest, queryset: QuerySet[Project]) -> None:
+        """Rebuild ``PriorityScore`` and ``RiskFlag`` for the selected rows, right now.
+
+        The manual override of an automatic path, and it lives here because this list is where an
+        operator who distrusts a number is already standing. It calls
+        :func:`apps.prioritization.services.recompute_projects` — the same function behind the API
+        endpoint, so the two cannot drift and neither reimplements the loop.
+
+        Selection order is not the queryset's: codes are sorted so a rerun over the same rows
+        produces the same log. Nothing is emitted to the outbox (recomputation is derivation, not
+        a decision), so an open dashboard learns the new number on its next legitimate event or
+        its next reload.
+
+        Failure mode: no active ``PriorityPolicy``. That is reported as an admin error message
+        rather than a 500, because the fix — activate a policy version — is two screens away in
+        this same admin. Any other domain error is left to propagate; it means the data itself is
+        wrong and a green banner would be a lie.
+        """
+        codes = sorted(queryset.values_list("code", flat=True))
+        try:
+            run = recompute_projects(project_codes=codes)
+        except ActivePolicyNotFound as error:
+            self.message_user(request, str(error), level=messages.ERROR)
+            return
+
+        self.message_user(
+            request,
+            f"Recomputed {len(run.results)} project(s); {run.changed_count} changed.",
+            level=messages.SUCCESS,
+        )
 
 
 @admin.register(ProjectSnapshot)

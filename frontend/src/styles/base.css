@@ -1,0 +1,184 @@
+/**
+ * Base styles — minimal reset plus the shared utility classes.
+ *
+ * Depends on tokens.css (import it first). Components consume the utility
+ * classes here instead of re-declaring the type scale; state colours are
+ * applied per component via data-* attributes + token CSS, never hex.
+ */
+
+/* --- Reset --- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body,
+h1,
+h2,
+h3,
+h4,
+p,
+ul,
+ol,
+li,
+figure,
+figcaption,
+blockquote,
+dl,
+dd {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding: 0;
+  list-style: none;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+  border-radius: 0;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+table {
+  border-collapse: collapse;
+}
+
+a {
+  color: inherit;
+}
+
+/* --- Ground --- */
+
+body {
+  background-color: var(--color-panel);
+  color: var(--color-legend);
+  font-family: var(--font-body);
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
+  -webkit-font-smoothing: antialiased;
+}
+
+hr {
+  border: 0;
+  border-top: var(--border-width) solid var(--color-rule);
+  margin: 0;
+}
+
+/**
+ * Focus is always visible, expressed as a line — never a shadow, never a bare
+ * `outline: none` (DESIGN.md, The Inset-Not-Raised Rule).
+ */
+:focus-visible {
+  outline: var(--border-width) solid var(--color-legend);
+  outline-offset: 1px;
+}
+
+/* --- Type utilities (one class per level of the DESIGN.md hierarchy) --- */
+
+/** Engraved legend: column headers, status legends, verdicts, control labels. */
+.label {
+  font-family: var(--font-display);
+  font-size: var(--text-label-size);
+  font-weight: var(--text-label-weight);
+  line-height: var(--text-label-line);
+  letter-spacing: var(--text-label-tracking);
+  text-transform: uppercase;
+  color: var(--color-legend-dim);
+}
+
+/** In-table numeric: scores, countdowns, counts, dates. Always tabular. */
+.figure {
+  font-family: var(--font-mono);
+  font-size: var(--text-figure-size);
+  font-weight: var(--text-figure-weight);
+  line-height: var(--text-figure-line);
+  font-variant-numeric: tabular-nums;
+}
+
+/** Board titles and section plates. */
+.headline {
+  font-family: var(--font-display);
+  font-size: var(--text-headline-size);
+  font-weight: var(--text-headline-weight);
+  line-height: var(--text-headline-line);
+  letter-spacing: var(--text-headline-tracking);
+  text-transform: uppercase;
+  color: var(--color-legend);
+}
+
+/** Project names and task titles. */
+.title {
+  font-family: var(--font-body);
+  font-size: var(--text-title-size);
+  font-weight: var(--text-title-weight);
+  line-height: var(--text-title-line);
+  color: var(--color-legend);
+}
+
+/** Human-written text: summaries, blocker descriptions, reasons. Sentence case. */
+.body-text {
+  font-family: var(--font-body);
+  font-size: var(--text-body-size);
+  font-weight: var(--text-body-weight);
+  line-height: var(--text-body-line);
+  max-width: var(--text-body-max);
+  color: var(--color-legend);
+}
+
+/* --- Surface utilities --- */
+
+/**
+ * Inset instrument plate: recessed, never raised. Plotboard Black ground, 1px
+ * Rule Grey border with a 1px lighter top edge reading as a milled recess.
+ * No box-shadow, ever (The Inset-Not-Raised Rule).
+ */
+.plate {
+  background-color: var(--color-plate);
+  border: var(--border-width) solid var(--color-rule);
+  border-top-color: var(--color-plate-edge);
+  border-radius: 0;
+}
+
+/** Hairline divider between board sections. Render on a <div> or <span>. */
+.rule {
+  display: block;
+  border: 0;
+  border-top: var(--border-width) solid var(--color-rule);
+}
+
+/* --- Accessibility utilities --- */
+
+/** Visually hidden but reachable by screen readers. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

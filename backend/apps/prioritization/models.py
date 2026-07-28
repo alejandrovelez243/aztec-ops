@@ -14,6 +14,7 @@ from datetime import datetime
 from django.db import models
 
 from .domain.types import Severity
+from .domain.views import OverrideView, RiskFlagView, ScoreView
 
 #: Severity choices for ``RiskFlag``, derived from the domain enum so the database and the
 #: registry can never disagree about the four values that exist.
@@ -68,6 +69,16 @@ class PriorityScoreQuerySet(models.QuerySet["PriorityScore"]):
         """
         return list(self.values_list("project_id", flat=True))
 
+    def project_codes(self) -> list[str]:
+        """Materialise the selection as project business codes, ending the chain.
+
+        The clock tick's second half: :meth:`stale_at` names the rows, this names the projects a
+        consumer can act on. Codes rather than ids because every use case, event envelope and
+        audit record downstream is addressed by ``Project.code``, so returning ids would make the
+        consumer the one caller that has to resolve them.
+        """
+        return [str(code) for code in self.values_list("project__code", flat=True)]
+
 
 class PriorityOverrideQuerySet(models.QuerySet["PriorityOverride"]):
     """Named reads of the manual forcings."""
@@ -113,6 +124,14 @@ class RiskFlagQuerySet(models.QuerySet["RiskFlag"]):
     def oldest_first(self) -> "RiskFlagQuerySet":
         """Order by detection, earliest first, so the UI can say how long each has been true."""
         return self.order_by("detected_at")
+
+    def as_views(self) -> tuple[RiskFlagView, ...]:
+        """Materialise the selection as the projections the risk panels render.
+
+        Ends the chain: the query executes here, so a caller cannot narrow the flag set after the
+        response shape was decided.
+        """
+        return tuple(flag.to_view() for flag in self)
 
 
 class PriorityPolicy(models.Model):
@@ -193,6 +212,23 @@ class PriorityScore(models.Model):
     def __str__(self) -> str:
         return f"{self.project_id}: {self.value} ({self.policy_version})"
 
+    def to_view(self) -> ScoreView:
+        """Describe this score as the projection the API returns, argument included.
+
+        The persisted ``value`` and ``policy_version`` columns win over the copies inside
+        ``breakdown``: those columns are what the queue ordered by and what the range check
+        constrained, so a document that disagreed with them must not be the version the client
+        sees. Issues no query.
+
+        Returns:
+            The score as an immutable :class:`~apps.prioritization.domain.views.ScoreView`.
+        """
+        return ScoreView.from_document(
+            self.breakdown,
+            value=self.value,
+            policy_version=self.policy_version,
+        )
+
 
 class PriorityOverride(models.Model):
     """A human forcing a position or nudging a score, with the reason on the record.
@@ -249,6 +285,25 @@ class PriorityOverride(models.Model):
         )
         return f"{self.project_id}: {mechanism} by {self.actor}"
 
+    def to_view(self) -> OverrideView:
+        """Describe this override as the projection the queue and the detail view render.
+
+        ``revoked_at`` is deliberately not exposed: a revoked override is simply absent from the
+        response, and shipping the column would invite a client to render a decision that is no
+        longer in force. Issues no query.
+
+        Returns:
+            The override as an immutable :class:`~apps.prioritization.domain.views.OverrideView`.
+        """
+        return OverrideView(
+            position=self.position,
+            boost=float(self.boost) if self.boost is not None else None,
+            reason=self.reason,
+            actor=self.actor,
+            created_at=self.created_at,
+            expires_at=self.expires_at,
+        )
+
 
 class RiskFlag(models.Model):
     """A persisted risk detection, raised and cleared as separate rows.
@@ -301,3 +356,15 @@ class RiskFlag(models.Model):
 
     def __str__(self) -> str:
         return f"{self.project_id}: {self.code} ({self.severity})"
+
+    def to_view(self) -> RiskFlagView:
+        """Describe this flag as the projection the risk panels render.
+
+        ``detail`` is published as ``reason`` because that is the name `docs/API.md` §1.6 fixed on
+        the wire, and because it is what the field is: the sentence naming the fact that raised the
+        flag. Issues no query.
+
+        Returns:
+            The flag as an immutable :class:`~apps.prioritization.domain.views.RiskFlagView`.
+        """
+        return RiskFlagView(code=self.code, severity=self.severity, reason=self.detail)

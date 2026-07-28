@@ -13,17 +13,19 @@ Do not invent synonyms for any of them.
 
 ## 1. Transactional Outbox
 
-**Problem.** A state change lives in PostgreSQL, the event lives in Redis. Publishing after
-`commit()` means a Redis outage, a container kill or a network blip between the two writes loses
+**Problem.** A state change lives in PostgreSQL, the delivery lives in a broker. Publishing after
+`commit()` means a broker outage, a container kill or a network blip between the two writes loses
 the event permanently, and nothing in the database says so. Publishing before commit means an
-event for a transaction that rolled back. Both are the dual-write failure.
+event for a transaction that rolled back. Both are the dual-write failure. This is independent of
+the transport, which is why the outbox survived Redis Streams being replaced by Celery
+([ADR 0010](../adr/0010-celery-as-the-bus.md)).
 
-**Where.** `backend/apps/events/models.py` (`OutboxEvent`), the write helper used by every service,
-and the relay process (`make relay`). The relay is the only code in the repository that imports the
-Redis client for publishing.
+**Where.** `backend/apps/events/models.py` (`OutboxEvent`) and
+`backend/apps/events/services/enqueue_event.py`, the write helper used by every service. The
+transport is `backend/apps/events/tasks.py`; no service imports it.
 
 ```python
-# backend/apps/events/outbox.py
+# backend/apps/events/services/enqueue_event.py
 def enqueue_event(
     *, topic: str, entity_type: str, entity_id: str, payload: dict[str, Any],
     actor: str, correlation_id: UUID, occurred_at: datetime, version: int = 1,
@@ -37,18 +39,24 @@ def enqueue_event(
     return event.id
 ```
 
-The relay claims with `SELECT ... WHERE published_at IS NULL ORDER BY occurred_at, id
-FOR UPDATE SKIP LOCKED`, `XADD`s to `aztec.events`, then writes `published_at` and
-`stream_entry_id`. `SKIP LOCKED` is what lets two relay processes run without coordination.
+`enqueue_event` also does `transaction.on_commit(drain_outbox.delay)` — and that is **not** the
+dual write, because the kick is an optimization, not the guarantee. A broker outage there is caught
+and logged; the Beat sweeper picks the row up on the next pass. The rule is: the *event* is written
+in the transaction, the *notification* may fail.
+
+The drain task claims with `SELECT ... WHERE published_at IS NULL ORDER BY occurred_at, id
+FOR UPDATE SKIP LOCKED`, queues one `events.handle_event` per subscribed handler, then writes
+`published_at`. `SKIP LOCKED` is what lets two workers drain without coordination.
 
 **Rule for extending.** A new topic is registered in `docs/EVENTS.md` and `ARCHITECTURE.md` §6
 first, then emitted through `enqueue_event` inside the same `transaction.atomic()` as the mutation
 and the `ActivityRecord`. Payload changes that remove or retype a field bump `version`.
 
-**Smell.** `import redis` anywhere under `services/`. A `transaction.on_commit(publish)` callback —
-that is the dual write with extra steps, since the process can die between commit and callback.
-Rows accumulating with `published_at IS NULL` means the relay is down; zero such rows with a stale
-UI means a service forgot to write the outbox at all.
+**Smell.** `import redis` or `.delay()` anywhere under `services/` — a service that names a task
+names a consumer, which is pattern 4's failure in a different costume. A publish written *instead
+of* the outbox row inside `on_commit`; that is the dual write with extra steps, since the process
+can die between commit and callback. Rows accumulating with `published_at IS NULL` means the worker
+is down; zero such rows with a stale UI means a service forgot to write the outbox at all.
 
 ---
 
@@ -174,10 +182,12 @@ def resolve_blocker(
     return blocker
 ```
 
-**Why it never publishes to Redis.** The database transaction is the only thing that can be rolled
-back. A `XADD` inside the transaction is not rolled back with it, so a later `IntegrityError` would
-leave a published event describing a change that never happened. Writing a row instead makes the
-event as atomic as the change; delivery becomes the relay's problem, and the relay retries.
+**Why it never publishes, and never calls `.delay()`.** The database transaction is the only thing
+that can be rolled back. A `PUBLISH` or a task enqueued inside the transaction is not rolled back
+with it, so a later `IntegrityError` would leave a delivered event describing a change that never
+happened. Writing a row instead makes the event as atomic as the change; delivery becomes the
+drain's problem, and it retries. The second reason is pattern 7: naming a task is naming a
+consumer, and a producer that names its consumers has to be edited to add a reaction.
 
 **Rule for extending.** Time is a parameter (`now`), never `timezone.now()` inside the body — that
 is what makes the service testable and a replay deterministic. `correlation_id` is threaded from
@@ -219,7 +229,7 @@ assembles `breakdown` (shape in `DATA_MODEL.md` §6.3). A weight key with no reg
 or a registered strategy with no weight — raises at policy load rather than defaulting to zero.
 
 **Rule for extending.** One file, one `@register("<code>")`, one new `PriorityPolicy` version
-carrying the rebalanced weights, then `make recompute`. The `code` is frozen once a `PriorityScore`
+carrying the rebalanced weights, then recompute (the admin action or `POST /api/v1/recompute`). The `code` is frozen once a `PriorityScore`
 has been written against it: it is the key inside every persisted `breakdown`. The evaluator is
 never edited. Same shape for guards (`WorkflowTransition.guard` resolves a registered callable).
 
@@ -335,43 +345,69 @@ service. A second `WorkflowTransition` row for the same ordered pair instead of 
 
 ---
 
-## 7. Publish/Subscribe with consumer groups
+## 7. Publish/Subscribe through a handler registry
 
-**Problem.** One committed fact has several independent reactions — rescore, re-evaluate risk, push
-to the browser. In one handler, a failing risk evaluation also stops the browser from updating.
+**Problem.** One committed fact has several independent reactions — rescore, re-evaluate risk,
+rebuild the read model, push to the browser. In one handler, a failing risk evaluation also stops
+the browser from updating. And the producer must not learn who reacts, or adding a reaction becomes
+an edit to the code that emitted the fact.
 
-**Where.** `backend/apps/<context>/consumers/`, reading `aztec.events` through Redis Streams
-consumer groups. Three groups by reason to react: `priority-recalculator`, `risk-evaluator`,
-`sse-fanout`, plus the `snapshot-rebuild` group in `backend/apps/portfolio/consumers/`.
+**Where.** `backend/apps/events/registry.py` holds the map. A reactor is a **function** in
+`backend/apps/<context>/handlers.py` — the module name is load-bearing: app-ready calls
+`autodiscover_modules("handlers")`, so a reactor in any other module is never imported and silently
+never runs. Four are registered: `priority-recalculator` and `risk-evaluator`
+(`apps/prioritization/handlers.py`), `snapshot-builder` (`apps/portfolio/handlers.py`),
+`sse-fanout` (`apps/events/handlers.py`).
 
 ```python
-def handle(envelope: Envelope, group: str) -> None:
-    try:
-        with transaction.atomic():
-            ProcessedEvent.objects.create(event_id=envelope.id, consumer_group=group)
-            apply_effect(envelope)          # the effect and the claim, one transaction
-    except IntegrityError:
-        logger.info("duplicate event %s for %s", envelope.id, group)
-    redis.xack(STREAM, group, envelope.stream_entry_id)   # ack on both paths
+# backend/apps/prioritization/handlers.py
+@register_handler(name="risk-evaluator", topics=ENGINE_TOPICS)
+def evaluate_risk(envelope: EventEnvelope) -> None:
+    """Re-run the specifications for the project this event names.
+
+    Raises on failure: that is how the retry, the log line and the dead letter happen.
+    """
+    evaluate_risk_for_project(project_code=project_code_of(envelope), now=envelope.occurred_at)
 ```
 
-**Idempotency.** The unique constraint `(event_id, consumer_group)` *is* the deduplication — the
-handler does not `SELECT` first, because check-then-insert races between two consumers in the same
-group. At-least-once means the same envelope will arrive twice; the second arrival must produce one
-effect and two acks.
+The transport calls it through `apply_once`, which is the whole idempotency mechanism:
 
-**The DLQ.** After N failed attempts with backoff, the envelope is pushed to the Redis stream
-`aztec.events.dlq` and surfaces in the admin. It is a stream, not a table, because it holds
-consumer-side failures; relay-side failures stay visible in `events_outboxevent` as rows with
-`published_at IS NULL` and a rising `attempts`. An event dying silently is worse than a loud error.
+```python
+# backend/apps/events/tasks.py
+with transaction.atomic():
+    if not _claim(registration.name, envelope.id):   # INSERT ProcessedEvent(event_id, handler)
+        return False                                  # duplicate: no-op, still a success
+    registration.handle(envelope)                     # the effect and the claim, one transaction
+```
 
-**Rule for extending.** One group per reason to react, never one per topic. A new topic joins an
-existing group unless it needs to fail independently. Only topics the UI actually renders go on the
-`sse-fanout` allowlist.
+**Idempotency.** The unique constraint `(event_id, handler)` *is* the deduplication — the transport
+does not `SELECT` first, because check-then-insert races between two workers holding the same
+delivery. At-least-once means the same envelope will arrive twice; the second arrival must produce
+one effect and report `duplicate`. Because the claim shares the handler's transaction, a failed
+attempt leaves no row, so the retry is a real retry and not a silent skip.
 
-**Smell.** Forgetting `XACK` on the duplicate path — the entry stays pending forever and the group
-lag grows with no failing log line. A handler that is idempotent "because the effect is a no-op
-anyway" — that argument stops holding the first time the effect appends a row.
+**Failure isolation.** One `events.handle_event` task per handler per event, so a handler that
+raises retries on its own budget without touching the others. Retries are Celery's, with
+exponential backoff and jitter, up to `EVENT_MAX_ATTEMPTS`.
+
+**Dead-lettering.** Past the budget, `dead_lettered_at` and `last_error` are set **on the outbox row
+itself**. There is no second queue and nothing is deleted: the failed event is still the row
+carrying its topic, payload and correlation id, filtered in the admin and replayable with the
+"Re-queue selected dead-lettered events" action. An event dying silently is worse than a loud error.
+
+**Rule for extending.** One handler per reason to react, never one per topic. A new reaction is a
+decorated function plus a row in `docs/EVENTS.md` §5 — **no producer edit, ever**. A new topic joins
+an existing handler's `topics=` set unless it needs to fail independently. Only topics the UI
+actually renders go on the `sse-fanout` allowlist. Handler names are released API: they are written
+into every `ProcessedEvent` row, so renaming one replays history for it.
+
+**Smell.** A service calling `.delay()`, or a producer that knows a handler name. A handler that
+catches its own exception to "keep things moving" — that is an event that vanished, and it is marked
+applied. A handler that opens its own `transaction.atomic()` or calls `commit` — it breaks the claim
+and therefore the deduplication. A handler reading `timezone.now()` instead of
+`envelope.occurred_at`, which makes a redelivery produce a different answer. A handler that is
+idempotent "because the effect is a no-op anyway" — that argument stops holding the first time the
+effect appends a row.
 
 ---
 
@@ -386,7 +422,7 @@ aggregates on every request.
 `(is_archived, priority_score DESC)`.
 
 ```python
-# backend/apps/portfolio/consumers/snapshot_rebuild.py
+# backend/apps/portfolio/services/rebuild_snapshot.py, called by the snapshot-builder handler
 def rebuild(project_code: str, last_event_id: UUID) -> None:
     ProjectSnapshot.objects.update_or_create(
         project_code=project_code,
@@ -394,14 +430,16 @@ def rebuild(project_code: str, last_event_id: UUID) -> None:
     )
 ```
 
-**What rebuilds it.** The `snapshot-rebuild` consumer group, on any event whose `entity.type` is
-`project`, plus `task.*` and `blocker.*` events resolved to their project. A `task.*` event also
+**What rebuilds it.** The `snapshot-builder` handler, subscribed to every topic except
+`clock.ticked` — derived by subtraction (`ALL_TOPICS - {clock.ticked}`) so a new topic is on the
+subscription the day it is registered, because the failure mode of forgetting one is a silently
+stale board. `task.*` and `blocker.*` events resolve to their project through `payload.project_code`. A `task.*` event also
 recomputes `owner_load_points` on every snapshot owned by that person, not just the event's project.
 `project_id` is a plain column, not a FK: the read side must survive the write side being rebuilt.
 
-**The staleness window, and why it is acceptable.** Between commit and rebuild there are three hops
-— relay claim, `XADD`, consumer read — so the snapshot trails the write side by the relay poll
-interval plus consumer lag, normally well under a second. That is acceptable because every consumer
+**The staleness window, and why it is acceptable.** Between commit and rebuild there are two hops
+— the drain claim and the handler task — so the snapshot trails the write side by a broker round
+trip, normally well under a second; if the on-commit kick was lost, by one Beat sweep instead. That is acceptable because every consumer
 of this table is a human reading a dashboard that also receives the SSE patch, and because the
 window is observable: `rebuilt_at` and `last_event_id` say exactly which delivery produced the row.
 Decisions that must not be stale — the legal transitions for a project — are read from the write
@@ -516,10 +554,16 @@ in `services/`; `models.py` holds fields, constraints and indexes.
 with no ordering, no retry, no dedup and no record that it ran. The bus is the outbox; a signal
 handler doing domain work is invisible to `RUNBOOK.md` when it fails.
 
+**A Celery task called from a service.** `recalculate.delay(project_code)` in a service body is the
+same anti-pattern one layer down: it is a dual write (the enqueue is not rolled back with the
+transaction) *and* a producer naming its consumer. Write the outbox row; the drain and the registry
+decide who runs.
+
 **Service locator.** A global `get_service("transition")` resolved at call time hides every
 dependency from the reader and from mypy. Pass collaborators as arguments, or import the module
-function directly. The two registries here (signals, risk specs) are exceptions with a fixed key
-space, validated at policy load — not a general lookup for anything.
+function directly. The three registries here (priority signals, risk specifications, event
+handlers) are exceptions with a fixed key space, validated at policy load or at import — not a
+general lookup for anything.
 
 **A god `utils` module.** `apps/common/utils.py` becomes the place logic goes when nobody decided
 which context owns it, and it grows imports in both directions until nothing can be tested alone.

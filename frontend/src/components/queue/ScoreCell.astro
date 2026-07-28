@@ -1,0 +1,88 @@
+---
+/**
+ * The score of one matrix row, sunk into a Plotboard Black inset plate with tabular figures.
+ *
+ * A `QueueOverrideView` never rewrites the computed value (`docs/API.md` §1.6): when an
+ * override is present the plate still shows the engine's number, and the override is labelled
+ * MANUAL OVERRIDE with its reason and forced position beside it, in the caution register —
+ * visually distinct from a computed score, as ARCHITECTURE §4.2 requires.
+ */
+export interface Props {
+  /** Pre-formatted score from `formatScore` — at most one decimal, tabular alignment. */
+  scoreText: string;
+  /** The manual override forcing this row's position, or `null` for a purely computed rank. */
+  override: { position: number | null; reason: string } | null;
+  /** Marks the plate as patchable by the queue island; screen readers announce the new figure. */
+  live?: boolean;
+}
+
+const { scoreText, override, live = false } = Astro.props;
+---
+
+<td class="score-cell" data-score-cell>
+  <span
+    class="plate figure score-value"
+    data-score-value
+    aria-live={live ? "polite" : undefined}
+  >
+    {scoreText}
+  </span>
+  {
+    override !== null && (
+      <span class="override" data-override>
+        <span class="label override-tag">Manual override</span>
+        {override.position !== null && (
+          <span class="figure override-position">#{override.position}</span>
+        )}
+        <span class="override-reason" title={override.reason}>
+          {override.reason}
+        </span>
+      </span>
+    )
+  }
+</td>
+
+<!-- Global: the queue island rebuilds this markup client-side on stream reset, and Astro's
+     scoped styles would not match DOM it creates. -->
+<style is:global>
+  .score-cell {
+    padding: var(--space-1) var(--space-3);
+    white-space: nowrap;
+  }
+
+  .score-value {
+    display: inline-block;
+    padding: var(--space-1) var(--space-2);
+    min-width: 5ch;
+    text-align: right;
+    font-weight: 600;
+    color: var(--color-legend);
+  }
+
+  .override {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    margin-inline-start: var(--space-2);
+    padding-inline-start: var(--space-2);
+    border-inline-start: 1px solid var(--color-rule);
+    max-width: 32ch;
+  }
+
+  .override-tag {
+    color: var(--color-caution);
+  }
+
+  .override-position {
+    color: var(--color-caution);
+  }
+
+  .override-reason {
+    font-size: 12px;
+    color: var(--color-legend-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 24ch;
+  }
+</style>

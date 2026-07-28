@@ -5,13 +5,13 @@
 > says how work moves. Where a rule here is enforced by a tool, §8 names the tool.
 
 Layers per app, from `ARCHITECTURE` §7: `domain/` (pure), `models.py` (persistence *and* the
-named queries, as `QuerySet`/`Manager` methods), `services/`, `api/`, `consumers/`. Every rule
+named queries, as `QuerySet`/`Manager` methods), `services/`, `api/`, `handlers.py`. Every rule
 below is stated against those directories.
 
 ## 1. Typing
 
 Every function is annotated, parameters and return type, including `-> None`. This holds in
-`domain/`, `services/`, `api/`, `consumers/` and test helpers. `models.py` is
+`domain/`, `services/`, `api/`, `handlers.py` and test helpers. `models.py` is
 annotated for methods — queryset methods included — and Django field assignments are typed by
 `django-stubs`.
 
@@ -120,7 +120,7 @@ No bare `Any` without an adjacent comment giving the reason (third-party stub ga
 ## 2. Docstrings
 
 Google style. Mandatory on every public module, class, service function, signal strategy,
-specification, queryset/manager method and consumer handler. Not required on private helpers whose name
+specification, queryset/manager method and event handler. Not required on private helpers whose name
 and signature already say everything, on `Meta` classes, on Django `__str__`, or on test classes and
 test methods (the class name and the method name are the sentence).
 
@@ -266,7 +266,7 @@ def transition_project(...) -> Project:
 ```
 
 ```python
-# RIGHT — the service ends at the outbox row; recomputation is a consumer reacting to the event
+# RIGHT — the service ends at the outbox row; recomputation is a handler reacting to the event
 @transaction.atomic
 def transition_project(...) -> Project:
     ...
@@ -372,7 +372,7 @@ from apps.portfolio.models import Project
 def transition_project(...) -> Project:
     project = Project.objects.select_for_update().get(code=project_code)
     ...
-    redis.Redis().xadd("aztec.events", envelope)
+    redis.Redis().publish("aztec.sse", envelope)      # or recalculate.delay(project_code)
 ```
 
 ```python
@@ -386,8 +386,11 @@ def transition_project(*, project_code: str, ...) -> Project:
     enqueue_event(topic="project.state_changed", ...)
 ```
 
-The relay is the only process that talks to Redis. `domain/` depends on nothing: no Django, no
-other app, no `apps.*` import outside its own package.
+A service writes the outbox row and stops. It does not publish, and it does not call `.delay()`
+either — naming a task is naming a consumer, and the drain plus the handler registry is what keeps
+the producer ignorant of its reactors. The only handler allowed a Redis client is `sse-fanout`,
+where publishing *is* the effect. `domain/` depends on nothing: no Django, no other app, no
+`apps.*` import outside its own package.
 
 ## 5. Error handling
 
@@ -417,19 +420,28 @@ def transition(request, code: str, payload: TransitionRequest):
         return 409, {"detail": str(exc)}
 ```
 
-Never catch bare `Exception`, with exactly one exception: the consumer boundary, where an unhandled
-error would poison the stream. There it must log with the event id and consumer group, route the
-envelope to `aztec.events.dlq`, and `XACK`:
+Never catch bare `Exception`, with exactly one exception: the **delivery boundary** in
+`backend/apps/events/tasks.py`, where every handler failure is treated identically. It is already
+written, and it never swallows — both branches end in a raise:
 
 ```python
 try:
-    handle(envelope)
-except Exception:
-    logger.exception("consumer failed", extra={"event_id": envelope.id, "group": GROUP})
-    dlq.publish(envelope)
-finally:
-    stream.ack(GROUP, entry_id)
+    applied = apply_once(registration, envelope)
+except Exception as error:
+    context = {"event_id": str(envelope.id), "topic": envelope.topic,
+               "handler": handler_name, "attempt": attempt}
+    if attempt >= settings.EVENT_MAX_ATTEMPTS:
+        row.mark_dead_lettered(error, attempt=attempt)   # on the outbox row, not a second queue
+        logger.exception("event dead lettered", extra=context)
+        raise
+    row.record_failure(error, attempt=attempt)
+    logger.warning("event handler failed; retrying", extra=context, exc_info=True)
+    raise self.retry(exc=error, countdown=_backoff_seconds(attempt)) from error
 ```
+
+A handler itself never catches its own failure: raising is what produces the retry, the log line
+and finally the dead letter. `try/except: pass` inside a handler is an event that vanished while
+being marked applied.
 
 No `except ...: pass`, no `except ...: return None` that hides the cause. `IntegrityError` on the
 `ProcessedEvent` claim is the one silent-by-design path, and it is silent only after being logged at
@@ -457,7 +469,9 @@ backend/apps/<context>/
   repositories.py  rare. Only a query spanning contexts, living in the context that consumes it.
   services/        one module per use case, one public function, @transaction.atomic
   api/             routers.py, schemas.py
-  consumers/       one module per consumer group
+  handlers.py      event reactors, one function per registered handler. The module name is
+                   fixed — app-ready autodiscovers exactly `handlers`, so a reactor elsewhere is
+                   never imported and silently never runs.
   tests/           domain/ (no database), integration/
 ```
 
@@ -477,12 +491,12 @@ test may touch.
 |---|---|---|
 | `django.test.SimpleTestCase` | pure domain logic: priority signals, risk `Specification`s, value objects, policy maths | Forbids database access. The purity of `domain/` is enforced by the base class instead of by discipline. Coverage should be high here (`ARCHITECTURE` §11). |
 | `django.test.TestCase` | queryset methods, services, API routes, workflow transitions, seed idempotency | Each test runs inside a transaction that is rolled back, so it is fast. |
-| `django.test.TransactionTestCase` | the outbox, `transaction.on_commit`, the relay, anything using a second database connection | Real commits and real truncation between tests. |
+| `django.test.TransactionTestCase` | the outbox, `transaction.on_commit`, the drain, event handlers, anything using a second database connection | Real commits and real truncation between tests. |
 
 The third row is the one people get wrong, so state it plainly: `TestCase` wraps each test in a
-transaction that **never commits**. `on_commit` callbacks therefore never fire, and the relay's
-`SELECT ... FOR UPDATE SKIP LOCKED` running on another connection cannot see a row that no
-connection has committed. An outbox test written on `TestCase` passes while proving nothing. That is
+transaction that **never commits**. `on_commit` callbacks therefore never fire — so the drain is
+never kicked — and `SELECT ... FOR UPDATE SKIP LOCKED` cannot see a row that no connection has
+committed. An outbox test written on `TestCase` passes while proving nothing. That is
 the entire reason `TransactionTestCase` exists in this codebase; it is slower, and it is not
 optional for those tests.
 
@@ -546,7 +560,7 @@ so an untested reason is an untested feature. Time enters as `data.now`; a test 
 `datetime.now()` is a test that fails on a Tuesday.
 
 The database is for what actually needs it: illegal transitions and seed idempotency on `TestCase`;
-outbox delivery, relay claiming and consumer idempotency on `TransactionTestCase`.
+outbox delivery, drain claiming and handler idempotency on `TransactionTestCase`.
 
 ```python
 class IllegalTransitionTests(TestCase):
@@ -560,13 +574,18 @@ class IllegalTransitionTests(TestCase):
 ```
 
 ```python
-class OutboxDeliveryTests(TransactionTestCase):
-    def test_relay_publishes_a_committed_outbox_row(self) -> None:
-        # On TestCase this would pass without publishing anything: the row is never committed,
-        # so the relay's other connection could not see it.
-        transition_project("PRJ-01", "IN_PROGRESS", actor="system", reason="")
-        published = relay.drain_once()
-        self.assertEqual([event.topic for event in published], ["project.state_changed"])
+class OutboxDeliveryTests(EagerCeleryMixin, TransactionTestCase):
+    def test_the_drain_dispatches_a_committed_outbox_row(self) -> None:
+        # On TestCase this would pass while dispatching nothing: the row is never committed,
+        # so the drain's claim could not see it and on_commit would never fire.
+        with only_handlers("snapshot-builder"):
+            transition_project("PRJ-01", "IN_PROGRESS", actor="system", reason="")
+
+        row = OutboxEvent.objects.get(entity_id="PRJ-01")
+        self.assertIsNotNone(row.published_at)
+        self.assertTrue(
+            ProcessedEvent.objects.filter(event_id=row.id, handler="snapshot-builder").exists()
+        )
 ```
 
 ## 8. The mechanical gate
@@ -613,6 +632,6 @@ surrounding code; whether a service does one use case; whether a new signal was 
 plus a registry line rather than an `if`; whether a specification stayed pure; whether a schema is
 per-use-case; whether a comment explains why; whether a magic number should have been a
 `PriorityPolicy` weight; whether the test names describe behaviour; and whether a test picked the
-right base class — in particular whether anything touching the outbox, `on_commit` or the relay is
-on `TransactionTestCase`, since on `TestCase` it passes without proving anything. A pull request that passes
+right base class — in particular whether anything touching the outbox, `on_commit`, the drain or a
+handler is on `TransactionTestCase`, since on `TestCase` it passes without proving anything. A pull request that passes
 `make lint` has cleared the floor, not the bar.

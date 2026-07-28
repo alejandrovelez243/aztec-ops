@@ -1,0 +1,232 @@
+---
+import { formatScore } from "../../lib/format/score";
+import type { Override, Score } from "../../lib/api/domain";
+
+/**
+ * The priority score as an inset instrument plate, with the whole document that
+ * defends it (DESIGN.md: a score never appears as a naked number).
+ *
+ * The `breakdown` disclosure renders every signal the API sent — code, weight,
+ * contribution and reason — in the server's own order (descending contribution);
+ * the component never assumes the current six signals (docs/API.md §4.2). A manual
+ * `override` is labelled as one and rendered next to the untouched computed value,
+ * never instead of it (ARCHITECTURE.md §4.2).
+ *
+ * The styles are global (`score-*`): `ProjectHeader` rebuilds the breakdown
+ * `tbody` from `project.priority.recalculated` envelopes at runtime, and Astro's
+ * scoped styles would not reach nodes created by `document.createElement`.
+ */
+export interface Props {
+  /** The computed score, or null before the engine's first pass — never flattened to 0. */
+  score: Score | null;
+  /** The forced-ranking decision on the record, or null when none is in force. */
+  override: Override | null;
+}
+
+const { score, override } = Astro.props;
+
+/** `2026-07-28T06:00:00Z` → `2026-07-28 06:00 UTC`; null stays the named absence. */
+function formatInstant(iso: string | null | undefined): string {
+  if (iso === null || iso === undefined) return "";
+  return `${iso.replace("T", " ").slice(0, 16)} UTC`;
+}
+
+const modifiers = Object.entries(score?.modifiers ?? {});
+---
+
+<section class="plate score-plate" data-score-plate aria-label="Priority score">
+  <span class="label">PRIORITY SCORE</span>
+  {
+    score === null ? (
+      <span class="figure score-not-scored" data-score-value>
+        NOT SCORED
+      </span>
+    ) : (
+      <>
+        <span class="score-line">
+          <span class="figure score-value" data-score-value>
+            {formatScore(score.value)}
+          </span>
+          <span class="label score-policy" data-score-policy>
+            {score.policy_version}
+          </span>
+          {score.computed_at !== null && score.computed_at !== undefined && (
+            <span class="figure score-computed" data-score-computed>
+              {formatInstant(score.computed_at)}
+            </span>
+          )}
+        </span>
+        <details class="score-breakdown">
+          <summary class="label">WHY THIS SCORE</summary>
+          <table>
+            <thead>
+              <tr>
+                <th class="label" scope="col">
+                  SIGNAL
+                </th>
+                <th class="label" scope="col">
+                  WEIGHT
+                </th>
+                <th class="label" scope="col">
+                  POINTS
+                </th>
+                <th class="label" scope="col">
+                  REASON
+                </th>
+              </tr>
+            </thead>
+            <tbody data-score-breakdown>
+              {score.breakdown.map((entry) => (
+                <tr>
+                  <td class="figure" data-signal-code>
+                    {entry.code}
+                  </td>
+                  <td class="figure" data-signal-weight>
+                    {entry.weight}
+                  </td>
+                  <td class="figure" data-signal-contribution>
+                    {formatScore(entry.contribution)}
+                  </td>
+                  <td class="body-text" data-signal-reason>
+                    {entry.reason}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {modifiers.length > 0 && (
+            <p class="figure score-modifiers" data-score-modifiers>
+              {modifiers
+                .map(([code, factor]) => `${code} ×${factor}`)
+                .join(" · ")}
+            </p>
+          )}
+        </details>
+      </>
+    )
+  }
+  {
+    override !== null && (
+      <div class="score-override" data-override>
+        <span class="label score-override-label">MANUAL OVERRIDE</span>
+        <span class="figure score-override-value">
+          {override.position !== null && override.position !== undefined
+            ? `POSITION ${override.position}`
+            : `BOOST ${override.boost ?? 0}`}
+        </span>
+        <span class="body-text score-override-reason" lang="es">
+          {override.reason}
+        </span>
+        <span class="figure score-override-meta">
+          {override.actor} · {formatInstant(override.created_at)}
+          {override.expires_at !== null &&
+            override.expires_at !== undefined &&
+            ` · EXPIRES ${formatInstant(override.expires_at)}`}
+        </span>
+      </div>
+    )
+  }
+</section>
+
+<style is:global>
+  .score-plate {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    min-width: 0;
+  }
+
+  .score-line {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+  }
+
+  .score-value {
+    font-size: var(--text-display-size);
+    font-weight: var(--text-display-weight);
+    line-height: var(--text-display-line);
+    color: var(--color-legend);
+  }
+
+  .score-not-scored {
+    color: var(--color-legend-dim);
+  }
+
+  .score-policy {
+    color: var(--color-legend-dim);
+  }
+
+  .score-computed {
+    color: var(--color-legend-dim);
+  }
+
+  .score-breakdown summary {
+    cursor: pointer;
+    color: var(--color-legend-dim);
+    list-style: none;
+  }
+
+  .score-breakdown summary::before {
+    content: "+ ";
+  }
+
+  .score-breakdown[open] summary::before {
+    content: "− ";
+  }
+
+  .score-breakdown summary:hover {
+    color: var(--color-legend);
+  }
+
+  .score-breakdown table {
+    width: 100%;
+    margin-top: var(--space-2);
+    border-top: var(--border-width) solid var(--color-rule);
+  }
+
+  .score-breakdown th {
+    padding: var(--space-1) var(--space-2) var(--space-1) 0;
+    text-align: left;
+    font-weight: var(--text-label-weight);
+    border-bottom: var(--border-width) solid var(--color-rule);
+  }
+
+  .score-breakdown td {
+    padding: var(--space-1) var(--space-2) var(--space-1) 0;
+    vertical-align: top;
+    border-bottom: var(--border-width) solid var(--color-rule);
+  }
+
+  .score-breakdown td[data-signal-code] {
+    color: var(--color-legend-dim);
+  }
+
+  .score-modifiers {
+    margin-top: var(--space-2);
+    color: var(--color-legend-dim);
+  }
+
+  .score-override {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding-top: var(--space-2);
+    padding-left: var(--space-2);
+    border-top: var(--border-width) solid var(--color-rule);
+    border-left: 2px solid var(--color-caution);
+  }
+
+  .score-override-label {
+    color: var(--color-caution);
+  }
+
+  .score-override-value {
+    color: var(--color-legend);
+  }
+
+  .score-override-meta {
+    color: var(--color-legend-dim);
+  }
+</style>

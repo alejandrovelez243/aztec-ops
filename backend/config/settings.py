@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 
 import django_stubs_ext
 from celery.schedules import crontab
+from corsheaders.defaults import default_headers
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -59,11 +60,34 @@ class Settings(BaseSettings):
     #: A project with no recorded activity for this many days trips ``IS_STALE``.
     staleness_threshold_days: int = Field(default=14, alias="STALENESS_THRESHOLD_DAYS")
 
-    #: How many times a consumer retries an event before it goes to the dead letter stream.
+    #: How many times a handler is attempted for one event before the outbox row is dead
+    #: lettered. Counted per handler, so one poisoned reactor does not retire the others.
     event_max_attempts: int = Field(default=5, alias="EVENT_MAX_ATTEMPTS")
+
+    #: How often Celery Beat sweeps the outbox. This is the *fallback* latency, not the normal
+    #: one: ``enqueue_event`` kicks the drain on commit, so the sweep only matters when the broker
+    #: was unreachable at that moment.
+    event_drain_interval_seconds: float = Field(default=5.0, alias="EVENT_DRAIN_INTERVAL_SECONDS")
+
+    #: Rows claimed per drain pass. Large enough that a burst drains in a few round trips, small
+    #: enough that one worker never holds the whole backlog locked.
+    event_drain_batch_size: int = Field(default=100, alias="EVENT_DRAIN_BATCH_SIZE")
 
     # Plain properties, not ``computed_field``: nothing serializes this object — every reader is
     # Django module code below, reading the attribute — so the only thing the decorator would add
+    # --- Seed credentials -----------------------------------------------------------------
+    # Read by ``manage.py seed``. Every one defaults to empty ON PURPOSE: a default that works is
+    # still a hardcoded credential, only one everybody knows, and this repository is public.
+    # Absent means "nobody can sign in yet", which is a safe failure. "admin/admin" is not.
+
+    #: Applied to every seeded team member. Empty leaves them with an unusable password.
+    seed_user_password: str = Field(default="", alias="SEED_USER_PASSWORD")
+
+    #: Django's own convention — the same variables ``createsuperuser --noinput`` reads.
+    superuser_username: str = Field(default="", alias="DJANGO_SUPERUSER_USERNAME")
+    superuser_password: str = Field(default="", alias="DJANGO_SUPERUSER_PASSWORD")
+    superuser_email: str = Field(default="", alias="DJANGO_SUPERUSER_EMAIL")
+
     # is a key in a ``model_dump`` that is never called, and it hides the property from mypy.
     @property
     def is_production(self) -> bool:
@@ -107,6 +131,9 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     # Required by the GIN index on ProjectSnapshot's risk-flag array (DATA_MODEL §8).
     "django.contrib.postgres",
+    # The Astro dev server and the API are different origins, so the browser preflights every
+    # mutating request. Without this the frontend cannot call the API at all in development.
+    "corsheaders",
     # Identity first: AUTH_USER_MODEL is referenced by everything that follows.
     "apps.accounts",
     # Bounded contexts, in dependency order.
@@ -122,6 +149,10 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    # Ahead of CommonMiddleware, which is what django-cors-headers requires: a redirect issued by
+    # CommonMiddleware (APPEND_SLASH) would otherwise leave the origin without CORS headers, and
+    # the browser reports that as an opaque network failure rather than as a redirect.
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -171,19 +202,41 @@ AUTH_USER_MODEL = "accounts.User"
 # --- Project -----------------------------------------------------------------------
 
 REDIS_URL = settings.redis_url
+
+# --- CORS ---------------------------------------------------------------------------
+# An explicit origin allowlist and nothing wider. ``CORS_ALLOW_ALL_ORIGINS`` is deliberately not
+# set, not even in development: a permissive default has a habit of reaching production, and the
+# Astro origin is the only browser origin that has any business calling this API.
 CORS_ALLOWED_ORIGINS = settings.cors_origins
+
+#: ``X-Actor`` is not one of the CORS-safelisted request headers, so a browser preflights every
+#: mutating call and refuses it unless the header is named here. Without this line every POST from
+#: the frontend fails at the preflight with an error that says nothing about the header.
+CORS_ALLOW_HEADERS = (*default_headers, "x-actor")
+
+#: The stream is a plain ``GET`` an ``EventSource`` opens, so it needs no extra methods — but it
+#: does need the origin allowlist above, which is why the SSE view is not exempt from CORS.
+CORS_ALLOW_CREDENTIALS = False
+
 TICKER_INTERVAL_SECONDS = settings.ticker_interval_seconds
 STALENESS_THRESHOLD_DAYS = settings.staleness_threshold_days
 EVENT_MAX_ATTEMPTS = settings.event_max_attempts
 
-#: Redis Streams topology. Names are configuration, never literals scattered through code.
-EVENT_STREAM = "aztec.events"
-EVENT_DLQ_STREAM = "aztec.events.dlq"
+SEED_USER_PASSWORD = settings.seed_user_password
+SUPERUSER_USERNAME = settings.superuser_username
+SUPERUSER_PASSWORD = settings.superuser_password
+SUPERUSER_EMAIL = settings.superuser_email
+EVENT_DRAIN_INTERVAL_SECONDS = settings.event_drain_interval_seconds
+EVENT_DRAIN_BATCH_SIZE = settings.event_drain_batch_size
+
+#: The one Redis channel the application still speaks on its own behalf: the SSE fan-out reading
+#: side of ``GET /api/stream``. Names are configuration, never literals scattered through code.
 EVENT_SSE_CHANNEL = "aztec.sse"
 
 # --- Celery ------------------------------------------------------------------------
-# Celery is the scheduler, not the bus. Its only tasks write clock.ticked to the outbox; the
-# relay publishes it to Redis Streams like any other event. See docs/adr/0009.
+# Celery is the bus. Producers write the transactional outbox; ``events.drain_outbox`` claims the
+# committed rows and dispatches one ``events.handle_event`` per subscribed handler. Redis is the
+# broker and nothing else.
 
 CELERY_BROKER_URL = settings.redis_url
 CELERY_RESULT_BACKEND = settings.redis_url
@@ -193,11 +246,24 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_ENABLE_UTC = True
 
-#: A tick is worthless once the next one is due, so an unacknowledged one is not worth redelivering.
-CELERY_TASK_ACKS_LATE = False
+#: Acknowledge after the task returns, not when it is picked up. This is load-bearing now that
+#: Celery is the bus: ``drain_outbox`` marks the row published *before* the handler runs, so a
+#: worker killed mid-delivery with early acknowledgement would drop an event that the outbox
+#: considers dispatched. With late acks the broker redelivers it and ``ProcessedEvent`` absorbs
+#: the duplicate. The cost is that a task interrupted by a hard kill runs twice — which every
+#: handler already tolerates, by design.
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 
 CELERY_BEAT_SCHEDULE = {
+    # The sweeper. ``enqueue_event`` already kicks the drain on commit, so this exists for the one
+    # case that kick cannot cover: the broker was down when the transaction committed. Both paths
+    # read the same table, so the worst case is a duplicate dispatch, which the ledger absorbs.
+    "drain-outbox": {
+        "task": "events.drain_outbox",
+        "schedule": float(settings.event_drain_interval_seconds),
+    },
     "emit-interval-tick": {
         "task": "events.emit_interval_tick",
         "schedule": float(settings.ticker_interval_seconds),

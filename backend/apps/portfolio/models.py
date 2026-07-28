@@ -26,10 +26,24 @@ from django.conf import settings
 from django.contrib.postgres.indexes import GinIndex
 from django.db import models
 
-from apps.portfolio.domain.value_objects import ProjectResult
+from apps.portfolio.domain.value_objects import QUEUE_ORDERING, ProjectResult
+from apps.portfolio.domain.views import (
+    HEALTH_LABELS,
+    HealthRef,
+    QueueItemView,
+    QueueOverrideView,
+)
+from apps.prioritization.domain.views import RiskFlagView, ScoreView
+from apps.shared.ordering import resolve_ordering
+from apps.shared.refs import ActorRef, StateRef, TaxonomyRef
 
 if TYPE_CHECKING:
     from apps.portfolio.domain.value_objects import ProjectSnapshotValues, SnapshotQueueFilters
+
+#: Prefix and minimum width of a portfolio code (``PRJ-01``). The width is a floor, not a limit:
+#: the 100th project is ``PRJ-100`` and stays sortable.
+PROJECT_CODE_PREFIX = "PRJ-"
+PROJECT_CODE_DIGITS = 2
 
 #: Joins every projection of a project reads. Kept in one place so a caller cannot half-populate a
 #: result and then pay for the rest one lazy query at a time.
@@ -40,6 +54,7 @@ _PROJECT_RELATIONS = (
     "stage",
     "workflow_state",
     "owner",
+    "currency",
 )
 
 
@@ -83,6 +98,53 @@ class ProjectQuerySet(models.QuerySet["Project"]):
         """Narrow to the projects still in the operation's attention: the unarchived ones."""
         return self.filter(is_archived=False)
 
+    def next_code(self) -> str:
+        """Mint the next portfolio code — ``PRJ-23``.
+
+        **Ends the chain**: it materialises the codes already in use. Derived from the highest
+        number present rather than from a count, so deleting a project never causes the next one
+        to reuse a retired code — and a code that can be reused is a code the audit trail and the
+        event bus cannot rely on.
+
+        Archived projects still count. They keep their code forever, and handing it to a new
+        project would silently merge two histories in the timeline.
+
+        This is *not* collision-proof under concurrency: two simultaneous creations can read the
+        same maximum, and the unique constraint rejects the loser. Acceptable while project
+        creation is an operator filling a form; a PostgreSQL sequence is the fix if that changes.
+
+        Returns:
+            The next free project code.
+        """
+        highest = 0
+        for code in self.values_list("code", flat=True):
+            suffix = str(code).removeprefix(PROJECT_CODE_PREFIX)
+            if suffix.isdigit():
+                highest = max(highest, int(suffix))
+        return f"{PROJECT_CODE_PREFIX}{highest + 1:0{PROJECT_CODE_DIGITS}d}"
+
+    def owned_by(self, owner_code: str) -> "ProjectQuerySet":
+        """Narrow to the projects one person owns, named by ``accounts.User.code``.
+
+        Owner load is a property of the *person*, so a task event changes that number on every
+        snapshot that person owns and not only on the project the task belongs to. This is the
+        selection the snapshot rebuild widens to (DATA_MODEL §8). Unowned projects are excluded by
+        construction: nobody carries them, which is a different fact from carrying nothing.
+
+        Args:
+            owner_code: ``accounts.User.code``, e.g. ``"daniel.rojas"``.
+        """
+        return self.filter(owner__code=owner_code)
+
+    def codes(self) -> list[str]:
+        """Materialise the selection as business codes, ending the chain.
+
+        Codes because everything downstream of a selection of projects — an event envelope, an
+        audit record, a snapshot row — is addressed by ``Project.code``, so returning rows would
+        make each caller project them again.
+        """
+        return [str(code) for code in self.values_list("code", flat=True)]
+
 
 class ProjectSnapshotQuerySet(models.QuerySet["ProjectSnapshot"]):
     """Named reads and the single write of the command-center read model."""
@@ -97,24 +159,52 @@ class ProjectSnapshotQuerySet(models.QuerySet["ProjectSnapshot"]):
         return self.filter(is_archived=False)
 
     def matching(self, filters: "SnapshotQueueFilters") -> "ProjectSnapshotQuerySet":
-        """Apply the command center's facets. A facet left ``None`` does not filter.
+        """Apply the command center's facets. A facet left ``None`` or empty does not filter.
+
+        Every value compared here is a taxonomy ``code``, a state ``category`` or a flag ``code`` —
+        never an operator-editable label (CLAUDE.md rule 1). ``search`` is the one exception and it
+        is a substring match, not an equality test, so a renamed client cannot make a saved filter
+        silently match nothing.
+
+        Repeatable facets OR their values, because that is what a multi-select means.
+        ``risk_flag_codes`` ANDs instead: "blocked **and** overdue" is the question the panel asks,
+        and the OR of two common flags is most of the portfolio.
 
         Args:
-            filters: The requested facets. The window (``offset``/``limit``) is not applied
-                here — chain :meth:`page` — so a caller can count before paging.
+            filters: The requested facets. The window (``offset``/``limit``) and the ordering are
+                not applied here — chain :meth:`in_requested_order` and :meth:`page` — so a caller
+                can count the whole match before paging it.
         """
-        queryset = self
+        queryset = self.filter(is_archived=filters.is_archived)
         if filters.health is not None:
             queryset = queryset.filter(health=filters.health)
         if filters.state_category is not None:
             queryset = queryset.filter(state_category=filters.state_category)
-        if filters.engagement_type_code is not None:
-            queryset = queryset.filter(engagement_type_code=filters.engagement_type_code)
-        if filters.owner_code is not None:
-            queryset = queryset.filter(owner_code=filters.owner_code)
-        if filters.risk_flag_code is not None:
-            # GIN containment, so ?flag=BLOCKED never joins prioritization_riskflag.
-            queryset = queryset.filter(risk_flags__contains=[{"code": filters.risk_flag_code}])
+        if filters.state_code is not None:
+            queryset = queryset.filter(state_code=filters.state_code)
+        if filters.engagement_type_codes:
+            queryset = queryset.filter(engagement_type_code__in=filters.engagement_type_codes)
+        if filters.project_type_code is not None:
+            queryset = queryset.filter(project_type_code=filters.project_type_code)
+        if filters.stage_code is not None:
+            queryset = queryset.filter(stage_code=filters.stage_code)
+        if filters.owner_codes:
+            queryset = queryset.filter(owner_code__in=filters.owner_codes)
+        for flag_code in filters.risk_flag_codes:
+            # GIN containment, so ?risk_flag=BLOCKED never joins prioritization_riskflag. One
+            # predicate per requested flag is what makes the set AND rather than OR.
+            queryset = queryset.filter(risk_flags__contains=[{"code": flag_code}])
+        if filters.has_open_blockers is True:
+            queryset = queryset.filter(open_blocker_count__gt=0)
+        elif filters.has_open_blockers is False:
+            queryset = queryset.filter(open_blocker_count=0)
+        if filters.search.strip():
+            term = filters.search.strip()
+            queryset = queryset.filter(
+                models.Q(project_code__icontains=term)
+                | models.Q(name__icontains=term)
+                | models.Q(client_alias__icontains=term)
+            )
         return queryset
 
     def in_queue_order(self) -> "ProjectSnapshotQuerySet":
@@ -124,6 +214,35 @@ class ProjectSnapshotQuerySet(models.QuerySet["ProjectSnapshot"]):
         :meth:`in_attention` the plan carries no sort node.
         """
         return self.order_by("-priority_score", "project_code")
+
+    def in_requested_order(self, order_by: str) -> "ProjectSnapshotQuerySet":
+        """Order by one signed field name drawn from the endpoint's allowlist.
+
+        ``project_code`` is always appended as the final key. Without it two rows tying on the
+        requested field have no defined relative order, and PostgreSQL is free to return them in
+        different orders on two pages of the same scan — which shows up as a row appearing twice
+        while another never appears at all.
+
+        Args:
+            order_by: A key of ``QUEUE_ORDERING``, optionally prefixed with ``-`` for descending.
+
+        Returns:
+            The ordered selection.
+
+        Raises:
+            UnknownOrdering: The field is outside the allowlist. Rejected rather than ignored: a
+                silently different order is a wrong answer the client cannot detect.
+        """
+        return self.order_by(*resolve_ordering(order_by, QUEUE_ORDERING, tiebreaker="project_code"))
+
+    def as_queue_items(self) -> tuple["QueueItemView", ...]:
+        """Materialise the selection as the rows the command center renders.
+
+        **Ends the chain**: the query executes here, so no caller can narrow the queue after the
+        response shape was decided. Every field comes from this one table — that is the whole
+        point of the read model — so this issues exactly one query however many rows it returns.
+        """
+        return tuple(snapshot.to_queue_item() for snapshot in self)
 
     def page(self, *, offset: int, limit: int) -> "ProjectSnapshotQuerySet":
         """Take one window of the current ordering.
@@ -161,7 +280,7 @@ class ProjectSnapshotQuerySet(models.QuerySet["ProjectSnapshot"]):
             values: The complete projection for this project.
             last_event_id: Envelope id of the event that produced the projection, for tracing a
                 stale row back to its delivery. ``None`` only when rebuilding outside the
-                stream, such as from ``make recompute``.
+                bus, such as from the admin's recompute action.
         """
         defaults = values.model_dump(exclude={"project_code", "risk_flags"})
         defaults["risk_flags"] = [flag.model_dump() for flag in values.risk_flags]
@@ -244,7 +363,15 @@ class Project(models.Model):
     start_date = models.DateField(null=True, blank=True)
     target_date = models.DateField(null=True, blank=True, db_index=True)
     business_value = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
-    currency = models.CharField(max_length=3, default="USD")
+    # A taxonomy row, not a three-letter string: the frontend renders a validated select from the
+    # served list, and ``minor_units`` on the row is what tells it 28000 CLP is not 28000 USD.
+    # PROTECT because a currency is referenced by history — deleting one would rewrite what a
+    # signed contract was worth. Retire it with ``is_active`` instead.
+    currency = models.ForeignKey(
+        "catalog.Currency",
+        on_delete=models.PROTECT,
+        related_name="projects",
+    )
     summary = models.TextField(blank=True, default="")
     next_step = models.CharField(max_length=255, blank=True, default="")
     is_archived = models.BooleanField(default=False)
@@ -300,7 +427,7 @@ class Project(models.Model):
         ``ProjectSnapshot``, so exposing the imported column here would offer callers a second,
         stale answer to the same question.
 
-        The six relations read below must already be loaded: ``ProjectQuerySet.with_relations``
+        The seven relations read below must already be loaded: ``ProjectQuerySet.with_relations``
         selects every one of them. On an instance fetched without them this is still correct but each attribute
         triggers its own lazy query, which is exactly the escape from the transaction the
         projection exists to prevent.
@@ -324,7 +451,7 @@ class Project(models.Model):
             start_date=self.start_date,
             target_date=self.target_date,
             business_value=self.business_value,
-            currency=self.currency,
+            currency=self.currency.code,
             summary=self.summary,
             next_step=self.next_step,
             is_archived=self.is_archived,
@@ -353,9 +480,9 @@ class ProjectSnapshot(models.Model):
         extending it would mean changing that function, not adding a taxonomy row.
         """
 
-        HEALTHY = "HEALTHY", "Healthy"
-        AT_RISK = "AT_RISK", "At risk"
-        BLOCKED = "BLOCKED", "Blocked"
+        HEALTHY = "HEALTHY", HEALTH_LABELS["HEALTHY"]
+        AT_RISK = "AT_RISK", HEALTH_LABELS["AT_RISK"]
+        BLOCKED = "BLOCKED", HEALTH_LABELS["BLOCKED"]
 
     project_code = models.CharField(max_length=16, primary_key=True)
     project_id = models.BigIntegerField()
@@ -426,3 +553,91 @@ class ProjectSnapshot(models.Model):
     def __str__(self) -> str:
         """Return the business code and its queue score."""
         return f"{self.project_code} ({self.priority_score})"
+
+    def to_queue_item(self) -> QueueItemView:
+        """Describe this row as the queue entry the command center renders.
+
+        Issues no query: the read model exists precisely so this projection reads one table. Every
+        blank string is published as ``null``, because the columns default to ``""`` for storage
+        reasons while the wire distinguishes "no owner" from "an owner whose code is empty"
+        (`docs/API.md` §1.6).
+
+        ``risk_flags`` is parsed defensively. It is JSONB written by the rebuild consumer, and an
+        entry that no longer matches the shape is skipped rather than crashing the whole queue —
+        one unreadable flag must not take the command center down.
+
+        Returns:
+            The row as an immutable :class:`~apps.portfolio.domain.views.QueueItemView`.
+        """
+        return QueueItemView(
+            code=self.project_code,
+            name=self.name,
+            client_alias=self.client_alias,
+            owner=(
+                ActorRef.of(code=self.owner_code, label=self.owner_alias or self.owner_code)
+                if self.owner_code
+                else None
+            ),
+            engagement_type=TaxonomyRef.of(
+                code=self.engagement_type_code,
+                label=self.engagement_type_label or self.engagement_type_code,
+            ),
+            project_type_code=self.project_type_code or None,
+            stage_code=self.stage_code or None,
+            state=StateRef.of(
+                code=self.state_code,
+                label=self.state_label or self.state_code,
+                category=self.state_category,
+            ),
+            health=HealthRef.of(self.health),
+            target_date=self.target_date,
+            business_value=(
+                float(self.business_value) if self.business_value is not None else None
+            ),
+            currency=self.currency,
+            next_step=self.next_step or None,
+            open_tasks=self.open_task_count,
+            overdue_tasks=self.overdue_task_count,
+            blocked_tasks=self.blocked_task_count,
+            open_blockers=self.open_blocker_count,
+            score=ScoreView.from_document(
+                self.breakdown,
+                value=self.priority_score,
+                policy_version=self.priority_policy_version,
+            ),
+            override=(
+                QueueOverrideView(position=self.override_position, reason=self.override_reason)
+                if self.has_override
+                else None
+            ),
+            risk_flags=_risk_flag_views(self.risk_flags),
+            updated_at=self.rebuilt_at,
+        )
+
+
+def _risk_flag_views(stored: object) -> tuple[RiskFlagView, ...]:
+    """Parse ``ProjectSnapshot.risk_flags`` into projections, skipping unreadable entries.
+
+    The column is JSONB written by the rebuild consumer from
+    :class:`~apps.portfolio.domain.value_objects.RiskFlagEntry`, whose ``detail`` is the wire's
+    ``reason``. An entry that does not parse is dropped rather than raised on: a single malformed
+    flag must not turn the whole command center into a 500, and the missing flag is visible in the
+    response next to the ones that survived.
+    """
+    entries = stored if isinstance(stored, list) else []
+    views: list[RiskFlagView] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        code = entry.get("code")
+        severity = entry.get("severity")
+        if isinstance(code, str) and isinstance(severity, str):
+            detail = entry.get("detail")
+            views.append(
+                RiskFlagView(
+                    code=code,
+                    severity=severity,
+                    reason=detail if isinstance(detail, str) else "",
+                )
+            )
+    return tuple(views)

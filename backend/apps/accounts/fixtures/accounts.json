@@ -1,0 +1,134 @@
+[
+  {
+    "model": "accounts.user",
+    "pk": 1,
+    "fields": {
+      "password": "!",
+      "last_login": null,
+      "is_superuser": false,
+      "username": "andrea.molina",
+      "first_name": "Andrea",
+      "last_name": "Molina",
+      "email": "",
+      "is_staff": false,
+      "is_active": true,
+      "date_joined": "2026-01-05T09:00:00+00:00",
+      "code": "andrea.molina",
+      "alias": "Andrea Molina",
+      "role": 1,
+      "weekly_capacity_points": 20,
+      "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "accounts.user",
+    "pk": 2,
+    "fields": {
+      "password": "!",
+      "last_login": null,
+      "is_superuser": false,
+      "username": "camila.torres",
+      "first_name": "Camila",
+      "last_name": "Torres",
+      "email": "",
+      "is_staff": false,
+      "is_active": true,
+      "date_joined": "2026-01-05T09:00:00+00:00",
+      "code": "camila.torres",
+      "alias": "Camila Torres",
+      "role": 1,
+      "weekly_capacity_points": 20,
+      "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "accounts.user",
+    "pk": 3,
+    "fields": {
+      "password": "!",
+      "last_login": null,
+      "is_superuser": false,
+      "username": "daniel.rojas",
+      "first_name": "Daniel",
+      "last_name": "Rojas",
+      "email": "",
+      "is_staff": false,
+      "is_active": true,
+      "date_joined": "2026-01-05T09:00:00+00:00",
+      "code": "daniel.rojas",
+      "alias": "Daniel Rojas",
+      "role": 2,
+      "weekly_capacity_points": 20,
+      "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "accounts.user",
+    "pk": 4,
+    "fields": {
+      "password": "!",
+      "last_login": null,
+      "is_superuser": false,
+      "username": "laura.gomez",
+      "first_name": "Laura",
+      "last_name": "Gomez",
+      "email": "",
+      "is_staff": false,
+      "is_active": true,
+      "date_joined": "2026-01-05T09:00:00+00:00",
+      "code": "laura.gomez",
+      "alias": "Laura Gomez",
+      "role": 1,
+      "weekly_capacity_points": 20,
+      "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "accounts.user",
+    "pk": 5,
+    "fields": {
+      "password": "!",
+      "last_login": null,
+      "is_superuser": false,
+      "username": "mateo.ruiz",
+      "first_name": "Mateo",
+      "last_name": "Ruiz",
+      "email": "",
+      "is_staff": false,
+      "is_active": true,
+      "date_joined": "2026-01-05T09:00:00+00:00",
+      "code": "mateo.ruiz",
+      "alias": "Mateo Ruiz",
+      "role": 1,
+      "weekly_capacity_points": 20,
+      "groups": [],
+      "user_permissions": []
+    }
+  },
+  {
+    "model": "accounts.user",
+    "pk": 6,
+    "fields": {
+      "password": "!",
+      "last_login": null,
+      "is_superuser": false,
+      "username": "santiago.vera",
+      "first_name": "Santiago",
+      "last_name": "Vera",
+      "email": "",
+      "is_staff": false,
+      "is_active": true,
+      "date_joined": "2026-01-05T09:00:00+00:00",
+      "code": "santiago.vera",
+      "alias": "Santiago Vera",
+      "role": 1,
+      "weekly_capacity_points": 20,
+      "groups": [],
+      "user_permissions": []
+    }
+  }
+]

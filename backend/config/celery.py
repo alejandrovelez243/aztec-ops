@@ -1,9 +1,10 @@
 """Celery application.
 
-Celery does one job here: scheduling. It is not the event bus — Redis Streams is, and every
-producer still writes to the transactional outbox first (``CLAUDE.md`` rule 4). What Beat replaces
-is the hand-rolled ticker loop and, more importantly, the state that loop had to keep to notice a
-local date rollover. A crontab entry expresses "at midnight" without remembering anything.
+Celery is the transport. Producers still write only to the transactional outbox (``CLAUDE.md``
+rule 4); ``events.drain_outbox`` claims the committed rows and dispatches one ``events.handle_event``
+per subscribed handler, and Beat both sweeps the outbox and emits the clock ticks. There is one job
+system, not two: the hand-rolled Redis Streams consumer groups it replaces did the same work with a
+second retry policy, a second dead-letter path and three more processes.
 """
 
 import os

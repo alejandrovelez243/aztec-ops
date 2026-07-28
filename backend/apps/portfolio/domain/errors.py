@@ -62,7 +62,7 @@ class OwnerNotFound(DomainError):
 class TaxonomyEntryNotFound(DomainError):
     """A referenced catalog row does not exist, or was retired and then deleted.
 
-    One subclass per taxonomy rather than a taxonomy-name argument: five taxonomies all key on
+    One subclass per taxonomy rather than a taxonomy-name argument: six taxonomies all key on
     ``code``, so "no row for ``consultoria``" is ambiguous, and a caller that wants to catch only a
     bad stage should not have to inspect a string to do it.
     """
@@ -90,6 +90,17 @@ class StageNotFound(TaxonomyEntryNotFound):
     """No delivery stage carries the given code."""
 
     taxonomy = "stage"
+
+
+class CurrencyNotFound(TaxonomyEntryNotFound):
+    """No currency carries the given ISO-4217 code.
+
+    Raised rather than falling back to USD: a project whose currency did not resolve would be
+    ranked and displayed at an amount nobody agreed to, and the ``business_value`` signal would
+    compare pesos against dollars as if they were the same number.
+    """
+
+    taxonomy = "currency"
 
 
 class InvalidDateWindow(DomainError):

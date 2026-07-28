@@ -21,6 +21,11 @@ from pydantic import BaseModel, ConfigDict, Field
 #: Derived project health, mirroring ``ProjectSnapshot.Health``.
 Health = Literal["HEALTHY", "AT_RISK", "BLOCKED"]
 
+#: The currency a project is assumed to be billed in when the caller names none — every project in
+#: the source dataset but two. A code, resolved against ``catalog.Currency`` by the service: the
+#: domain names the default, the database owns which currencies exist.
+DEFAULT_CURRENCY_CODE = "USD"
+
 
 class OwnerLoad(BaseModel):
     """What one person is actually carrying, derived from task rows.
@@ -44,6 +49,14 @@ class OwnerLoad(BaseModel):
     open_task_count: int = Field(ge=0)
     blocked_task_count: int = Field(ge=0)
     urgent_open_task_count: int = Field(ge=0)
+    #: Open tasks whose due date has already passed. Derived at read time from ``due_date`` against
+    #: the caller's date, never from a stored flag: a persisted "overdue" is wrong the morning
+    #: after it was written (ARCHITECTURE §10.1).
+    overdue_task_count: int = Field(default=0, ge=0)
+    #: Unarchived projects this person owns. Owning work is a different load from carrying tasks —
+    #: somebody with three open tasks and seven projects is not idle — so the two are reported
+    #: separately rather than summed into one number nobody can decompose.
+    owned_project_count: int = Field(default=0, ge=0)
     weekly_capacity_points: int = Field(gt=0)
 
     @property
@@ -88,7 +101,11 @@ class CreateProjectCommand(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    code: str = Field(min_length=1, max_length=16)
+    #: Left empty to let the service mint the next ``PRJ-NN``, which is what the HTTP API always
+    #: does: `docs/API.md` §2.3 does not accept a code from a client, because a caller that
+    #: chooses an identifier can collide with one an already-published event names. A fixture or a
+    #: migration pins its own code by setting this.
+    code: str = Field(default="", max_length=16)
     name: str = Field(min_length=1, max_length=160)
     client_code: str = Field(min_length=1, max_length=32)
     engagement_type_code: str = Field(min_length=1, max_length=32)
@@ -98,7 +115,7 @@ class CreateProjectCommand(BaseModel):
     start_date: date | None = None
     target_date: date | None = None
     business_value: Decimal | None = None
-    currency: str = Field(default="USD", min_length=3, max_length=3)
+    currency_code: str = Field(default=DEFAULT_CURRENCY_CODE, min_length=3, max_length=3)
     summary: str = ""
     next_step: str = Field(default="", max_length=255)
     imported_health: str = Field(default="", max_length=16)
@@ -128,7 +145,7 @@ class UpdateProjectCommand(BaseModel):
     start_date: date | None = None
     target_date: date | None = None
     business_value: Decimal | None = None
-    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    currency_code: str | None = Field(default=None, min_length=3, max_length=3)
     summary: str | None = None
     next_step: str | None = Field(default=None, max_length=255)
     is_archived: bool | None = None
@@ -192,22 +209,52 @@ class ProjectStateChange(BaseModel):
     reason: str
 
 
+#: The signed field names ``GET /api/v1/queue`` accepts, mapped to the snapshot columns they sort.
+#: An allowlist rather than a passthrough: ``order_by`` reaches a database, so accepting an
+#: arbitrary name is accepting an arbitrary join, and a name outside this mapping is a 422
+#: (`docs/API.md` §1.4). ``updated_at`` is the wire's name for ``rebuilt_at`` — the read model has
+#: no other "last touched" column, and the projection is rebuilt by every event about the project.
+QUEUE_ORDERING: dict[str, str] = {
+    "score": "priority_score",
+    "target_date": "target_date",
+    "name": "name",
+    "updated_at": "rebuilt_at",
+}
+
+#: The order applied when the caller names none: the queue is a ranking, so it defaults to one.
+DEFAULT_QUEUE_ORDERING = "-score"
+
+
 class SnapshotQueueFilters(BaseModel):
     """The facets and window of one command-center queue read.
 
-    Bundled into a value object rather than passed as seven keyword arguments so the repository
+    Bundled into a value object rather than passed as fifteen keyword arguments so the queryset
     signature does not grow every time the UI gains a facet, and so an unfiltered read is spelled
-    ``SnapshotQueueFilters()`` instead of seven ``None`` literals. ``None`` means "do not filter";
-    the empty string is a real value for ``owner_code`` and matches unowned projects.
+    ``SnapshotQueueFilters()`` instead of a wall of ``None`` literals.
+
+    ``None`` means "do not filter". A repeatable facet arrives as a tuple and ORs its values, which
+    is what the UI's multi-select produces; ``risk_flag_codes`` is the exception and ANDs, because
+    "blocked **and** overdue" is the question an operator asks and "blocked or overdue" is almost
+    every project.
+
+    ``is_archived`` defaults to ``False`` rather than to ``None``: archived projects are out of the
+    operation's attention by definition, so they are excluded unless explicitly asked for.
     """
 
     model_config = ConfigDict(frozen=True)
 
     health: Health | None = None
     state_category: str | None = None
-    engagement_type_code: str | None = None
-    owner_code: str | None = None
-    risk_flag_code: str | None = None
+    state_code: str | None = None
+    engagement_type_codes: tuple[str, ...] = ()
+    project_type_code: str | None = None
+    stage_code: str | None = None
+    owner_codes: tuple[str, ...] = ()
+    risk_flag_codes: tuple[str, ...] = ()
+    has_open_blockers: bool | None = None
+    is_archived: bool = False
+    search: str = ""
+    order_by: str = DEFAULT_QUEUE_ORDERING
     limit: int = Field(default=25, ge=1, le=200)
     offset: int = Field(default=0, ge=0)
 

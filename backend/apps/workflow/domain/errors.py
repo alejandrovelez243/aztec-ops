@@ -19,11 +19,23 @@ class TransitionNotAllowed(DomainError):
     same answer and neither is a 500.
     """
 
-    def __init__(self, entity_id: str, from_state: str, to_state: str) -> None:
+    def __init__(
+        self,
+        entity_id: str,
+        from_state: str,
+        to_state: str,
+        allowed: tuple[str, ...] = (),
+    ) -> None:
         super().__init__(f"No active transition {from_state} -> {to_state} for {entity_id}.")
         self.entity_id = entity_id
         self.from_state = from_state
         self.to_state = to_state
+        #: The target codes that *are* reachable from ``from_state`` right now. Carried on the
+        #: error rather than looked up by the HTTP handler, because the handler runs after the
+        #: aggregate's transaction closed and would be re-reading a graph the rejection already
+        #: knew. `docs/API.md` §1.5 ships it as ``details.allowed`` so a client whose button list
+        #: went stale resyncs from the rejection instead of refetching the project.
+        self.allowed = allowed
 
 
 class ReasonRequired(DomainError):

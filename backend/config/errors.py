@@ -1,0 +1,318 @@
+"""The one place a typed domain error becomes an HTTP status.
+
+Every non-2xx the application produces leaves through this module, in the single shape
+`docs/API.md` §1.5 fixes:
+
+```json
+{"code": "transition_not_allowed", "message": "...", "details": {...}}
+```
+
+**No router catches a domain error.** A ``try/except DomainError`` inside a view is a bug, and it
+is a bug for a specific reason: the mapping from "the blocker was already resolved" to 409 would
+then exist in as many places as there are routes that can raise it, and the fourth one would
+disagree. Adding an error means adding one row to :data:`_DESCRIPTORS` — never a branch in a view.
+
+The client **switches on ``code``, never on ``message``** (`docs/API.md` §4.1). ``message`` is
+English written for a developer reading a log; the Spanish UI maps ``code`` to its own text. That
+is why the messages here are not translated and why changing one is not a breaking change.
+
+Each bounded context owns the root of its own exception tree (``domain/`` may not import another
+app), so this module registers one handler per root and routes them all through one function.
+``500`` is deliberately not in the table: an exception that reaches the fallback is a bug, and
+dressing it up as a typed rejection would hide it.
+"""
+
+import logging
+from collections.abc import Callable, Mapping
+from functools import partial
+from typing import Final
+
+from django.http import HttpRequest, HttpResponse
+from ninja import NinjaAPI
+from ninja.errors import ValidationError as NinjaValidationError
+from pydantic import JsonValue
+
+from apps.accounts.domain import errors as accounts_errors
+from apps.activity.domain import errors as activity_errors
+from apps.catalog.domain import errors as catalog_errors
+from apps.portfolio.domain import errors as portfolio_errors
+from apps.prioritization.domain import errors as prioritization_errors
+from apps.shared.ordering import UnknownOrdering
+from apps.work.domain import errors as work_errors
+from apps.workflow.domain import errors as workflow_errors
+
+logger = logging.getLogger(__name__)
+
+#: Stable machine strings. The frontend branches on these and on nothing else, so they are
+#: constants rather than literals sprinkled through the descriptors below.
+CODE_NOT_FOUND: Final = "not_found"
+CODE_TRANSITION_NOT_ALLOWED: Final = "transition_not_allowed"
+CODE_CONFLICTING_STATE: Final = "conflicting_state"
+CODE_VALIDATION_ERROR: Final = "validation_error"
+
+#: Applied to a ``DomainError`` subclass no descriptor names. 400 rather than 500 because the
+#: error is typed and therefore deliberate — the context meant to reject the request — but the API
+#: has nothing specific to say about it. A new error class showing up as a 400 with an empty
+#: ``details`` is the signal to add a row below.
+_FALLBACK_STATUS: Final = 400
+_FALLBACK_CODE: Final = "domain_error"
+
+#: The exception roots this module maps. One per bounded context, plus the two read-parameter
+#: errors that belong to no context and ninja's own request-validation failure. Registering roots
+#: rather than leaves is what lets a context add an error class without touching this file.
+_HANDLED_ROOTS: Final[tuple[type[Exception], ...]] = (
+    accounts_errors.ActorError,
+    activity_errors.ActivityError,
+    catalog_errors.CatalogError,
+    portfolio_errors.DomainError,
+    prioritization_errors.DomainError,
+    work_errors.DomainError,
+    workflow_errors.DomainError,
+    UnknownOrdering,
+)
+
+
+def _not_found(entity: str) -> Callable[[Exception], dict[str, JsonValue]]:
+    """Build a ``{entity, id}`` details renderer for a ``*NotFound`` carrying one identifier."""
+
+    def render(exc: Exception) -> dict[str, JsonValue]:
+        return {"entity": entity, "id": _first_identifier(exc)}
+
+    return render
+
+
+def _conflict(entity: str, current: str) -> Callable[[Exception], dict[str, JsonValue]]:
+    """Build a ``{entity, id, current}`` details renderer for a state conflict."""
+
+    def render(exc: Exception) -> dict[str, JsonValue]:
+        return {"entity": entity, "id": _first_identifier(exc), "current": current}
+
+    return render
+
+
+def _field(field_name: str) -> Callable[[Exception], dict[str, JsonValue]]:
+    """Build a ``{fields: {name: [message]}}`` details renderer naming one offending field.
+
+    The field name is what lets the UI point at one input instead of showing a banner, which is the
+    difference between an operator fixing the request and an operator giving up on it.
+    """
+
+    def render(exc: Exception) -> dict[str, JsonValue]:
+        return {"fields": {field_name: [str(exc)]}}
+
+    return render
+
+
+def _no_details(_exc: Exception) -> dict[str, JsonValue]:
+    """Details for an error whose message already says everything. Never ``null``, per §1.5."""
+    return {}
+
+
+def _transition_details(exc: Exception) -> dict[str, JsonValue]:
+    """Render ``{from_state, to_state, allowed[]}`` so a stale client resyncs from the rejection.
+
+    ``allowed`` is read off the error rather than re-queried here: the workflow service computed it
+    while it still held the aggregate, and this handler runs after that transaction closed.
+    """
+    return {
+        "from_state": getattr(exc, "from_state", ""),
+        "to_state": getattr(exc, "to_state", ""),
+        "allowed": list(getattr(exc, "allowed", ())),
+    }
+
+
+def _required_field_details(exc: Exception) -> dict[str, JsonValue]:
+    """Render ``{fields: {<the aggregate field>: [message]}}`` for ``RequiredFieldMissing``."""
+    return {"fields": {getattr(exc, "field_name", "unknown"): [str(exc)]}}
+
+
+def _cycle_details(exc: Exception) -> dict[str, JsonValue]:
+    """Render the dependency chain that would have closed, so the operator can break it."""
+    return {"fields": {"depends_on": [str(exc)]}, "cycle": list(getattr(exc, "cycle", ()))}
+
+
+def _ordering_details(exc: Exception) -> dict[str, JsonValue]:
+    """Render the allowlist alongside the rejection: what may be sorted by, not only what may not."""
+    return {"fields": {"order_by": [str(exc)]}, "allowed": list(getattr(exc, "allowed", ()))}
+
+
+#: Exception class → (status, wire code, details renderer). The whole HTTP mapping of the
+#: application, in one table. Ordered by status for reading; lookup walks the MRO, so a subclass
+#: inherits its base's row and only needs an entry of its own when it says something more.
+_DESCRIPTORS: Final[
+    Mapping[type[Exception], tuple[int, str, Callable[[Exception], dict[str, JsonValue]]]]
+] = {
+    # --- 404: the identifier names nothing -------------------------------------------------
+    portfolio_errors.ProjectNotFound: (404, CODE_NOT_FOUND, _not_found("project")),
+    prioritization_errors.ProjectNotFound: (404, CODE_NOT_FOUND, _not_found("project")),
+    work_errors.ProjectNotFound: (404, CODE_NOT_FOUND, _not_found("project")),
+    work_errors.TaskNotFound: (404, CODE_NOT_FOUND, _not_found("task")),
+    work_errors.BlockerNotFound: (404, CODE_NOT_FOUND, _not_found("blocker")),
+    work_errors.PriorityNotFound: (404, CODE_NOT_FOUND, _not_found("priority")),
+    work_errors.PersonNotFound: (404, CODE_NOT_FOUND, _not_found("person")),
+    # --- 409: legal in the workflow, impossible against current facts ------------------------
+    workflow_errors.TransitionNotAllowed: (
+        409,
+        CODE_TRANSITION_NOT_ALLOWED,
+        _transition_details,
+    ),
+    workflow_errors.GuardRejected: (409, CODE_TRANSITION_NOT_ALLOWED, _no_details),
+    portfolio_errors.DuplicateProjectCode: (
+        409,
+        CODE_CONFLICTING_STATE,
+        _conflict("project", "exists"),
+    ),
+    work_errors.BlockerAlreadyResolved: (
+        409,
+        CODE_CONFLICTING_STATE,
+        _conflict("blocker", "resolved"),
+    ),
+    work_errors.DependencyCycle: (409, CODE_CONFLICTING_STATE, _cycle_details),
+    # --- 422: the request is well-formed and the domain refuses it ---------------------------
+    accounts_errors.ActorHeaderMissing: (422, CODE_VALIDATION_ERROR, _field("X-Actor")),
+    accounts_errors.SystemActorRejected: (422, CODE_VALIDATION_ERROR, _field("X-Actor")),
+    accounts_errors.ActorNotFound: (422, CODE_VALIDATION_ERROR, _field("X-Actor")),
+    workflow_errors.ReasonRequired: (422, CODE_VALIDATION_ERROR, _field("reason")),
+    workflow_errors.RequiredFieldMissing: (
+        422,
+        CODE_VALIDATION_ERROR,
+        _required_field_details,
+    ),
+    workflow_errors.WorkflowNotConfigured: (422, CODE_VALIDATION_ERROR, _no_details),
+    workflow_errors.GuardNotRegistered: (422, CODE_VALIDATION_ERROR, _no_details),
+    portfolio_errors.ClientNotFound: (422, CODE_VALIDATION_ERROR, _field("client")),
+    portfolio_errors.OwnerNotFound: (422, CODE_VALIDATION_ERROR, _field("owner")),
+    portfolio_errors.EngagementTypeNotFound: (
+        422,
+        CODE_VALIDATION_ERROR,
+        _field("engagement_type"),
+    ),
+    portfolio_errors.ProjectTypeNotFound: (422, CODE_VALIDATION_ERROR, _field("project_type")),
+    portfolio_errors.StageNotFound: (422, CODE_VALIDATION_ERROR, _field("stage")),
+    portfolio_errors.CurrencyNotFound: (422, CODE_VALIDATION_ERROR, _field("currency")),
+    portfolio_errors.InvalidDateWindow: (422, CODE_VALIDATION_ERROR, _field("target_date")),
+    portfolio_errors.NegativeBusinessValue: (
+        422,
+        CODE_VALIDATION_ERROR,
+        _field("business_value"),
+    ),
+    prioritization_errors.OverrideReasonRequired: (422, CODE_VALIDATION_ERROR, _field("reason")),
+    prioritization_errors.OverrideMechanismAmbiguous: (
+        422,
+        CODE_VALIDATION_ERROR,
+        _field("position"),
+    ),
+    work_errors.TaskOutsideProject: (422, CODE_VALIDATION_ERROR, _field("task_code")),
+    work_errors.DependencyOutsideProject: (422, CODE_VALIDATION_ERROR, _field("depends_on")),
+    work_errors.ResolutionReasonRequired: (422, CODE_VALIDATION_ERROR, _field("resolution")),
+    catalog_errors.UnknownCode: (422, CODE_VALIDATION_ERROR, _no_details),
+    activity_errors.ActivityError: (422, CODE_VALIDATION_ERROR, _no_details),
+    UnknownOrdering: (422, CODE_VALIDATION_ERROR, _ordering_details),
+}
+
+
+def register_exception_handlers(api: NinjaAPI) -> None:
+    """Wire every mapped exception root, plus ninja's own, onto one API instance.
+
+    Called once from :mod:`config.api`. Ninja resolves a handler by walking the raised exception's
+    MRO, so registering the roots covers every subclass a context adds later; :data:`_DESCRIPTORS`
+    is what decides whether that subclass gets its own status or its base's.
+
+    Args:
+        api: The API to attach the handlers to.
+    """
+    for root in _HANDLED_ROOTS:
+        api.add_exception_handler(root, partial(_domain_error_response, api=api))
+    api.add_exception_handler(NinjaValidationError, partial(_request_validation_response, api=api))
+
+
+def _domain_error_response(request: HttpRequest, exc: Exception, *, api: NinjaAPI) -> HttpResponse:
+    """Render one typed domain error in the §1.5 envelope."""
+    status, code, render_details = _descriptor_for(exc)
+    return _envelope(
+        api,
+        request,
+        status=status,
+        code=code,
+        message=str(exc),
+        details=render_details(exc),
+    )
+
+
+def _request_validation_response(
+    request: HttpRequest, exc: NinjaValidationError, *, api: NinjaAPI
+) -> HttpResponse:
+    """Re-shape ninja's request-validation failure into the *same* envelope.
+
+    The client has exactly one parser for every non-2xx (`docs/API.md` §1.5). Ninja's default body
+    is ``{"detail": [...]}``, which would be a second shape the frontend has to recognise, so the
+    per-field messages are folded into ``details.fields`` under the same ``validation_error`` code
+    the domain uses for the same class of problem.
+    """
+    fields: dict[str, JsonValue] = {}
+    for error in exc.errors:
+        location = error.get("loc") or ("body",)
+        # ``loc`` is ("body", "payload", "field"); the last segment is the one a form can point at.
+        name = str(location[-1])
+        fields.setdefault(name, [])
+        messages = fields[name]
+        if isinstance(messages, list):
+            messages.append(str(error.get("msg", "invalid value")))
+    return _envelope(
+        api,
+        request,
+        status=422,
+        code=CODE_VALIDATION_ERROR,
+        message="The request did not validate.",
+        details={"fields": fields},
+    )
+
+
+def _descriptor_for(
+    exc: Exception,
+) -> tuple[int, str, Callable[[Exception], dict[str, JsonValue]]]:
+    """Find the most specific descriptor for this exception by walking its MRO.
+
+    A context that adds an error class without adding a row here still gets a typed 400 rather than
+    a 500, and the empty ``details`` is what makes the omission visible in the response.
+    """
+    for cls in type(exc).__mro__:
+        descriptor = _DESCRIPTORS.get(cls)
+        if descriptor is not None:
+            return descriptor
+    logger.warning(
+        "no HTTP descriptor for domain error; add a row to config.errors._DESCRIPTORS",
+        extra={"error_class": type(exc).__qualname__},
+    )
+    return (_FALLBACK_STATUS, _FALLBACK_CODE, _no_details)
+
+
+def _envelope(
+    api: NinjaAPI,
+    request: HttpRequest,
+    *,
+    status: int,
+    code: str,
+    message: str,
+    details: dict[str, JsonValue],
+) -> HttpResponse:
+    """Serialize the one error shape. ``details`` is an object, possibly empty, never ``null``."""
+    return api.create_response(
+        request,
+        {"code": code, "message": message, "details": details},
+        status=status,
+    )
+
+
+def _first_identifier(exc: Exception) -> str:
+    """The business identifier a ``*NotFound`` carries, whatever its attribute is called.
+
+    Each context names the attribute after what was missing — ``project_code``, ``task_code``,
+    ``blocker_id`` — which is right for the raise site and inconvenient for exactly one reader.
+    Rather than force seven error classes to share one attribute name, the reader adapts.
+    """
+    for attribute in ("project_code", "task_code", "blocker_id", "person_code", "priority_code"):
+        value = getattr(exc, attribute, None)
+        if value is not None:
+            return str(value)
+    return ""

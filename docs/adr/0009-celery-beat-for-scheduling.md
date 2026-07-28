@@ -5,6 +5,11 @@
 Accepted — 2026-07-28. Amends [0003](0003-transactional-outbox-with-redis-streams.md): the
 `transaction.on_commit` and Celery entries in its "Alternatives considered" are corrected there,
 and its rejection of Celery is now scoped to the bus rather than to the whole system.
+Extended by [0010](0010-celery-as-the-bus.md): Celery has since absorbed the bus as well, so the
+"Why Celery is not the bus" section below is **superseded** — the objection it raises (a task queue
+makes the producer name its consumer) is answered by a handler registry rather than waived. The
+`celery-worker` / `worker` distinction this ADR spends a paragraph on no longer exists: there is one
+`worker`. `CELERY_TASK_ACKS_LATE` is now `True`, for the reason 0010 gives.
 
 ## Context
 

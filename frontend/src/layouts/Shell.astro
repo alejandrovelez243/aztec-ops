@@ -1,0 +1,108 @@
+---
+import "../styles/tokens.css";
+import "../styles/base.css";
+import ConnectionBadge from "../islands/ConnectionBadge.astro";
+
+/**
+ * Application shell: a one-row top plate (brand, board switcher, mission clock,
+ * connection badge) above the page slot. There is no sidebar — navigation lives
+ * entirely on this plate (DESIGN.md, Layout).
+ */
+export interface Props {
+  /** Document title, rendered as `<title>{title} — Aztec Ops</title>`. */
+  title: string;
+}
+
+const { title } = Astro.props;
+
+/** Server-rendered UTC fix for the mission clock; the inline script ticks it forward each second. */
+const missionTime = `${new Date().toISOString().replace("T", " ").slice(0, 19)} UTC`;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>{title} — Aztec Ops</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/">
+        <img class="brand-mark" src="/brand/logo.svg" alt="" />
+        <span class="headline">AZTEC OPS</span>
+      </a>
+      <nav class="boards" aria-label="Boards">
+        <a class="label board-link" href="/">COMMAND CENTER</a>
+      </nav>
+      <span class="figure clock" id="mission-clock">{missionTime}</span>
+      <ConnectionBadge />
+    </header>
+    <script is:inline>
+      // Ticks the server-rendered mission clock once per second, in UTC. Kept
+      // inline (no imports): it touches no store and no API, only the clock span.
+      const missionClock = document.getElementById("mission-clock");
+      if (missionClock !== null) {
+        setInterval(() => {
+          missionClock.textContent = `${new Date().toISOString().replace("T", " ").slice(0, 19)} UTC`;
+        }, 1000);
+      }
+    </script>
+    <main>
+      <slot />
+    </main>
+    <script>
+      // The single SSE connection for the whole page is opened here, exactly once
+      // (docs/standards/FRONTEND.md §6). Islands subscribe to the shared store;
+      // none of them may call connect() or construct an EventSource.
+      import { connect } from "../lib/stream/store";
+
+      connect();
+    </script>
+  </body>
+</html>
+
+<style>
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-2) var(--space-4);
+    background: var(--color-plate);
+    border-bottom: 1px solid var(--color-rule);
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--color-legend);
+    text-decoration: none;
+  }
+
+  .brand-mark {
+    display: block;
+    width: auto;
+    height: var(--space-4);
+  }
+
+  .board-link {
+    color: var(--color-legend-dim);
+    text-decoration: none;
+  }
+
+  .board-link:hover {
+    color: var(--color-legend);
+  }
+
+  .board-link:focus-visible {
+    outline: 1px solid var(--color-legend);
+    outline-offset: var(--space-1);
+  }
+
+  .clock {
+    margin-left: auto;
+    color: var(--color-legend);
+  }
+</style>

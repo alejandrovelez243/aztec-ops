@@ -1,0 +1,115 @@
+---
+/**
+ * Connection badge: the only island that renders the SSE store's status.
+ *
+ * Server-rendered as CONNECTING (dim); the colocated script subscribes via
+ * `onStatus` and patches `data-status` plus the legend word. The unsubscribe is
+ * stored and called on `astro:before-swap` — skipping it leaks the handler across
+ * view transitions and keeps patching a detached node (FRONTEND.md §6).
+ */
+---
+
+<div
+  class="badge"
+  data-connection-badge
+  data-status="connecting"
+  role="status"
+  aria-live="polite"
+>
+  <span class="lamp" aria-hidden="true"></span>
+  <span class="label legend" data-connection-label>CONNECTING</span>
+  <button type="button" class="label reconnect" data-connection-reconnect hidden
+    >RECONNECT</button
+  >
+</div>
+
+<script>
+  import { onStatus, retry } from "../lib/stream/store";
+
+  const badge = document.querySelector<HTMLElement>("[data-connection-badge]");
+  if (badge !== null) {
+    const legend = badge.querySelector<HTMLElement>("[data-connection-label]");
+    const reconnect = badge.querySelector<HTMLButtonElement>(
+      "[data-connection-reconnect]",
+    );
+
+    const off = onStatus((status) => {
+      badge.dataset.status = status;
+      if (legend !== null) {
+        legend.textContent =
+          status === "open"
+            ? "LIVE"
+            : status === "connecting"
+              ? "CONNECTING"
+              : "DISCONNECTED";
+      }
+      if (reconnect !== null) {
+        reconnect.hidden = status !== "disconnected";
+      }
+    });
+
+    if (reconnect !== null) {
+      reconnect.addEventListener("click", () => {
+        retry();
+      });
+    }
+
+    document.addEventListener("astro:before-swap", off, { once: true });
+  }
+</script>
+
+<style>
+  .badge {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .lamp {
+    display: block;
+    width: var(--space-2);
+    height: var(--space-2);
+    background: var(--color-legend-dim);
+  }
+
+  .legend {
+    color: var(--color-legend-dim);
+  }
+
+  .badge[data-status="open"] .lamp {
+    background: var(--color-go);
+  }
+
+  .badge[data-status="open"] .legend {
+    color: var(--color-go);
+  }
+
+  .badge[data-status="disconnected"] .lamp {
+    background: var(--color-nogo);
+  }
+
+  .badge[data-status="disconnected"] .legend {
+    color: var(--color-nogo);
+  }
+
+  .reconnect {
+    padding: var(--space-1) var(--space-2);
+    color: var(--color-legend);
+    background: var(--color-plate);
+    border: 1px solid var(--color-rule);
+    cursor: pointer;
+  }
+
+  .reconnect:hover {
+    background: var(--color-panel);
+  }
+
+  .reconnect:focus-visible {
+    outline: 1px solid var(--color-legend);
+    outline-offset: var(--space-1);
+  }
+
+  .reconnect[hidden] {
+    display: none;
+  }
+</style>

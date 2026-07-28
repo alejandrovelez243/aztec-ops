@@ -1,0 +1,87 @@
+---
+/**
+ * One row of the chronology: timestamp, actor, verb, the move (from → to) and the
+ * recorded reason. Used for the server-rendered first paint; the timeline island's
+ * script builds the same structure from live envelopes, so the two never disagree
+ * about shape (docs/standards/PATTERNS_FRONTEND.md §6).
+ *
+ * The verb and the values are rendered as the audit trail recorded them — English,
+ * structural — never translated and never re-derived from codes.
+ *
+ * The styles are global (`timeline-*`): rows appended at runtime by
+ * `document.createElement` would not carry Astro's scoped-style attribute.
+ */
+export interface Props {
+  /** ISO-8601 UTC instant; also carried on `data-occurred-at` for the stale-patch guard. */
+  occurredAt: string;
+  actor: string;
+  verb: string;
+  /** Business code of the sub-entity the entry is about (task, blocker, note), or "". */
+  context: string;
+  fromValue: string;
+  toValue: string;
+  reason: string;
+}
+
+const { occurredAt, actor, verb, context, fromValue, toValue, reason } =
+  Astro.props;
+
+/** `2026-07-28T09:48:03Z` → `2026-07-28 09:48:03`, keeping the seconds the audit has. */
+function formatInstant(iso: string): string {
+  return iso.replace("T", " ").replace("Z", "").slice(0, 19);
+}
+---
+
+<li class="timeline-entry" data-occurred-at={occurredAt}>
+  <span class="figure timeline-time">{formatInstant(occurredAt)}</span>
+  <span class="label timeline-actor">{actor}</span>
+  <span class="label timeline-verb">{verb}</span>
+  {context !== "" && <span class="figure timeline-context">{context}</span>}
+  {
+    (fromValue !== "" || toValue !== "") && (
+      <span class="figure timeline-move">
+        {fromValue}
+        <span aria-hidden="true"> → </span>
+        {toValue}
+      </span>
+    )
+  }
+  {reason !== "" && <span class="body-text timeline-reason">{reason}</span>}
+</li>
+
+<style is:global>
+  .timeline-entry {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-1) 0;
+    border-bottom: var(--border-width) solid var(--color-rule);
+  }
+
+  .timeline-time {
+    color: var(--color-legend-dim);
+    white-space: nowrap;
+  }
+
+  .timeline-actor {
+    color: var(--color-legend);
+  }
+
+  .timeline-verb {
+    color: var(--color-caution);
+  }
+
+  .timeline-context {
+    color: var(--color-legend-dim);
+  }
+
+  .timeline-move {
+    color: var(--color-legend);
+  }
+
+  .timeline-reason {
+    color: var(--color-legend-dim);
+    flex-basis: 100%;
+  }
+</style>

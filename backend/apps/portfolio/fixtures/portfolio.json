@@ -1,0 +1,706 @@
+[
+  {
+    "model": "portfolio.client",
+    "pk": 1,
+    "fields": {
+      "code": "andes_retail",
+      "alias": "Andes Retail",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 2,
+    "fields": {
+      "code": "astera_ops",
+      "alias": "Astera Ops",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 3,
+    "fields": {
+      "code": "atlas_foods",
+      "alias": "Atlas Foods",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 4,
+    "fields": {
+      "code": "civica_regional",
+      "alias": "Civica Regional",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 5,
+    "fields": {
+      "code": "cobalt_logistics",
+      "alias": "Cobalt Logistics",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 6,
+    "fields": {
+      "code": "ferroline_industrial",
+      "alias": "Ferroline Industrial",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 7,
+    "fields": {
+      "code": "heliogrid_energy",
+      "alias": "HelioGrid Energy",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 8,
+    "fields": {
+      "code": "lunara_health",
+      "alias": "Lunara Health",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 9,
+    "fields": {
+      "code": "meridian_legal",
+      "alias": "Meridian Legal",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 10,
+    "fields": {
+      "code": "northfield_proteins",
+      "alias": "Northfield Proteins",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 11,
+    "fields": {
+      "code": "nova_recovery",
+      "alias": "Nova Recovery",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 12,
+    "fields": {
+      "code": "orion_mobility",
+      "alias": "Orion Mobility",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 13,
+    "fields": {
+      "code": "pioneer_insurance",
+      "alias": "Pioneer Insurance",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 14,
+    "fields": {
+      "code": "pulse_creative",
+      "alias": "Pulse Creative",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 15,
+    "fields": {
+      "code": "vector_partners",
+      "alias": "Vector Partners",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.client",
+    "pk": 16,
+    "fields": {
+      "code": "velora_credit",
+      "alias": "Velora Credit",
+      "notes": "",
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 1,
+    "fields": {
+      "code": "PRJ-01",
+      "name": "Global Contract Management",
+      "client": 3,
+      "engagement_type": 1,
+      "project_type": 1,
+      "stage": 2,
+      "workflow_state": 4,
+      "owner": 3,
+      "start_date": null,
+      "target_date": null,
+      "business_value": "28000.00",
+      "currency": 1,
+      "summary": "Plataforma Integral de Gestion de Contratos para el Equipo Legal Global.",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Bloqueado",
+      "created_at": "2026-01-05T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 2,
+    "fields": {
+      "code": "PRJ-02",
+      "name": "Observability Hub",
+      "client": 2,
+      "engagement_type": 2,
+      "project_type": 2,
+      "stage": 2,
+      "workflow_state": 2,
+      "owner": 3,
+      "start_date": null,
+      "target_date": null,
+      "business_value": "8000.00",
+      "currency": 1,
+      "summary": "Sistema de observabilidad multi-cliente (salud + adopcion).",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Bloqueado",
+      "created_at": "2026-01-05T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 3,
+    "fields": {
+      "code": "PRJ-03",
+      "name": "Patient Care Assistant",
+      "client": 8,
+      "engagement_type": 2,
+      "project_type": 1,
+      "stage": 2,
+      "workflow_state": 2,
+      "owner": 2,
+      "start_date": "2026-03-02",
+      "target_date": "2026-03-02",
+      "business_value": "14000.00",
+      "currency": 1,
+      "summary": "Sistema de reservas y chatbot.",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Bloqueado",
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 4,
+    "fields": {
+      "code": "PRJ-04",
+      "name": "Quotation Engine",
+      "client": 13,
+      "engagement_type": 1,
+      "project_type": 1,
+      "stage": 2,
+      "workflow_state": 2,
+      "owner": 2,
+      "start_date": "2026-03-02",
+      "target_date": "2026-03-05",
+      "business_value": "25000.00",
+      "currency": 1,
+      "summary": "Automatizacion de slips de cotizacion.",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Bloqueado",
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 5,
+    "fields": {
+      "code": "PRJ-05",
+      "name": "Multi-Brand Sales Assistant",
+      "client": 12,
+      "engagement_type": 2,
+      "project_type": 1,
+      "stage": 2,
+      "workflow_state": 2,
+      "owner": 4,
+      "start_date": "2026-02-25",
+      "target_date": "2026-03-16",
+      "business_value": "3000.00",
+      "currency": 1,
+      "summary": "Proyecto creado via API.",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Bloqueado",
+      "created_at": "2026-02-25T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 6,
+    "fields": {
+      "code": "PRJ-06",
+      "name": "Recovery and Compensation Ops",
+      "client": 11,
+      "engagement_type": 2,
+      "project_type": 1,
+      "stage": 2,
+      "workflow_state": 2,
+      "owner": 4,
+      "start_date": "2026-02-27",
+      "target_date": "2026-03-16",
+      "business_value": "30000.00",
+      "currency": 1,
+      "summary": "Proyecto creado via API.",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Bloqueado",
+      "created_at": "2026-02-27T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 7,
+    "fields": {
+      "code": "PRJ-07",
+      "name": "Credit Assistant",
+      "client": 16,
+      "engagement_type": 1,
+      "project_type": 2,
+      "stage": 2,
+      "workflow_state": 2,
+      "owner": 2,
+      "start_date": "2026-04-08",
+      "target_date": "2026-04-13",
+      "business_value": null,
+      "currency": 1,
+      "summary": "Proyecto sincronizado desde la plataforma de desarrollo (SUE).",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Bloqueado",
+      "created_at": "2026-04-08T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 8,
+    "fields": {
+      "code": "PRJ-08",
+      "name": "Messaging Qualification Engine",
+      "client": 15,
+      "engagement_type": 1,
+      "project_type": 2,
+      "stage": 2,
+      "workflow_state": 2,
+      "owner": 2,
+      "start_date": null,
+      "target_date": "2026-04-27",
+      "business_value": "35000.00",
+      "currency": 1,
+      "summary": "Proyecto sincronizado desde la plataforma de desarrollo (QUI).",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Bloqueado",
+      "created_at": "2026-01-05T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 9,
+    "fields": {
+      "code": "PRJ-09",
+      "name": "Industrial OCR Quoter",
+      "client": 6,
+      "engagement_type": 1,
+      "project_type": 2,
+      "stage": 2,
+      "workflow_state": 2,
+      "owner": 2,
+      "start_date": null,
+      "target_date": "2026-05-13",
+      "business_value": "22000.00",
+      "currency": 1,
+      "summary": "Proyecto sincronizado desde la plataforma de desarrollo (TMX).",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Bloqueado",
+      "created_at": "2026-01-05T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 10,
+    "fields": {
+      "code": "PRJ-10",
+      "name": "Commercial Image Pipeline",
+      "client": 14,
+      "engagement_type": 1,
+      "project_type": 2,
+      "stage": 2,
+      "workflow_state": 2,
+      "owner": 2,
+      "start_date": null,
+      "target_date": "2026-05-15",
+      "business_value": "18000.00",
+      "currency": 1,
+      "summary": "Proyecto sincronizado desde la plataforma de desarrollo (NEQ).",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Bloqueado",
+      "created_at": "2026-01-05T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 11,
+    "fields": {
+      "code": "PRJ-11",
+      "name": "Public Service Desk",
+      "client": 4,
+      "engagement_type": 1,
+      "project_type": 2,
+      "stage": 2,
+      "workflow_state": 2,
+      "owner": 4,
+      "start_date": null,
+      "target_date": "2026-05-21",
+      "business_value": "15000.00",
+      "currency": 1,
+      "summary": "Proyecto sincronizado desde la plataforma de desarrollo (GOB).",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Bloqueado",
+      "created_at": "2026-01-05T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 12,
+    "fields": {
+      "code": "PRJ-12",
+      "name": "Plant Operations Automation",
+      "client": 10,
+      "engagement_type": 1,
+      "project_type": 2,
+      "stage": 2,
+      "workflow_state": 2,
+      "owner": 5,
+      "start_date": null,
+      "target_date": "2026-05-22",
+      "business_value": "9000.00",
+      "currency": 1,
+      "summary": "Proyecto sincronizado desde la plataforma de desarrollo (NTB).",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Bloqueado",
+      "created_at": "2026-01-05T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 13,
+    "fields": {
+      "code": "PRJ-13",
+      "name": "Commercial Automation Discovery",
+      "client": 7,
+      "engagement_type": 3,
+      "project_type": 2,
+      "stage": 1,
+      "workflow_state": 1,
+      "owner": 6,
+      "start_date": null,
+      "target_date": "2026-05-22",
+      "business_value": "12000.00",
+      "currency": 1,
+      "summary": "Proyecto sincronizado desde la plataforma de desarrollo (SVT).",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "En riesgo",
+      "created_at": "2026-01-05T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 14,
+    "fields": {
+      "code": "PRJ-14",
+      "name": "Vehicle Photography Platform",
+      "client": 12,
+      "engagement_type": 3,
+      "project_type": 1,
+      "stage": 1,
+      "workflow_state": 1,
+      "owner": 5,
+      "start_date": "2026-04-16",
+      "target_date": null,
+      "business_value": "2000.00",
+      "currency": 1,
+      "summary": "Plataforma para que concesionarios tomen fotos y reciban fotos profesionales.",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "En riesgo",
+      "created_at": "2026-04-16T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 15,
+    "fields": {
+      "code": "PRJ-15",
+      "name": "Legal Documents Assistant",
+      "client": 12,
+      "engagement_type": 3,
+      "project_type": 1,
+      "stage": 1,
+      "workflow_state": 1,
+      "owner": 4,
+      "start_date": "2026-04-16",
+      "target_date": null,
+      "business_value": "1000.00",
+      "currency": 1,
+      "summary": "Proyecto creado via API.",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "En riesgo",
+      "created_at": "2026-04-16T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 16,
+    "fields": {
+      "code": "PRJ-16",
+      "name": "Lead Acquisition System",
+      "client": 12,
+      "engagement_type": 3,
+      "project_type": 1,
+      "stage": 1,
+      "workflow_state": 6,
+      "owner": 5,
+      "start_date": "2026-04-16",
+      "target_date": null,
+      "business_value": "1000.00",
+      "currency": 1,
+      "summary": "Proyecto creado via API.",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "En riesgo",
+      "created_at": "2026-04-16T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 17,
+    "fields": {
+      "code": "PRJ-17",
+      "name": "Billing Reconciliation Bot",
+      "client": 2,
+      "engagement_type": 2,
+      "project_type": 1,
+      "stage": 2,
+      "workflow_state": 3,
+      "owner": 3,
+      "start_date": "2026-03-02",
+      "target_date": "2026-08-28",
+      "business_value": "11000.00",
+      "currency": 1,
+      "summary": "Conciliacion automatica de facturacion contra el ERP del cliente.",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Sano",
+      "created_at": "2026-03-02T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 18,
+    "fields": {
+      "code": "PRJ-18",
+      "name": "Inventory Forecasting",
+      "client": 1,
+      "engagement_type": 1,
+      "project_type": 1,
+      "stage": 2,
+      "workflow_state": 2,
+      "owner": 5,
+      "start_date": "2026-05-04",
+      "target_date": "2026-09-12",
+      "business_value": "85000000.00",
+      "currency": 3,
+      "summary": "Pronostico de inventario por punto de venta con reposicion sugerida.",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Sano",
+      "created_at": "2026-05-04T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 19,
+    "fields": {
+      "code": "PRJ-19",
+      "name": "Contract Clause Extractor",
+      "client": 9,
+      "engagement_type": 1,
+      "project_type": 2,
+      "stage": 2,
+      "workflow_state": 2,
+      "owner": 1,
+      "start_date": "2026-06-01",
+      "target_date": "2026-09-30",
+      "business_value": "19000.00",
+      "currency": 1,
+      "summary": "Extraccion de clausulas y obligaciones desde contratos en PDF.",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Sano",
+      "created_at": "2026-06-01T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 20,
+    "fields": {
+      "code": "PRJ-20",
+      "name": "Claims Status Notifier",
+      "client": 11,
+      "engagement_type": 2,
+      "project_type": 1,
+      "stage": 2,
+      "workflow_state": 2,
+      "owner": 4,
+      "start_date": "2026-04-20",
+      "target_date": "2026-10-15",
+      "business_value": "120000000.00",
+      "currency": 3,
+      "summary": "Notificacion automatica de estado de reclamaciones por WhatsApp.",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Sano",
+      "created_at": "2026-04-20T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 21,
+    "fields": {
+      "code": "PRJ-21",
+      "name": "Route Optimization Pilot",
+      "client": 5,
+      "engagement_type": 1,
+      "project_type": 2,
+      "stage": 2,
+      "workflow_state": 5,
+      "owner": 6,
+      "start_date": "2025-11-10",
+      "target_date": "2026-02-10",
+      "business_value": "16000.00",
+      "currency": 1,
+      "summary": "Piloto de optimizacion de rutas para flota regional.",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Sano",
+      "created_at": "2025-11-10T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "portfolio.project",
+    "pk": 22,
+    "fields": {
+      "code": "PRJ-22",
+      "name": "Messaging Qualification Engine (Fase 2)",
+      "client": 15,
+      "engagement_type": 1,
+      "project_type": 2,
+      "stage": 2,
+      "workflow_state": 4,
+      "owner": 2,
+      "start_date": null,
+      "target_date": "2026-04-27",
+      "business_value": "38000.00",
+      "currency": 1,
+      "summary": "Proyecto sincronizado desde la plataforma de desarrollo (QUI).",
+      "next_step": "",
+      "is_archived": false,
+      "imported_health": "Bloqueado",
+      "created_at": "2026-01-05T09:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  }
+]

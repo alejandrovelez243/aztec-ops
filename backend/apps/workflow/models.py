@@ -17,7 +17,9 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import F, Q
 
+from apps.shared.refs import StateRef
 from apps.workflow.domain.errors import WorkflowNotConfigured
+from apps.workflow.domain.views import TransitionOption, required_field_names
 
 
 class AppliesTo(models.TextChoices):
@@ -235,6 +237,21 @@ class WorkflowState(models.Model):
         """Label plus category, because the category is what every other context branches on."""
         return f"{self.label} [{self.category}]"
 
+    def to_ref(self) -> StateRef:
+        """Describe this node as the reference shape every payload carrying a state renders.
+
+        Issues no query: all four values are columns of this row.
+
+        Returns:
+            The state as an immutable :class:`~apps.shared.refs.StateRef`.
+        """
+        return StateRef.of(
+            code=self.code,
+            label=self.label,
+            category=self.category,
+            color=self.color,
+        )
+
 
 class WorkflowTransitionQuerySet(models.QuerySet["WorkflowTransition"]):
     """The legal-move set, sliced the three ways the operation asks for it.
@@ -277,6 +294,28 @@ class WorkflowTransitionQuerySet(models.QuerySet["WorkflowTransition"]):
     def with_states(self) -> Self:
         """Load both endpoints and the workflow, for callers that read the labels off each edge."""
         return self.select_related("from_state", "to_state", "workflow")
+
+    def as_options(self) -> tuple[TransitionOption, ...]:
+        """Materialise the selected edges as the projection the detail endpoint renders.
+
+        Ends the chain: the query executes here, so nothing downstream can add a predicate after
+        the button list was decided. Chain :meth:`with_states` first — each option reads the
+        target state's label, category and color, which is one query per edge otherwise.
+
+        Returns:
+            The edges as immutable :class:`~apps.workflow.domain.views.TransitionOption` values,
+            in ``Meta.ordering`` — the order the operator arranged the buttons in.
+        """
+        return tuple(transition.to_option() for transition in self)
+
+    def target_codes(self) -> tuple[str, ...]:
+        """The ``to_state`` codes of the selected edges. Materialises: it ends the chain.
+
+        This is what ``details.allowed`` carries on a 409 ``transition_not_allowed`` (`docs/API.md`
+        §1.5), so a client whose button list went stale resyncs from the rejection instead of
+        refetching the whole project.
+        """
+        return tuple(self.values_list("to_state__code", flat=True))
 
 
 class WorkflowTransition(models.Model):
@@ -343,6 +382,27 @@ class WorkflowTransition(models.Model):
             raise ValidationError({"from_state": "The source state belongs to another workflow."})
         if self.to_state.workflow_id != self.workflow_id:
             raise ValidationError({"to_state": "The target state belongs to another workflow."})
+
+    def to_option(self) -> TransitionOption:
+        """Describe this edge as the button the frontend renders.
+
+        The projection carries what a client needs to *decide* before acting — the target state,
+        the operator's label, whether a reason is mandatory and which aggregate fields must be
+        filled first — and nothing that would let it act without asking: no primary key, no guard
+        name, no workflow id. The guard is deliberately omitted; whether it passes depends on facts
+        this row does not hold, so advertising it would invite the client to predict the answer.
+
+        Reads ``to_state``, so callers chain :meth:`WorkflowTransitionQuerySet.with_states`.
+
+        Returns:
+            The edge as an immutable :class:`~apps.workflow.domain.views.TransitionOption`.
+        """
+        return TransitionOption(
+            to_state=self.to_state.to_ref(),
+            label=self.label,
+            requires_reason=self.requires_reason,
+            requires_fields=required_field_names(self.requires_fields),
+        )
 
 
 class WorkflowBindingQuerySet(models.QuerySet["WorkflowBinding"]):

@@ -45,8 +45,8 @@ def resolve_blocker(command: ResolveBlockerCommand) -> Blocker:
     audit row still names the project, which is where the fact is read.
 
     Clearing the project's ``BLOCKED`` risk flag is not done here. It is derived state,
-    rebuilt by the ``risk-evaluator`` consumer from ``blocker.resolved``, which is what
-    keeps it reproducible with ``make recompute``.
+    rebuilt by the ``risk-evaluator`` handler from ``blocker.resolved``, which is what
+    keeps it reproducible from a manual recompute.
 
     Args:
         command: Validated input naming the blocker and the resolution reason.

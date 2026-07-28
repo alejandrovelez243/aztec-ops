@@ -1,6 +1,6 @@
 ---
 name: django-clean-arch
-description: How to lay out and write code inside an Aztec Ops Django app (domain/, models.py with its QuerySet/Manager, services/, api/, admin.py, consumers/). Load when adding or modifying a use case, an endpoint, a named query, a model or an event consumer in backend/apps/catalog, backend/apps/workflow, backend/apps/portfolio, backend/apps/work, backend/apps/activity, backend/apps/prioritization or backend/apps/events — or when reviewing whether the §7 dependency rules hold.
+description: How to lay out and write code inside an Aztec Ops Django app (domain/, models.py with its QuerySet/Manager, services/, api/, admin.py, handlers.py). Load when adding or modifying a use case, an endpoint, a named query, a model or an event handler in backend/apps/catalog, backend/apps/workflow, backend/apps/portfolio, backend/apps/work, backend/apps/activity, backend/apps/prioritization or backend/apps/events — or when reviewing whether the §7 dependency rules hold.
 ---
 
 # Layered Django in Aztec Ops
@@ -48,7 +48,8 @@ backend/apps/<context>/
   services/        use cases, transactional
   api/             routers.py, schemas.py
   admin.py
-  consumers/       only in contexts that consume events
+  handlers.py      event reactors, only in contexts that react. The name is fixed: app-ready
+                   autodiscovers exactly `handlers`, so a reactor elsewhere never runs
   migrations/
   fixtures/
 ```
@@ -76,7 +77,9 @@ What goes where:
   transaction, calls the managers, calls domain, writes `ActivityRecord` and `OutboxEvent`.
 - `api/` — `schemas.py` (Ninja Pydantic in/out) and `routers.py` (parse, call service, return
   schema). No querysets, no `Project.objects`.
-- `consumers/` — idempotent handlers keyed on `event.id` via `ProcessedEvent`.
+- `handlers.py` — event reactors: one decorated function per registered handler, deduplicated on
+  `(event.id, handler)` via `ProcessedEvent` by the transport. The handler raises on failure and
+  never opens its own transaction.
 
 ## Dependency rules (§7), as greppable checks
 
@@ -118,9 +121,9 @@ Example: "resolve a blocker on a project". Files touched, in this order.
       the purity of `domain/` is proved by the test base, not by discipline.
     - queryset methods, `services/`, `api/routers.py` → `TestCase`. Each test runs inside a
       transaction that is rolled back, which is why it is fast.
-    - the `OutboxEvent` actually reaching the relay, or anything relying on `on_commit` →
-      `TransactionTestCase`. On `TestCase` the transaction never commits, so the assertion
-      passes while proving nothing.
+    - the `OutboxEvent` actually reaching the drain or a handler, or anything relying on
+      `on_commit` → `TransactionTestCase`, with `EagerCeleryMixin` and `only_handlers(...)`. On
+      `TestCase` the transaction never commits, so the assertion passes while proving nothing.
 
 ```python
 # backend/apps/work/tests/test_resolve_blocker.py
@@ -245,10 +248,11 @@ Notes that matter:
 
 - `@transaction.atomic` on the service function, not on the view and not inside a queryset
   method. Either all three writes land or none do.
-- `enqueue_event` only inserts an `OutboxEvent` row. The relay (`make relay`) is the single
-  process that talks to Redis.
+- `enqueue_event` only inserts an `OutboxEvent` row (plus an `on_commit` kick to the drain, whose
+  failure is caught and logged — the Beat sweeper covers it). The service names a **topic**, never
+  a handler: no `redis` import and no `.delay()` under `services/`.
 - `correlation_id` is generated at the API boundary (or forwarded from the incoming event in a
-  consumer) and threaded through, so "deprioritize A to prioritize B" reads as one decision.
+  handler) and threaded through, so "deprioritize A to prioritize B" reads as one decision.
 - The router stays this thin:
 
 ```python
@@ -303,14 +307,17 @@ where the isolation comes from, not from a mock repository.
 - **Django signals as an event bus.** `post_save` on `Project` that publishes or recalculates.
   Signals fire outside the use case's intent, run inside someone else's transaction, and are
   invisible in the outbox. Every event is written explicitly by the service.
-- **Publishing to Redis from a service.** Any `redis` import under `services/` is a bug (CLAUDE.md
-  rule 4). Write `OutboxEvent`; the relay publishes.
-- **Writing the `ActivityRecord` after commit**, in a second transaction or in a consumer. It must
+- **Publishing to Redis from a service, or calling `.delay()` from one.** Both are bugs (CLAUDE.md
+  rules 4 and 8): the first is a dual write, the second makes the producer name its consumer. Write
+  `OutboxEvent`; the drain asks the registry who reacts.
+- **Writing the `ActivityRecord` after commit**, in a second transaction or in a handler. It must
   be in the same atomic block as the mutation, otherwise the audit trail can lie.
 - **Assigning `workflow_state` directly** in a service or admin action instead of going through
   the transition service that validates `WorkflowTransition`, guards and `requires_fields`.
-- **A consumer that assumes exactly-once.** Every handler starts by claiming `event.id` in
-  `ProcessedEvent` and returns early if it was already processed.
+- **A handler that assumes exactly-once**, catches its own exception, opens its own transaction,
+  or reads `timezone.now()`. The transport claims `(event.id, handler)` around the call; breaking
+  that transaction breaks deduplication, and swallowing the exception loses the event while marking
+  it applied.
 - **Comparing against labels.** `if state.label == "Bloqueado"`. Compare `state.category` or
   `code`; labels are Spanish data edited from the admin.
 - **A queryset method whose annotation lies.** `def open_blockers(...) -> list[Blocker]:
@@ -325,7 +332,7 @@ where the isolation comes from, not from a mock repository.
   the use case is deterministic under test and under replay (PATTERNS §3). The same rule kills
   `date.today()` in a value object.
 - **Missing annotations in the layer you just created.** `ANN` is on: every argument and every
-  return, including `-> None`, in `domain/`, `models.py`, `services/`, `api/`, `consumers/`
+  return, including `-> None`, in `domain/`, `models.py`, `services/`, `api/`, `handlers.py`
   and test helpers. A bare `Any` needs an adjacent comment naming the reason (JSONB payload,
   stub gap, `**kwargs`).
 - **A `Protocol` or ABC over a manager with one implementation.** Services call the manager. The
@@ -335,8 +342,8 @@ where the isolation comes from, not from a mock repository.
   `overdue_tasks_for(user)`, `urgent_open_tasks_for(user)` are one chain wearing three names.
   Add the missing queryset method and let the caller compose.
 - **An outbox or `on_commit` test written on `TestCase`.** The wrapping transaction never commits,
-  so the callback never fires and the relay's `SELECT ... FOR UPDATE SKIP LOCKED` on a second
-  connection cannot see the row. The test is green and proves nothing. Use `TransactionTestCase`.
+  so the callback never fires and the drain's `SELECT ... FOR UPDATE SKIP LOCKED` cannot see the
+  row. The test is green and proves nothing. Use `TransactionTestCase`.
 - **A domain test written on `TestCase`.** It hides the fact that the specification or the signal
   reached the database. `SimpleTestCase` fails the moment `domain/` touches the ORM, which is the
   point of putting the code there.

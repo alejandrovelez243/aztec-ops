@@ -1,0 +1,19 @@
+# Keep the build context to source and lockfile. Anything regenerated, cached or secret stays out:
+# a smaller context is a faster build, and a file that never enters the image cannot leak from it.
+
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+staticfiles/
+
+.env
+*.sqlite3
+.git/
+.DS_Store

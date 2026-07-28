@@ -21,12 +21,14 @@ halves; neither half is allowed to know the other. Nothing here writes into ``wo
 ``accounts``.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
+from datetime import date
 
 from django.db.models import Count, Q
 
 from apps.accounts.models import User
 from apps.portfolio.domain.value_objects import OwnerLoad
+from apps.portfolio.models import Project
 from apps.work.models import CLOSED_CATEGORIES, Task
 from apps.workflow.models import StateCategory
 
@@ -36,11 +38,14 @@ _NO_TASKS: dict[str, int] = {
     "open_task_count": 0,
     "blocked_task_count": 0,
     "urgent_open_task_count": 0,
+    "overdue_task_count": 0,
 }
 
 
-def owner_load_for_codes(member_codes: Sequence[str]) -> dict[str, OwnerLoad]:
-    """Derive current load for the given people in one aggregate query.
+def owner_load_for_codes(
+    member_codes: Sequence[str], *, as_of: date | None = None
+) -> dict[str, OwnerLoad]:
+    """Derive current load for the given people in three aggregate queries.
 
     "Open" is ``workflow_state.category NOT IN (DONE, CANCELLED)`` and "urgent" is
     ``priority.is_urgent`` — both structural facts read from the taxonomy, so adding a workflow
@@ -53,6 +58,10 @@ def owner_load_for_codes(member_codes: Sequence[str]) -> dict[str, OwnerLoad]:
     Args:
         member_codes: ``accounts.User.code`` values to evaluate. Empty returns ``{}`` without
             querying.
+        as_of: The date lateness is measured against. ``None`` means the caller does not need the
+            overdue count and it is reported as zero — the snapshot rebuild is such a caller,
+            because it reads overdue work per *project*, not per person. Passed in rather than
+            read from a clock so a replay reproduces the same answer.
 
     Returns:
         Load per person code. Codes that match nobody are absent from the mapping.
@@ -67,28 +76,8 @@ def owner_load_for_codes(member_codes: Sequence[str]) -> dict[str, OwnerLoad]:
     if not capacities:
         return {}
 
-    # "Open" is the complement of ``work``'s own closed vocabulary, imported rather than re-listed:
-    # a second copy is how a sixth category would silently come to mean "open" (DATA_MODEL §12).
-    is_open = ~Q(workflow_state__category__in=CLOSED_CATEGORIES)
-    rows = (
-        Task.objects.filter(assignee__code__in=capacities.keys())
-        .values("assignee__code")
-        .annotate(
-            open_task_count=Count("pk", filter=is_open),
-            blocked_task_count=Count(
-                "pk", filter=Q(workflow_state__category=StateCategory.BLOCKED)
-            ),
-            urgent_open_task_count=Count("pk", filter=is_open & Q(priority__is_urgent=True)),
-        )
-    )
-    counted: dict[str, dict[str, int]] = {
-        str(row["assignee__code"]): {
-            "open_task_count": int(row["open_task_count"]),
-            "blocked_task_count": int(row["blocked_task_count"]),
-            "urgent_open_task_count": int(row["urgent_open_task_count"]),
-        }
-        for row in rows
-    }
+    counted = _task_counts(codes=capacities.keys(), as_of=as_of)
+    owned = _owned_project_counts(codes=capacities.keys())
 
     return {
         code: OwnerLoad(
@@ -96,7 +85,60 @@ def owner_load_for_codes(member_codes: Sequence[str]) -> dict[str, OwnerLoad]:
             open_task_count=counted.get(code, _NO_TASKS)["open_task_count"],
             blocked_task_count=counted.get(code, _NO_TASKS)["blocked_task_count"],
             urgent_open_task_count=counted.get(code, _NO_TASKS)["urgent_open_task_count"],
+            overdue_task_count=counted.get(code, _NO_TASKS)["overdue_task_count"],
+            owned_project_count=owned.get(code, 0),
             weekly_capacity_points=capacity,
         )
         for code, capacity in capacities.items()
     }
+
+
+def _task_counts(*, codes: Iterable[str], as_of: date | None) -> dict[str, dict[str, int]]:
+    """Group ``work.Task`` by assignee into the four counts the roster reads.
+
+    One grouped query rather than four, because the four definitions have to agree: counting
+    "overdue" separately from "open" is how a cancelled task past its date starts inflating
+    somebody's backlog forever.
+    """
+    # "Open" is the complement of ``work``'s own closed vocabulary, imported rather than re-listed:
+    # a second copy is how a sixth category would silently come to mean "open" (DATA_MODEL §12).
+    is_open = ~Q(workflow_state__category__in=CLOSED_CATEGORIES)
+    # An absent ``as_of`` must count nothing, not everything: ``Q(pk__in=[])`` is the empty filter,
+    # whereas omitting the predicate would count every open task as overdue.
+    is_overdue = Q(due_date__lt=as_of) if as_of is not None else Q(pk__in=[])
+    rows = (
+        Task.objects.filter(assignee__code__in=codes)
+        .values("assignee__code")
+        .annotate(
+            open_task_count=Count("pk", filter=is_open),
+            blocked_task_count=Count(
+                "pk", filter=Q(workflow_state__category=StateCategory.BLOCKED)
+            ),
+            urgent_open_task_count=Count("pk", filter=is_open & Q(priority__is_urgent=True)),
+            overdue_task_count=Count("pk", filter=is_open & is_overdue),
+        )
+    )
+    return {
+        str(row["assignee__code"]): {
+            "open_task_count": int(row["open_task_count"]),
+            "blocked_task_count": int(row["blocked_task_count"]),
+            "urgent_open_task_count": int(row["urgent_open_task_count"]),
+            "overdue_task_count": int(row["overdue_task_count"]),
+        }
+        for row in rows
+    }
+
+
+def _owned_project_counts(*, codes: Iterable[str]) -> dict[str, int]:
+    """Group unarchived ``portfolio.Project`` rows by owner.
+
+    Archived projects are excluded: they are out of the operation's attention by definition, so
+    counting them would make somebody look loaded by work nobody intends to do.
+    """
+    rows = (
+        Project.objects.active()
+        .filter(owner__code__in=codes)
+        .values("owner__code")
+        .annotate(owned=Count("pk"))
+    )
+    return {str(row["owner__code"]): int(row["owned"]) for row in rows}

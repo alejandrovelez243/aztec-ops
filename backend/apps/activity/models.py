@@ -66,6 +66,20 @@ class ActivityRecordQuerySet(models.QuerySet["ActivityRecord"]):
         """
         return self.filter(correlation_id=correlation_id)
 
+    def caused_by_people(self) -> "ActivityRecordQuerySet":
+        """Narrow to the facts somebody caused, excluding the ranking engine's own bookkeeping.
+
+        This is what "days without recorded activity" has to mean. The engine recalculating a
+        score is not somebody moving the work, and counting it makes the ``staleness`` signal
+        read its own output: a project crosses the threshold, its score changes, the
+        recomputation writes a ``POLICY`` record, and the next evaluation finds fresh activity
+        and un-stales the project — an oscillation with no input from the portfolio at all.
+
+        A ``MANUAL`` override stays in. A human forcing a rank *is* attention paid to the
+        project, and it is the ``origin`` column — not the verb — that tells the two apart.
+        """
+        return self.exclude(origin=ActivityRecord.Origin.POLICY)
+
     def newest_first(self) -> "ActivityRecordQuerySet":
         """Order as a feed: most recent fact first, ties broken by insertion order."""
         return self.order_by("-occurred_at", "-id")

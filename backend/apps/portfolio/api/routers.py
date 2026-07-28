@@ -1,0 +1,214 @@
+"""Routes of the portfolio context: the queue, project read and write, and team load.
+
+Every handler here is the same four lines: read the actor, build a command, call one service,
+return what it gave back. There is no ``try/except`` — :mod:`config.errors` maps every typed
+rejection once — and no ``models`` import, so a route cannot quietly grow a query.
+
+``now`` is read once per request and threaded into the service. Services never call
+``timezone.now()`` themselves: that is what makes a replay deterministic and lets a test assert on
+an exact instant. ``correlation_id`` is minted here for the same reason it exists — every record
+and event a single request produces shares it, so "deprioritize A in order to prioritize B"
+reconstructs as one decision instead of two unrelated rows.
+"""
+
+from uuid import uuid4
+
+from django.http import HttpRequest
+from django.utils import timezone
+from ninja import Query, Router
+from ninja.responses import Status
+
+from apps.portfolio.api.schemas import (
+    ProjectCreateIn,
+    ProjectUpdateIn,
+    QueueQuery,
+    TeamLoadQuery,
+    TransitionIn,
+)
+from apps.portfolio.domain.value_objects import (
+    CreateProjectCommand,
+    SnapshotQueueFilters,
+    UpdateProjectCommand,
+)
+from apps.portfolio.domain.views import ProjectDetailView, QueueItemView, TeamLoadPage
+from apps.portfolio.services import (
+    create_project,
+    read_project_detail,
+    read_queue,
+    read_team_load,
+    transition_project,
+    update_project,
+)
+from apps.shared.pagination import Page, PageWindow
+from config.actor import actor_code_of, actor_header
+
+router = Router(tags=["portfolio"])
+
+
+@router.get("/queue", response=Page[QueueItemView], auth=None, url_name="queue")
+def get_queue(request: HttpRequest, filters: Query[QueueQuery]) -> Page[QueueItemView]:
+    """The prioritized project queue: score, breakdown and risk flags, in one read.
+
+    Served from ``ProjectSnapshot`` — the whole command center in one index scan rather than a
+    six-table join with per-row aggregates (ARCHITECTURE §8).
+    """
+    del request
+    window = PageWindow.of(page=filters.page, page_size=filters.page_size)
+    return read_queue(
+        SnapshotQueueFilters(
+            health=filters.health,
+            state_category=filters.state_category,
+            state_code=filters.state,
+            engagement_type_codes=tuple(filters.engagement_type),
+            project_type_code=filters.project_type,
+            stage_code=filters.stage,
+            owner_codes=tuple(filters.owner),
+            risk_flag_codes=tuple(filters.risk_flag),
+            has_open_blockers=filters.has_open_blockers,
+            is_archived=filters.is_archived,
+            search=filters.q,
+            order_by=filters.order_by,
+            limit=window.limit,
+            offset=window.offset,
+        )
+    )
+
+
+@router.get(
+    "/projects/{project_code}",
+    response=ProjectDetailView,
+    auth=None,
+    url_name="project_detail",
+)
+def get_project(request: HttpRequest, project_code: str) -> ProjectDetailView:
+    """One project with its tasks, blockers, risk flags and **legal transitions**.
+
+    ``transitions`` is the only source of transition buttons: the frontend renders exactly what
+    arrives and never guesses legality, so adding a workflow state is a fixture row.
+    """
+    del request
+    return read_project_detail(project_code=project_code, now=timezone.now())
+
+
+@router.post(
+    "/projects",
+    response={201: ProjectDetailView},
+    auth=actor_header,
+    url_name="project_create",
+)
+def post_project(request: HttpRequest, payload: ProjectCreateIn) -> Status[ProjectDetailView]:
+    """Register a project in the initial state of the workflow its engagement type binds to.
+
+    Neither ``code`` nor ``workflow_state`` is accepted: the first is allocated by the service, the
+    second is resolved from ``WorkflowBinding`` (CLAUDE.md rule 2).
+    """
+    now = timezone.now()
+    created = create_project(
+        CreateProjectCommand(
+            name=payload.name,
+            client_code=payload.client,
+            engagement_type_code=payload.engagement_type,
+            project_type_code=payload.project_type,
+            stage_code=payload.stage,
+            owner_code=payload.owner,
+            start_date=payload.start_date,
+            target_date=payload.target_date,
+            business_value=payload.business_value,
+            currency_code=payload.currency,
+            summary=payload.summary,
+            next_step=payload.next_step,
+        ),
+        actor=actor_code_of(request),
+        correlation_id=uuid4(),
+        now=now,
+    )
+    return Status(201, read_project_detail(project_code=created.code, now=now))
+
+
+@router.patch(
+    "/projects/{project_code}",
+    response=ProjectDetailView,
+    auth=actor_header,
+    url_name="project_update",
+)
+def patch_project(
+    request: HttpRequest, project_code: str, payload: ProjectUpdateIn
+) -> ProjectDetailView:
+    """Edit a project's mutable fields. Absent means untouched; explicit ``null`` clears.
+
+    ``workflow_state``, ``health`` and ``score`` are not fields of this payload at all: a state
+    moves through the transition route, and the other two are derived.
+    """
+    now = timezone.now()
+    update_project(
+        _update_command(project_code=project_code, payload=payload),
+        actor=actor_code_of(request),
+        correlation_id=uuid4(),
+        now=now,
+    )
+    return read_project_detail(project_code=project_code, now=now)
+
+
+@router.post(
+    "/projects/{project_code}/transition",
+    response=ProjectDetailView,
+    auth=actor_header,
+    url_name="project_transition",
+)
+def post_project_transition(
+    request: HttpRequest, project_code: str, payload: TransitionIn
+) -> ProjectDetailView:
+    """Move a project along a declared edge, returning it with its **new** legal transitions.
+
+    An undeclared or inactive edge is ``409 transition_not_allowed`` carrying the moves that *are*
+    legal, so a client whose button list went stale resyncs from the rejection.
+    """
+    now = timezone.now()
+    transition_project(
+        project_code=project_code,
+        to_state_code=payload.to_state,
+        actor=actor_code_of(request),
+        reason=payload.reason,
+        correlation_id=uuid4(),
+        now=now,
+    )
+    return read_project_detail(project_code=project_code, now=now)
+
+
+@router.get("/team/load", response=TeamLoadPage, auth=None, url_name="team_load")
+def get_team_load(request: HttpRequest, filters: Query[TeamLoadQuery]) -> TeamLoadPage:
+    """Load per person, computed from task rows at read time.
+
+    The source ``Team`` sheet's counters are a stale projection of the same rows and are
+    deliberately not imported: a stored count and the tasks it summarises drift apart in silence.
+    """
+    del request
+    return TeamLoadPage(
+        items=read_team_load(
+            owner_codes=filters.owner,
+            include_inactive=filters.include_inactive,
+            as_of=timezone.localdate(),
+        )
+    )
+
+
+def _update_command(*, project_code: str, payload: ProjectUpdateIn) -> UpdateProjectCommand:
+    """Carry the caller's absent-versus-null distinction from the payload into the command.
+
+    Only the fields the client actually sent are copied. Building the command from every attribute
+    would turn "do not touch the target date" into "clear the target date", because both arrive as
+    ``None`` — which is precisely the bug ``model_fields_set`` exists to prevent, and why this is a
+    translation rather than a ``model_dump()``.
+    """
+    renamed = {
+        "client": "client_code",
+        "engagement_type": "engagement_type_code",
+        "project_type": "project_type_code",
+        "stage": "stage_code",
+        "owner": "owner_code",
+    }
+    fields = {
+        renamed.get(name, name): value
+        for name, value in payload.model_dump(exclude_unset=True).items()
+    }
+    return UpdateProjectCommand(code=project_code, **fields)

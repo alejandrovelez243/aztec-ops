@@ -75,7 +75,11 @@ class CreateTaskCommand(WorkCommand):
     """
 
     project_code: str = Field(min_length=1, max_length=16)
-    code: str = Field(min_length=1, max_length=16)
+    #: Left empty to let the service mint ``{project_code}-T{NN}``, which is what the HTTP API
+    #: always does: `docs/API.md` §2.8 does not accept a code from a client, because a caller that
+    #: chooses an identifier can collide with one an already-published event names. A fixture or a
+    #: migration pins its own code by setting this.
+    code: str = Field(default="", max_length=16)
     title: str = Field(min_length=1, max_length=200)
     priority_code: str = Field(min_length=1, max_length=32)
     assignee_code: str | None = None

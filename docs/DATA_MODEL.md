@@ -22,7 +22,7 @@ Apps in dependency order: `catalog` → `accounts` → `workflow` → `portfolio
 
 ## 1. `backend/apps/catalog` — taxonomies
 
-Five tables the operation edits from the admin without a deploy (`ARCHITECTURE` §3.1). They share
+Six tables the operation edits from the admin without a deploy (`ARCHITECTURE` §3.1). They share
 an abstract base, so the first five columns are identical everywhere.
 
 ### `TaxonomyBase` (abstract, no table)
@@ -68,6 +68,28 @@ Seeded: `critica` (13 tasks), `alta` (38), `media` (23), `baja` (8).
 ### `catalog_role` — the role a person holds
 
 Base columns only. FK target of `accounts.User.role` (`on_delete=SET_NULL`, `related_name="members"`).
+
+### `catalog_currency` — what a project is billed in
+
+| Column | Type | Null | Default | Index | Meaning |
+|---|---|---|---|---|---|
+| *(base columns)* | | | | | |
+| `minor_units` | `smallint` | no | `2` | — | ISO-4217 exponent: the decimal places the amount is written with. `0` for CLP and JPY, `2` for USD and EUR. |
+
+`code` is the ISO-4217 **alphabetic** code in upper case, and the database enforces the shape:
+`CHECK (code ~ '^[A-Z]{3}$')`, so `usd` and `EURO` are rejected at write time rather than
+discovered by a client that cannot match them. `minor_units` is bounded by
+`CHECK (minor_units <= 4)` — 4 is the widest exponent the standard defines (CLF).
+
+`minor_units` is not decoration. It is the one fact a client cannot derive, and getting it wrong is
+a rendering error of two orders of magnitude: `28000` is `$280.00` in USD and `$28.000` in CLP. It
+is served on every currency by `GET /api/v1/catalog`, which is what lets the frontend render a
+validated select and format an amount without hardcoding a list.
+
+Seeded: `USD` (20 projects), `COP` (2), plus the regional currencies a Spanish-speaking services
+operation bills in — `MXN`, `CLP`, `PEN`, `ARS`, `EUR`. Deliberately not all 180 of the standard:
+a picker that lists every currency on earth is a picker nobody can use, and a value that is needed
+is one admin row away.
 
 ---
 
@@ -184,7 +206,7 @@ the context that consumes it rather than on a manager.
 | `start_date` | `date` | yes | `null` | — | Null on 9 source projects. Never backfilled. |
 | `target_date` | `date` | yes | `null` | `(target_date)` | Null on 5 source projects, and that null raises `NO_TARGET_DATE`. Never backfilled with `today()` or a sentinel. |
 | `business_value` | `numeric(12,2)` | yes | `null` | — | Contract value. Arrives as a string in the source and is cast at fixture generation. Log-normalized in the engine. |
-| `currency` | `varchar(3)` | no | `'USD'` | — | ISO 4217. |
+| `currency_id` | `bigint` FK → `catalog_currency` | no | — | FK index | `on_delete=PROTECT`: a currency is referenced by history, and deleting one would rewrite what a signed contract was worth. Retire it with `is_active` instead. |
 | `summary` | `text` | no | `''` | — | |
 | `next_step` | `varchar(255)` | no | `''` | — | Empty string, not null, so `HasNoNextStep` is one predicate. Empty plus no in-progress task = no clear next step. |
 | `is_archived` | `boolean` | no | `false` | `(is_archived, workflow_state)` | Excluded from the queue and from most risk specifications. |
@@ -220,7 +242,7 @@ is a single indexed scan instead of a six-table join plus per-row aggregates.
 | `start_date` | `date` | yes | `null` | — | |
 | `target_date` | `date` | yes | `null` | `(target_date)` | Timeline sort. |
 | `business_value` | `numeric(12,2)` | yes | `null` | — | |
-| `currency` | `varchar(3)` | no | `'USD'` | — | |
+| `currency` | `varchar(3)` | no | `'USD'` | — | The **code**, denormalized like every other reference on this table. The read model is flat by design; the decimal places come from `GET /api/v1/catalog`. |
 | `next_step` | `varchar(255)` | no | `''` | — | |
 | `priority_score` | `numeric(5,2)` | no | `0` | `(is_archived, -priority_score)` | 0–100. The queue sort key. |
 | `priority_policy_version` | `varchar(16)` | no | `''` | — | Which policy produced the score. |
@@ -238,7 +260,7 @@ is a single indexed scan instead of a six-table join plus per-row aggregates.
 | `oldest_blocker_age_days` | `smallint` | yes | `null` | — | Feeds the blockers panel ordering. |
 | `last_activity_at` | `timestamptz` | yes | `null` | — | Latest `ActivityRecord.occurred_at`. Drives `IsStale`. |
 | `is_archived` | `boolean` | no | `false` | `(is_archived, -priority_score)` | |
-| `rebuilt_at` | `timestamptz` | no | `auto_now` | — | Last rebuild. A stale value against a busy stream means the rebuild consumer is behind. |
+| `rebuilt_at` | `timestamptz` | no | `auto_now` | — | Last rebuild. A stale value against a busy outbox means the `snapshot-builder` handler is behind. |
 | `last_event_id` | `uuid` | yes | `null` | — | Envelope id of the event that produced this row. Makes a stale snapshot traceable to a specific delivery. |
 
 ---
@@ -520,7 +542,9 @@ history is reconstructible. Project `health` is derived from the open rows and i
 ## 7. `backend/apps/events` — the bus
 
 Both tables live in one app because they are one concern: getting a committed fact out of
-PostgreSQL and applying it exactly once per consumer group.
+PostgreSQL and applying it exactly once per handler. Celery is the transport
+([ADR 0010](adr/0010-celery-as-the-bus.md)); these two tables are the durability and the
+idempotency, and neither changed when the transport did.
 
 ### 7.1 `events_outboxevent` — the transactional outbox
 
@@ -539,21 +563,28 @@ mutation and the `ActivityRecord`. Nothing else writes it, and no service import
 | `version` | `smallint` | no | `1` | — | Payload schema version. Bumped when a field is removed or retyped. |
 | `occurred_at` | `timestamptz` | no | — | claim index below | Domain time. Publication order is by `(occurred_at, id)`. |
 | `created_at` | `timestamptz` | no | `auto_now_add` | — | Row time. Differs from `occurred_at` on backfills. |
-| `published_at` | `timestamptz` | yes | `null` | **partial claim index** | Set by the relay only after `XADD` returns. Null = not yet on the stream. |
-| `stream_entry_id` | `varchar(32)` | no | `''` | — | Redis entry id returned by `XADD`, e.g. `1753689164123-0`. Makes an event traceable from the table to the stream. |
-| `attempts` | `smallint` | no | `0` | — | Relay publish attempts. Incremented on failure. |
-| `last_error` | `varchar(500)` | no | `''` | — | Last publish failure, visible in the admin. |
+| `published_at` | `timestamptz` | yes | `null` | **partial claim index** | Set by `events.drain_outbox` inside the claiming transaction, meaning "dispatched to its handlers". Null = not yet dispatched. |
+| `attempts` | `smallint` | no | `0` | — | Handler delivery attempts. Incremented on failure. |
+| `last_error` | `varchar(500)` | no | `''` | — | Last delivery failure, visible in the admin. |
+| `dead_lettered_at` | `timestamptz` | yes | `null` | `events_outbox_deadletter_idx` | Set when a handler exhausted `EVENT_MAX_ATTEMPTS`. The row **is** the dead letter. |
 
-The dead letter queue is the Redis stream `aztec.events.dlq`, not a table. It holds consumer-side
-failures, which are a different failure than "the relay could not publish"; the relay's failures
-stay visible as unpublished rows with a rising `attempts`.
+**The dead letter queue is a column, not a second queue.** Past the retry budget,
+`dead_lettered_at` and `last_error` are set on the row that already exists — nothing is copied and
+nothing is deleted, so the failed event still carries its topic, payload and correlation id. The
+admin filters pending / dispatched / dead-lettered and offers "Re-queue selected dead-lettered
+events", which clears `dead_lettered_at` and resets `published_at` so the next drain re-dispatches
+the same envelope with the same `event.id`. That action is what replaced Redis stream replay, and it
+is narrower: you re-queue the rows you chose.
 
-### 7.2 `events_processedevent` — consumer deduplication
+`stream_entry_id` was dropped in `events/migrations/0002_celery_transport.py`. There is no stream
+entry to point at.
+
+### 7.2 `events_processedevent` — handler deduplication
 
 | Column | Type | Null | Default | Index | Meaning |
 |---|---|---|---|---|---|
-| `event_id` | `uuid` | no | — | unique with `consumer_group` | The envelope `id`. Not a FK to `OutboxEvent`: the table must stay prunable independently of the outbox. |
-| `consumer_group` | `varchar(48)` | no | — | same unique | `priority-recalculator` \| `risk-evaluator` \| `sse-fanout` \| `snapshot-rebuild`. The same event is legitimately processed once per group. |
+| `event_id` | `uuid` | no | — | unique with `handler` | The envelope `id`. Not a FK to `OutboxEvent`: the table must stay prunable independently of the outbox. |
+| `handler` | `varchar(48)` | no | — | same unique | The **registry name** of the reactor: `priority-recalculator` \| `risk-evaluator` \| `snapshot-builder` \| `sse-fanout`. The same event is legitimately processed once per handler. Renaming a deployed handler replays history for it, so the name is released API. |
 | `processed_at` | `timestamptz` | no | `auto_now_add` | `(processed_at)` | Retention sweep key. |
 
 The handler inserts this row and does its work in one transaction. A duplicate hits the unique
@@ -653,6 +684,8 @@ outside.
 | Table | Constraint | Rule |
 |---|---|---|
 | `catalog_engagementtype`, `catalog_priority` | `weight > 0` | A zero weight would silently delete a signal's effect. |
+| `catalog_currency` | `code ~ '^[A-Z]{3}$'` | ISO-4217 alphabetic code. The taxonomy is interoperable vocabulary, not an operator-invented slug. |
+| `catalog_currency` | `minor_units <= 4` | 4 is the widest exponent the standard defines (CLF). A larger one renders an amount nobody can reconcile. |
 | `portfolio_project` | `start_date IS NULL OR target_date IS NULL OR start_date <= target_date` | Nulls allowed on purpose; an inverted pair is data corruption. |
 | `portfolio_project` | `business_value IS NULL OR business_value >= 0` | |
 | `accounts_user` | `weekly_capacity_points > 0` | It is a divisor. |
@@ -664,8 +697,7 @@ outside.
 | `prioritization_priorityoverride` | `num_nonnulls(position, boost) = 1` | Exactly one override mechanism per row. |
 | `prioritization_priorityoverride` | `length(trim(reason)) > 0` | Mandatory reason, enforced where it cannot be forgotten. |
 | `prioritization_riskflag` | `cleared_at IS NULL OR cleared_at >= detected_at` | |
-| `events_outboxevent` | `attempts >= 0` | |
-| `events_outboxevent` | `published_at IS NULL OR stream_entry_id <> ''` | A row cannot claim to be published without the entry id proving it. |
+| `events_outboxevent` | `attempts >= 0` | The only check on this table. The old `published_at IS NULL OR stream_entry_id <> ''` was dropped with the stream (`events/migrations/0002_celery_transport.py`): there is no entry id to prove anything with, and `published_at` now means "dispatched". |
 
 ### 9.3 Enforced in the application layer, and why
 
@@ -681,7 +713,7 @@ outside.
 | `PriorityPolicy.weights` keys match the signal registry and sum to 1.0 | policy load in `backend/apps/prioritization/domain/` | Postgres cannot know which strategies are registered in the Python process. Loading raises rather than silently defaulting a missing weight to zero. |
 | `ActivityRecord` is append-only | `save()`/`delete()` overrides on the model, `has_change_permission` / `has_delete_permission` returning `False` in the admin | Making it truly immutable needs a `BEFORE UPDATE OR DELETE` trigger and a role that cannot `DROP` it. That is real database administration, out of scope here (`ARCHITECTURE` §12); the two Python-level blocks cover every path the application has. |
 | `Project.health` is derived, never stored | read model + risk evaluator | There is no column to constrain. That is the point. |
-| A resolved `Blocker` clears the project's `BLOCKED` risk flag | `risk-evaluator` consumer | Derived state is rebuilt from events, not maintained by a trigger, so it stays reproducible with `make recompute`. |
+| A resolved `Blocker` clears the project's `BLOCKED` risk flag | `risk-evaluator` handler | Derived state is rebuilt from events, not maintained by a trigger, so it stays reproducible from the admin's recompute action. |
 | Task `due_date` may fall after the project `target_date` | nothing enforces it | Real portfolio data does this constantly. Rejecting it would make the seed unloadable and would hide the overdue signal instead of surfacing it. |
 
 ---
@@ -713,8 +745,8 @@ LIMIT 25;
   signal's input. Partial, because a resolved blocker is never read by either.
 
 The write-side equivalent (`portfolio_project` joined to scores, flags, tasks and blockers) exists
-only in the admin and in `make recompute`. It is not indexed for latency, and that is the trade the
-read model buys.
+only in the admin and in the recompute service. It is not indexed for latency, and that is the
+trade the read model buys.
 
 ### 10.2 The project timeline read — `GET /api/v1/projects/{code}/timeline`
 
@@ -738,7 +770,7 @@ LIMIT 50;
   the per-project task counts in the rebuild.
 - `work_note (project_id, created_at DESC)` — the notes section of the same page.
 
-### 10.3 The outbox relay claim query
+### 10.3 The outbox drain claim query
 
 ```sql
 SELECT * FROM events_outboxevent
@@ -749,36 +781,39 @@ FOR UPDATE SKIP LOCKED;
 ```
 
 - `events_outboxevent (occurred_at, id) WHERE published_at IS NULL` — **partial on purpose**. The
-  unpublished set is the relay's working set and is nearly always tiny; the published set is the
+  unpublished set is the drain's working set and is nearly always tiny; the published set is the
   whole history and is never scanned by this query. A full index on `published_at` would keep every
   published row in the index and grow monotonically for no reader. As rows are published they leave
   the index, so its size tracks the backlog rather than the table.
-- The `ORDER BY` matches the index so `SKIP LOCKED` hands each relay process a disjoint prefix and
-  several relays can run without coordination.
+- The `ORDER BY` matches the index so `SKIP LOCKED` hands each worker a disjoint prefix and several
+  drains can run without coordination — which is also why the on-commit kick and the Beat sweep
+  cannot collide.
 - `events_outboxevent (topic, occurred_at DESC)` and `(entity_type, entity_id)` — admin
-  investigation only ("what did we publish for PRJ-01"), not on the relay's hot path.
-- `events_outboxevent (correlation_id)` — joins a published event back to its `ActivityRecord`.
+  investigation only ("what did we dispatch for PRJ-01"), not on the drain's hot path.
+- `events_outboxevent (correlation_id)` — joins a dispatched event back to its `ActivityRecord`.
+- `events_outbox_deadletter_idx` on `dead_lettered_at` — the admin filter and `make outbox`.
 
 Diagnostic that depends on this index: a growing count of rows matching `published_at IS NULL`
-means the relay is down or behind. Zero such rows with a stale UI means the service never wrote the
-outbox row, which is a service bug, not a relay bug.
+means the worker is down or behind. Zero such rows with a stale UI means the service never wrote the
+outbox row, which is a service bug, not a transport bug. `make outbox` is exactly these counts.
 
-### 10.4 Consumer deduplication
+### 10.4 Handler deduplication
 
 ```sql
-INSERT INTO events_processedevent (event_id, consumer_group, processed_at) VALUES (...);
--- IntegrityError => already applied by this group => XACK and move on
+INSERT INTO events_processedevent (event_id, handler, processed_at) VALUES (...);
+-- IntegrityError => already applied by this handler => return "duplicate", no reprocessing
 ```
 
-- `events_processedevent UNIQUE (event_id, consumer_group)` — this unique index is both the lookup
-  and the enforcement. The handler does not `SELECT` first: a check-then-insert is a race under
-  concurrent consumers in the same group, whereas the insert either succeeds or raises, atomically,
+- `events_processedevent UNIQUE (event_id, handler)` — this unique index is both the lookup and the
+  enforcement. The transport does not `SELECT` first: a check-then-insert is a race between two
+  workers holding the same delivery, whereas the insert either succeeds or raises, atomically,
   inside the same transaction as the handler's own writes.
 - Column order matters: `event_id` leads because it is always an equality on a high-cardinality
   UUID, so the index is selective on its first column alone.
 - `events_processedevent (processed_at)` — the retention sweep that deletes rows older than the
-  stream's own retention. Without a sweep this table outgrows every other one; without the index the
-  sweep becomes a sequential scan.
+  outbox retention window. Without a sweep this table outgrows every other one; without the index
+  the sweep becomes a sequential scan. **The sweep is not built yet** — an acknowledged debt
+  ([ADR 0010](adr/0010-celery-as-the-bus.md)).
 
 ---
 
@@ -789,11 +824,11 @@ field with no named owner is a field that goes stale silently.
 
 | Field | Source of truth | Rebuilt by | Trigger |
 |---|---|---|---|
-| all of `portfolio_projectsnapshot` | `Project` + `Task` + `Blocker` + `PriorityScore` + `RiskFlag` + `ActivityRecord` | `snapshot-rebuild` consumer, `backend/apps/portfolio/consumers/` | any event with `entity.type == "project"`, plus `task.*` and `blocker.*` events resolved to their project |
-| `projectsnapshot.priority_score`, `priority_policy_version`, `breakdown` | `prioritization_priorityscore` | `snapshot-rebuild`, after `priority-recalculator` emits `project.priority.recalculated` | `project.priority.recalculated` |
-| `projectsnapshot.risk_flags`, `health` | open `prioritization_riskflag` rows | `snapshot-rebuild`, after `risk-evaluator` emits `project.risk.changed` | `project.risk.changed` |
-| `projectsnapshot.owner_load_points` | `Task` rows assigned to the owner | `snapshot-rebuild` | any `task.*` event; the load of **every** snapshot owned by that person is recomputed, not just the event's project |
-| `projectsnapshot.last_activity_at` | `activity_activityrecord.occurred_at` | `snapshot-rebuild` | every event |
+| all of `portfolio_projectsnapshot` | `Project` + `Task` + `Blocker` + `PriorityScore` + `RiskFlag` + `ActivityRecord` | `snapshot-builder` handler, `backend/apps/portfolio/handlers.py` | every topic except `clock.ticked`; `task.*` and `blocker.*` events resolve to their project through `payload.project_code` |
+| `projectsnapshot.priority_score`, `priority_policy_version`, `breakdown` | `prioritization_priorityscore` | `snapshot-builder`, after `priority-recalculator` emits `project.priority.recalculated` | `project.priority.recalculated` |
+| `projectsnapshot.risk_flags`, `health` | open `prioritization_riskflag` rows | `snapshot-builder`, after `risk-evaluator` emits `project.risk.changed` | `project.risk.changed` |
+| `projectsnapshot.owner_load_points` | `Task` rows assigned to the owner | `snapshot-builder` | any `task.*` event; the load of **every** snapshot owned by that person is recomputed, not just the event's project |
+| `projectsnapshot.last_activity_at` | `activity_activityrecord.occurred_at` | `snapshot-builder` | every event |
 | `priorityscore.breakdown.flags` | open `RiskFlag` rows | `priority-recalculator` | recomputation |
 | `priorityscore.policy_version` | `prioritization_prioritypolicy.version` | never — frozen copy | written once, at computation |
 | `work_blocker.project_id` on a task-level blocker | `work_task.project_id` | never — written by the service at creation | a blocker cannot change project |
@@ -851,7 +886,7 @@ Python.
   `WorkflowState.category`, `Blocker.kind` or `ActivityRecord.verb` **is** a migration, because
   those are structural.
 - A new priority signal ships as a new `PriorityPolicy` row with a new `version`, not as an edit to
-  the active one. Then `make recompute`.
+  the active one. Then recompute the portfolio — the admin action or `POST /api/v1/recompute`.
 - Fixture load order is fixed by the FK graph: `catalog workflows portfolio work activity`. Never a
   glob. Every fixture object carries an explicit `pk`, which is what makes `make seed` an upsert and
   what `make test -k seed_idempotency` verifies.

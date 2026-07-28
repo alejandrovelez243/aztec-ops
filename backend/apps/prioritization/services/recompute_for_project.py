@@ -1,9 +1,15 @@
-"""Use case: recompute one project's score and risk flags.
+"""Use case: recompute one project's priority score.
 
 Ends at the database. It writes no ``ActivityRecord`` and no ``OutboxEvent``: the caller — the
 ``priority-recalculator`` consumer — decides what to record and what to publish, and it only does
 so when this function reports that something actually changed. That is what keeps a clock tick on
 a quiet portfolio from producing twenty-two identical events every five minutes.
+
+**Risk flags are not persisted here.** The specifications are evaluated, because the breakdown
+denormalizes the raised flag codes, but the ``RiskFlag`` rows are written by
+``evaluate_risk_for_project`` and by nothing else. Two groups reconciling the same rows would make
+the second one see its own change already applied and stay silent, so ``project.risk.changed``
+would be lost exactly when the risk moved. One writer per table, one group per reason to react.
 """
 
 from datetime import datetime
@@ -13,13 +19,18 @@ from django.db import transaction
 from pydantic import BaseModel, ConfigDict
 
 from ..domain.errors import ActivePolicyNotFound
+from ..domain.events import ORIGIN_MANUAL, ORIGIN_POLICY, ScoreOrigin
 from ..domain.policies import load_policy
 from ..domain.scoring import compute_breakdown, compute_input_hash, compute_valid_until
-from ..domain.specifications import derive_health, evaluate_risk
-from ..domain.types import Health, RiskFlag
-from ..models import PriorityPolicy, PriorityScore
-from ..models import RiskFlag as RiskFlagRow
+from ..domain.specifications import evaluate_risk
+from ..domain.types import ScoreBreakdown
+from ..models import PriorityOverride, PriorityPolicy, PriorityScore
 from .collect_project_facts import collect_project_facts
+
+#: Key of the breakdown document that moves on every single computation. Excluded from the
+#: comparison that decides whether to emit, because ``computed_at`` is *when* we looked, not *what*
+#: we found: comparing it would make every redelivery and every clock tick look like a change.
+_TIMESTAMP_KEY = "computed_at"
 
 
 class RecomputeResult(BaseModel):
@@ -27,7 +38,12 @@ class RecomputeResult(BaseModel):
 
     ``changed`` is the whole point: under at-least-once delivery the same event arrives twice and
     the second recomputation must be observable as a no-op, not as a second
-    ``project.priority.recalculated`` reaching every open browser.
+    ``project.priority.recalculated`` reaching every open browser. It is true when the value moved
+    **or** when the breakdown did — a rank that stays at 61.4 for a materially different reason is
+    news to the operator reading the reason.
+
+    ``breakdown`` is carried out whole rather than as the persisted document so the caller can
+    build its payload without re-reading the row it just wrote.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -37,34 +53,34 @@ class RecomputeResult(BaseModel):
     value: Decimal
     previous_value: Decimal | None
     policy_version: str
-    health: Health
-    raised_flags: tuple[str, ...]
-    cleared_flags: tuple[str, ...]
+    origin: ScoreOrigin
+    breakdown: ScoreBreakdown
     valid_until: datetime | None
 
 
 @transaction.atomic
 def recompute_for_project(*, project_code: str, now: datetime) -> RecomputeResult:
-    """Score one project, reconcile its risk flags, and report whether anything moved.
+    """Score one project against the active policy and report whether anything moved.
 
-    The score row and the flag rows are written in one transaction, so a reader never sees a
-    score justified by flags that were not persisted. Recomputation short-circuits when the input
-    hash and the policy version both match the stored row — same facts, same criterion, same
-    number — which is what makes the recalculator cheap under duplicate delivery.
+    Recomputation short-circuits when the input hash and the policy version both match the stored
+    row — same facts, same criterion, same number — which is what makes the recalculator cheap
+    under duplicate delivery: the second arrival of an event reads one row and writes none.
 
     Args:
         project_code: Business code, e.g. ``"PRJ-01"``.
-        now: The instant to score for; also the ``detected_at`` / ``cleared_at`` of any flag
-            movement, so a replay does not invent a new time.
+        now: The instant to score for. Supplied by the caller from the envelope, never read from
+            the clock, so a replayed event reproduces the score that was correct then instead of
+            inventing a new one.
 
     Returns:
-        The new value, the previous one, the flags that moved, the derived health and the next
-        instant a time-dependent signal can change bucket.
+        The new value, the previous one, the breakdown that justifies it, whether any of that
+        moved, and the next instant a time-dependent signal can change bucket.
 
     Raises:
         ActivePolicyNotFound: No policy is active; the engine refuses to rank against an implicit
             criterion.
-        ProjectNotFound: The code names no project.
+        ProjectNotFound: The code names no project — for a consumer, an event about an aggregate
+            that no longer exists, which retrying will not fix.
         PolicySignalMismatch: The active policy and the signal registry disagree.
         PolicyWeightsNotNormalized: The active policy's weights do not sum to 1.0.
     """
@@ -83,6 +99,7 @@ def recompute_for_project(*, project_code: str, now: datetime) -> RecomputeResul
     flags = evaluate_risk(data.as_risk_input())
     breakdown = compute_breakdown(data=data, policy=policy, flags=flags)
     input_hash = compute_input_hash(data)
+    origin = _origin(project_id=facts.project_id, now=now)
 
     stored = PriorityScore.objects.for_project(facts.project_id).first()
     previous_value = stored.value if stored is not None else None
@@ -97,19 +114,19 @@ def recompute_for_project(*, project_code: str, now: datetime) -> RecomputeResul
             value=stored.value,
             previous_value=previous_value,
             policy_version=policy.version,
-            health=derive_health(flags),
-            raised_flags=(),
-            cleared_flags=(),
+            origin=origin,
+            breakdown=breakdown,
             valid_until=stored.valid_until,
         )
 
+    document = breakdown.as_document()
     valid_until = compute_valid_until(data)
     PriorityScore.objects.update_or_create(
         project_id=facts.project_id,
         defaults={
             "value": breakdown.value,
             "policy_version": breakdown.policy_version,
-            "breakdown": breakdown.as_document(),
+            "breakdown": document,
             "modifier_total": breakdown.modifier_total,
             "computed_at": now,
             "input_hash": input_hash,
@@ -117,60 +134,49 @@ def recompute_for_project(*, project_code: str, now: datetime) -> RecomputeResul
         },
     )
 
-    raised, cleared = _reconcile_flags(project_id=facts.project_id, flags=flags, now=now)
-
     return RecomputeResult(
         project_code=project_code,
-        changed=previous_value != breakdown.value or bool(raised) or bool(cleared),
+        changed=_moved(stored=stored, value=breakdown.value, document=document),
         value=breakdown.value,
         previous_value=previous_value,
         policy_version=policy.version,
-        health=derive_health(flags),
-        raised_flags=raised,
-        cleared_flags=cleared,
+        origin=origin,
+        breakdown=breakdown,
         valid_until=valid_until,
     )
 
 
-def _reconcile_flags(
-    *, project_id: int, flags: tuple[RiskFlag, ...], now: datetime
-) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Bring the persisted flags in line with the evaluation, preserving each open episode.
+def _moved(*, stored: PriorityScore | None, value: Decimal, document: dict[str, object]) -> bool:
+    """Whether this computation is news, rather than the same answer reached again.
 
-    A flag that is still satisfied keeps its original ``detected_at`` — that is what lets the UI
-    say "blocked for 19 days" — and only its ``detail`` is refreshed. A flag that stops being
-    satisfied is cleared rather than deleted, and raising it again creates a new row, so the risk
-    history stays reconstructible.
+    A first computation is always news. Afterwards the number and the explanation are both
+    compared, because the UI renders both — but ``computed_at`` is stripped from the comparison,
+    since it differs on every delivery and would report every quiet tick as a change.
     """
-    satisfied = {flag.code: flag for flag in flags}
-    open_rows = {
-        row.code: row for row in RiskFlagRow.objects.for_project(project_id).open().oldest_first()
-    }
+    if stored is None:
+        return True
+    if stored.value != value:
+        return True
+    return _without_timestamp(stored.breakdown) != _without_timestamp(document)
 
-    cleared: list[str] = []
-    for code, stale_row in open_rows.items():
-        if code in satisfied:
-            continue
-        stale_row.cleared_at = now
-        stale_row.save(update_fields=["cleared_at"])
-        cleared.append(code)
 
-    raised: list[str] = []
-    for code, flag in satisfied.items():
-        open_row = open_rows.get(code)
-        if open_row is None:
-            RiskFlagRow.objects.create(
-                project_id=project_id,
-                code=flag.code,
-                severity=flag.severity.value,
-                detail=flag.detail,
-                detected_at=now,
-            )
-            raised.append(code)
-            continue
-        if open_row.detail != flag.detail or open_row.severity != flag.severity.value:
-            open_row.detail = flag.detail
-            open_row.severity = flag.severity.value
-            open_row.save(update_fields=["detail", "severity"])
+def _without_timestamp(document: object) -> dict[str, object]:
+    """The comparable part of a breakdown document, tolerating a row written before this shape."""
+    if not isinstance(document, dict):
+        return {}
+    return {key: value for key, value in document.items() if key != _TIMESTAMP_KEY}
 
-    return tuple(raised), tuple(cleared)
+
+def _origin(*, project_id: int, now: datetime) -> ScoreOrigin:
+    """Whether a human is currently forcing this project's position.
+
+    Expiry is evaluated here rather than inside the named query: a query must not read a clock its
+    caller did not choose, or a replayed event would resolve the override against the wrong
+    instant.
+    """
+    override = PriorityOverride.objects.for_project(project_id).live().first()
+    if override is None:
+        return ORIGIN_POLICY
+    if override.expires_at is not None and override.expires_at <= now:
+        return ORIGIN_POLICY
+    return ORIGIN_MANUAL

@@ -1,72 +1,90 @@
 ---
 name: event-driven-flow
-description: Load when adding, renaming or versioning an event topic, writing an OutboxEvent from a service, implementing or debugging a Redis Streams consumer (priority-recalculator, risk-evaluator, sse-fanout), touching the outbox relay or the DLQ, or when an event is emitted but never reaches the browser.
+description: Load when adding, renaming or versioning an event topic, writing an OutboxEvent from a service, implementing or debugging a registered Celery event handler (priority-recalculator, risk-evaluator, snapshot-builder, sse-fanout), touching the outbox drain or a dead-lettered event, or when an event is emitted but never reaches the browser.
 ---
 
 # Adding an event end to end
 
-The bus is: service writes `OutboxEvent` in the same transaction as the state change → relay
-publishes to the Redis stream `aztec.events` → consumer groups handle it → `sse-fanout`
-`PUBLISH aztec.sse` → `GET /api/stream` → Astro island. See §6 of `docs/ARCHITECTURE.md`.
+The bus is: service writes `OutboxEvent` in the same transaction as the state change →
+`events.drain_outbox` (a Celery task) claims the row and queues one `events.handle_event` per
+**registered handler** subscribed to the topic → `sse-fanout` does `PUBLISH aztec.sse` →
+`GET /api/stream` → Astro island. See §6 of `docs/ARCHITECTURE.md`, §5 and §6 of `docs/EVENTS.md`,
+and [ADR 0010](../../../docs/adr/0010-celery-as-the-bus.md).
 
-## Why the outbox exists
+There is **no relay process, no Redis stream, no consumer group and no DLQ stream.** Redis is the
+Celery broker and the `aztec.sse` pub/sub channel, nothing else. If you are about to write
+`XADD`, `XREADGROUP`, `XACK` or `XPENDING`, you are working from a stale mental model.
 
-Without it a service does `save()` then `redis.xadd()`. The concrete failure: **the
-transaction commits and the publish never happens** — the process is killed, Redis is
-restarting, the network drops between the two calls. The state change is durable, the event is
-gone forever, and the priority score, the risk flags and the read model `ProjectSnapshot` stay
-stale with no way to notice. The reverse also breaks: publish first, then the transaction rolls
-back, and consumers react to a change that never existed.
+## Why the outbox exists — and why it survived the transport change
 
-The outbox removes the dual write. `OutboxEvent` is a row in the same PostgreSQL transaction as
-the aggregate mutation and the `ActivityRecord`: either all three exist or none do. The relay is
-a separate process that reads unpublished rows with `SELECT ... FOR UPDATE SKIP LOCKED` and
-publishes them. If it crashes mid-publish the row is still unpublished and gets republished —
-which is exactly why delivery is at-least-once and consumers must be idempotent.
+Without it a service does `save()` then publishes. The concrete failure: **the transaction commits
+and the publish never happens** — the process is killed, the broker is restarting, the network drops
+between the two calls. The state change is durable, the event is gone forever, and the priority
+score, the risk flags and the read model `ProjectSnapshot` stay stale with no way to notice. The
+reverse also breaks: publish first, then the transaction rolls back, and handlers react to a change
+that never existed.
+
+The outbox removes the dual write. `OutboxEvent` is a row in the same PostgreSQL transaction as the
+aggregate mutation and the `ActivityRecord`: either all three exist or none do. That guarantee is a
+property of the *table*, not of the transport, which is why swapping Redis Streams for Celery
+changed nothing about it.
+
+`enqueue_event` does call `transaction.on_commit(drain_outbox.delay)`, and that is **not** a dual
+write: the kick is an optimization, and a broker failure there is caught and logged. Celery Beat
+sweeps the same table every `EVENT_DRAIN_INTERVAL_SECONDS`, so the worst case is latency. **Never**
+move the `OutboxEvent` write itself into `on_commit` — that is the dual write with extra steps.
+
+Delivery is at-least-once: the drain can die after queuing tasks and before committing
+`published_at`. Handlers must be idempotent.
 
 ## Standards that bind here
 
-`docs/standards/BACKEND.md` and `docs/standards/PATTERNS_BACKEND.md` are normative for every file
-touched in this flow: `domain/events.py`, `services/`, `consumers/`, the relay and the DLQ. Three
-rules bite hardest here.
+`docs/standards/BACKEND.md` and `docs/standards/PATTERNS_BACKEND.md` (§1 outbox, §7 pub/sub) are
+normative for every file touched in this flow: `domain/events.py`, `services/`, `handlers.py`, and
+`apps/events/tasks.py`. Three rules bite hardest.
 
 **Typed envelope, not loose dicts** (BACKEND §1, PATTERNS §1). The envelope and each topic payload
 are frozen Pydantic models (`model_config = ConfigDict(frozen=True)`) in
 `backend/apps/<context>/domain/events.py`, annotated end to end. The only `dict[str, Any]` allowed
-is the `OutboxEvent.payload` JSONB column itself, and a consumer parses it into the topic's model
-at the first line that reads it — no `envelope["payload"]["from"]` reaching into a handler body, no
-`Any` without an adjacent comment naming the JSONB reason. `BaseModel` is the same type system
+is the `OutboxEvent.payload` JSONB column itself, and a handler parses it into the topic's model at
+the first line that reads it — no `envelope.payload["from"]` reaching into a handler body, no `Any`
+without an adjacent comment naming the JSONB reason. `BaseModel` is the same type system
 django-ninja already uses, so an envelope or payload crosses to the API without a parallel schema
 restating its fields, and a malformed payload fails at construction rather than at the boundary.
 
-**No bare `except`, nothing swallowed** (BACKEND §5, `BLE` in ruff). Services and queryset methods never
-catch `Exception`. The consumer boundary is the one permitted catch-all, and only in the full shape:
-log with `event_id` and consumer group, publish to `aztec.events.dlq`, `XACK` in `finally`.
-`except IntegrityError` on the `ProcessedEvent` claim is the only silent path, and only after a
-debug log plus the ack. `except: pass` and `except: return None` fail review anywhere in this flow.
+**No bare `except`, nothing swallowed** (BACKEND §5, `BLE` in ruff). Services, handlers and queryset
+methods never catch `Exception`. The **delivery boundary in `apps/events/tasks.py` is the one
+permitted catch-all**, and it is already written: log with `event_id`, `topic`, `handler` and
+`attempt`, retry with backoff, dead-letter past the budget, and re-raise on both branches. A handler
+that catches its own failure to "keep things moving" marks the event applied and loses it forever.
+`except IntegrityError` on the `ProcessedEvent` claim is the only silent path, and it lives in
+`_claim`, not in your handler.
 
-**The docstring states the idempotency key** (BACKEND §2). Every consumer handler is a public
-symbol, so the docstring is mandatory and must say what the signature cannot: the topic consumed,
-the dedup key `(event_id, consumer_group)`, what the effect is, and what happens on the duplicate
-path. A docstring that says "Handles the event" is a missing docstring. Payload models state
-their `version` and what a bump means.
+**The docstring states the idempotency key and the failure mode** (BACKEND §2). Every handler is a
+public symbol, so the docstring is mandatory and must say what the signature cannot: what it
+reacts to, what the effect is, what it emits, and — in `Raises:` — what a failure means, because
+raising is the retry path. A docstring that says "Handles the event" is a missing docstring. Payload
+models state their `version` and what a bump means.
 
 ## Checklist
 
 ### 1. Name the topic and document it
 
 `<entity>.<event>` or `<entity>.<aspect>.<event>`, lowercase, dot-separated, past tense.
-Current topics (§6):
+Current topics:
 
 ```
 project.created            project.updated          project.state_changed
 project.priority.recalculated                       project.risk.changed
-task.created               task.state_changed
+task.created               task.updated             task.state_changed
 blocker.raised             blocker.resolved         note.added
+clock.ticked
 ```
 
-Add the new topic to that list in §6 of `docs/ARCHITECTURE.md` in the same commit. An
-undocumented topic is invisible to whoever writes the next consumer.
+Add the full entry to `docs/EVENTS.md` §4 and the line to `docs/ARCHITECTURE.md` §6 in the same
+commit, then register the `TOPIC_*` constant in `backend/apps/events/domain/envelope.py`. That
+catalog is not documentation-only: `register_handler` validates every subscription against it at
+import, so an unregistered topic is a boot failure rather than a handler that silently never fires.
 
 ### 2. Define the versioned payload
 
@@ -87,163 +105,174 @@ The envelope is fixed; only `payload` changes per topic.
 
 Declare the payload as a typed Pydantic model in `backend/apps/<context>/domain/events.py` (pure, no
 Django import). `version` starts at 1. Adding an optional field keeps the version; removing or
-retyping a field means `version: 2` and a consumer that handles both until nothing emits 1.
-`entity.id` is the business code (`PRJ-01`), not the database primary key — consumers in other
-contexts must not need a FK into your models.
+retyping a field means `version: 2` and a handler that handles both until nothing emits 1.
+`entity.id` is the business code (`PRJ-01`), not the database primary key — handlers in other
+contexts must not need a FK into your models. For a non-project entity, put `project_code` in the
+payload so `snapshot-builder` can aggregate without one.
 
 ### 3. Emit from the service, inside the transaction
 
-Only `backend/apps/<context>/services/` writes events, wrapped in `transaction.atomic()`, alongside the
-`ActivityRecord`. A service that imports the Redis client is a bug (CLAUDE.md rule 4).
+Only `backend/apps/<context>/services/` writes events, wrapped in `transaction.atomic()`, alongside
+the `ActivityRecord`. A service that imports the Redis client is a bug, and so is a service that
+calls `.delay()` — naming a task is naming a consumer (CLAUDE.md rules 4 and 8).
 
 ```python
 # backend/apps/workflow/services/transition.py  (shape, not a literal copy)
 with transaction.atomic():
     project.workflow_state = transition.to_state
     project.save(update_fields=["workflow_state"])
-    activity_repo.record(verb="STATE_CHANGED", entity=project, from_value=..., to_value=...,
-                         reason=reason, actor=actor, correlation_id=correlation_id)
-    outbox_repo.append(topic="project.state_changed", entity=("project", project.code),
-                       payload={"from": ..., "to": ..., "reason": reason},
-                       actor=actor, correlation_id=correlation_id, version=1)
+    write_activity(ActivityCommand(verb="STATE_CHANGED", ...))
+    enqueue_event(
+        topic=TOPIC_PROJECT_STATE_CHANGED,
+        entity_type=ENTITY_PROJECT, entity_id=project.code,
+        payload=StateChangedPayload.of(...).model_dump(mode="json"),
+        actor=actor, correlation_id=correlation_id, occurred_at=now, version=1,
+    )
 ```
 
-Reuse the `correlation_id` of the request so "deprioritize A to prioritize B" stays one movement
-in the timeline.
+The service names a **topic** and stops. It does not know that `snapshot-builder` exists. Reuse the
+`correlation_id` of the request so "deprioritize A to prioritize B" stays one movement in the
+timeline.
 
-### 4. Decide which consumer group handles it
+### 4. Decide which handler reacts
 
-One group per reason to react, never one group per topic — a failing group must not block the
-others. Existing groups on `aztec.events`:
+One handler per **reason to react**, never one per topic — a failing handler must not block the
+others, and each gets its own delivery task. Registered handlers:
 
-- `priority-recalculator` — recomputes `PriorityScore`, emits `project.priority.recalculated`.
-- `risk-evaluator` — re-runs the risk specifications, emits `project.risk.changed`.
-- `sse-fanout` — `PUBLISH aztec.sse` for topics the browser needs.
+| Handler | Declared in | Reacts to | Emits |
+|---|---|---|---|
+| `priority-recalculator` | `apps/prioritization/handlers.py` | the nine write-side topics + `clock.ticked` | `project.priority.recalculated` |
+| `risk-evaluator` | `apps/prioritization/handlers.py` | same | `project.risk.changed` |
+| `snapshot-builder` | `apps/portfolio/handlers.py` | `ALL_TOPICS - {clock.ticked}` | nothing |
+| `sse-fanout` | `apps/events/handlers.py` | the SSE allowlist | nothing |
 
-Plus the read-side rebuild of `ProjectSnapshot` (§8), which reacts to any event carrying
-`entity.type == "project"`. If the new topic changes anything shown in the command center, it
-must reach that rebuild or the UI shows stale joins.
+`snapshot-builder` subscribes by subtraction, so a new topic reaches the read model automatically —
+which is the point: forgetting one produces a silently stale command center, not an error. The two
+engines subscribe to the write side only and never to what they emit; that is what keeps the graph
+acyclic. If your new topic must change the ranking, add its constant to `ENGINE_TOPICS`.
 
-### 5. Implement the idempotent handler
+### 5. Implement the handler
 
-Handlers live in `backend/apps/<context>/consumers/`. Deduplicate on `event.id` with the
-`ProcessedEvent` table, in the same transaction as the effect:
+A handler is a **function** in `backend/apps/<context>/handlers.py`. The module name is
+load-bearing: app-ready calls `autodiscover_modules("handlers")`, so a reactor in `reactors.py` is
+never imported and silently never runs — no error anywhere.
 
 ```python
-with transaction.atomic():
-    _, created = ProcessedEvent.objects.get_or_create(
-        event_id=event.id, consumer_group="priority-recalculator"
-    )
-    if not created:
-        return  # already applied; still XACK below
-    recalculate(project_code=event.entity["id"])
+# backend/apps/prioritization/handlers.py
+from apps.events.domain.envelope import TOPIC_CLOCK_TICKED, EventEnvelope
+from apps.events.domain.routing import project_code_of
+from apps.events.registry import register_handler
+
+RISK_EVALUATOR = "risk-evaluator"
+
+
+@register_handler(name=RISK_EVALUATOR, topics=ENGINE_TOPICS)
+def evaluate_risk(envelope: EventEnvelope) -> None:
+    """Re-run the risk specifications for the project this event names.
+
+    Emits ``project.risk.changed`` only when the flag set or the derived health moved, so a
+    redelivery that changes nothing publishes nothing.
+
+    Args:
+        envelope: A delivered event on one of :data:`ENGINE_TOPICS`.
+
+    Raises:
+        ProjectNotFound: The event names a project that no longer exists. Deliberately not caught:
+            raising is what produces the retry, the log line and finally the dead letter.
+    """
+    evaluate_risk_for_project(project_code=project_code_of(envelope), now=envelope.occurred_at)
 ```
 
-The unique key is `(event_id, consumer_group)`: the same event is legitimately processed once
-per group. `XACK` after the transaction commits, and `XACK` on the duplicate path too — an
-unacked duplicate stays pending forever. Let unexpected exceptions propagate: the runner retries
-with backoff and, after N failures, moves the entry to `aztec.events.dlq`, which is visible in
-the admin.
+What the handler may assume, and what it must not do:
+
+- It runs **inside an open `transaction.atomic()` that already holds its `ProcessedEvent` claim**
+  for `(envelope.id, name)`. Everything it writes commits with that claim or not at all, which is
+  what makes a retry a real retry instead of a silent skip. Never open a second transaction, never
+  call `commit`, never open a second connection.
+- It is never called twice for the same `envelope.id` under the same name *after a success*. It can
+  absolutely be called twice after a failure.
+- `envelope.topic` is always in its declared `topics`.
+- **Time comes from `envelope.occurred_at`** (or `payload.tick_at` for a tick), never
+  `timezone.now()`. A redelivery must land on the same result.
+- It must **raise** on failure. `try/except: pass` here is an event that vanished.
+
+`sse-fanout` is the one handler permitted to hold a Redis client, because publishing *is* its
+effect and there is no database write for it to be inconsistent with.
 
 ### 6. Decide whether it reaches the browser
 
-If the UI must react live, add the topic to the `sse-fanout` allowlist and to the store the
-Astro islands subscribe to. There is one shared `EventSource`; components subscribe to the
-store, never open their own connection (§9). If nothing in the UI changes, leave the topic out
-of the fanout instead of publishing noise the client discards.
+If the UI must react live, add the topic to `SSE_ALLOWLIST_TOPICS` **and** to
+`frontend/src/lib/stream/topics.ts`, and subscribe an island to it. There is one shared
+`EventSource`; components subscribe to the store, never open their own connection (§9). If nothing
+in the UI changes, leave the topic out of the fanout instead of publishing noise the client
+discards.
 
 ### 7. Add the delivery test
 
-Integration tests required by §11, and on this path the base class is the whole point
+Integration tests required by ARCHITECTURE §11, and on this path the base class is the whole point
 (CLAUDE.md rule 15). **Everything on the event path is `TransactionTestCase`.** `TestCase` wraps
-each test in a transaction that never commits: `transaction.on_commit` callbacks never fire, and
-the relay's `SELECT ... FOR UPDATE SKIP LOCKED` runs on a second connection that cannot see rows
-your test transaction has not committed. An outbox, relay or consumer test written on `TestCase`
-passes while proving nothing — it is a false pass, not a slow test you optimised.
+each test in a transaction that never commits: `transaction.on_commit` callbacks never fire, and the
+drain's `SELECT ... FOR UPDATE SKIP LOCKED` runs on a connection that cannot see rows your test
+transaction has not committed. An outbox, drain or handler test written on `TestCase` passes while
+proving nothing — a false pass, not a slow test you optimised.
+
+Two helpers exist and you should use both:
+
+- `apps/events/tests/celery_support.py` — `EagerCeleryMixin`, so queued tasks run inline.
+- `apps/events/tests/registry_support.py` — `only_handlers(...)` and `RecordingHandler`. **Narrow
+  the registry in every handler test.** Committing an outbox row kicks the drain inline under eager
+  Celery, and a full registry fans the event out to `sse-fanout`, which reaches Redis.
 
 What to cover, one class per behaviour:
 
-- service call → exactly one `OutboxEvent` row with the right topic and `version`; rollback of
-  the transaction leaves zero rows.
-- relay run → the entry appears on `aztec.events` with the envelope intact.
-- handler invoked twice with the same `event.id` → the effect happens once and both calls ack.
-- end to end: outbox → consumer → `ProjectSnapshot` updated / SSE frame emitted.
+- service call → exactly one `OutboxEvent` row with the right topic and `version`; a rolled-back
+  transaction leaves zero rows.
+- drain → one `events.handle_event` per subscribed handler, and the row is marked `published_at`.
+- handler applied twice with the same `event.id` → the effect happens once, the second call reports
+  `duplicate`.
+- past `EVENT_MAX_ATTEMPTS` → `dead_lettered_at` and `last_error` set on the row; the re-queue path
+  is a real retry.
+- end to end: outbox → handler → `ProjectSnapshot` updated / envelope on `aztec.sse`.
 
 ```python
-# backend/apps/workflow/tests/test_outbox.py  (shape, not a literal copy)
+# backend/apps/prioritization/tests/test_handlers.py  (shape, not a literal copy)
 from django.test import TransactionTestCase
 
+from apps.events.registry import get_handler
+from apps.events.tasks import apply_once
+from apps.events.tests.celery_support import EagerCeleryMixin
+from apps.events.tests.registry_support import only_handlers
 
-class OutboxWriteTests(TransactionTestCase):
-    """The service writes exactly one row, in the state change's transaction."""
+
+class RiskEvaluatorTests(EagerCeleryMixin, TransactionTestCase):
+    """One effect per (event, handler), however many times it is delivered."""
 
     def setUp(self) -> None:
-        self.execution = WorkflowStateFactory(code="execution")
-        self.blocked = WorkflowStateFactory(code="blocked")
+        self.project = ProjectFactory(code="PRJ-01")
 
-    def test_transition_writes_one_outbox_row(self) -> None:
-        project = ProjectFactory(workflow_state=self.execution)
-
-        transition_service.execute(code=project.code, to_state="blocked", actor="camila")
-
-        events = list(OutboxEvent.objects.filter(entity_id=project.code))
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0].topic, "project.state_changed")
-        self.assertEqual(events[0].version, 1)
-
-    def test_rollback_leaves_no_outbox_row(self) -> None:
-        project = ProjectFactory(workflow_state=self.execution)
-
-        with self.assertRaises(IllegalTransition):
-            transition_service.execute(code=project.code, to_state="closed", actor="camila")
-
-        self.assertEqual(OutboxEvent.objects.count(), 0)
-
-
-class RelayDeliveryTests(TransactionTestCase):
-    """The relay claims committed rows on its own connection and publishes them intact."""
-
-    def test_published_entry_carries_the_envelope(self) -> None:
-        event = OutboxEventFactory(topic="project.state_changed", entity_id="PRJ-01")
-
-        relay.drain_once()
-
-        entries = redis.xrange("aztec.events", count=10)
-        self.assertEqual(len(entries), 1)
-        envelope = decode_envelope(entries[0][1])
-        self.assertEqual(envelope.id, event.id)
-        self.assertEqual(envelope.topic, "project.state_changed")
-        self.assertEqual(envelope.entity["id"], "PRJ-01")
-        event.refresh_from_db()
-        self.assertIsNotNone(event.published_at)
-
-
-class ConsumerIdempotencyTests(TransactionTestCase):
-    """The same event.id applies its effect once per consumer group, and acks both times."""
-
-    def test_duplicate_event_applies_the_effect_once(self) -> None:
+    def test_duplicate_delivery_applies_the_effect_once(self) -> None:
         envelope = envelope_for("project.state_changed", entity_id="PRJ-01")
 
-        for delivery in ("first", "second"):
-            with self.subTest(delivery=delivery):
-                handle(envelope)
+        with only_handlers("risk-evaluator"):
+            first = apply_once(get_handler("risk-evaluator"), envelope)
+            second = apply_once(get_handler("risk-evaluator"), envelope)
 
+        self.assertTrue(first)
+        self.assertFalse(second)
         self.assertEqual(
-            ProcessedEvent.objects.filter(
-                event_id=envelope.id, consumer_group="priority-recalculator"
-            ).count(),
-            1,
+            ProcessedEvent.objects.filter(event_id=envelope.id, handler="risk-evaluator").count(), 1
         )
-        self.assertEqual(PriorityScore.objects.filter(project__code="PRJ-01").count(), 1)
 ```
 
-One caveat when writing these: `setUpTestData` is a `TestCase` optimisation and does not exist
-on `TransactionTestCase`, which truncates the tables between tests. Build the shared rows with
-factories in `setUp` here, and keep `setUpTestData` for the ordinary database tests around this
-path — the API route that lists the DLQ, the `ProcessedEvent` queries — which are
-plain `TestCase`. Anything purely about the envelope or the payload models (validation, version
-bump, topic naming) is `SimpleTestCase`: no database, so the purity of `domain/events.py` is
-enforced by the base class.
+Going through `apply_once(get_handler(NAME), envelope)` rather than calling the function directly is
+deliberate: it puts the registration name, the claim and the duplicate path under test too.
+
+One caveat: `setUpTestData` is a `TestCase` optimisation and does not exist on
+`TransactionTestCase`, which truncates tables between tests. Build shared rows with factories in
+`setUp` here, and keep `setUpTestData` for the ordinary database tests around this path. Anything
+purely about the envelope, the payload models or a *subscription shape* (which topics a handler
+declares) is `SimpleTestCase` — the registry is pure Python, so no database is needed to assert
+that no engine consumes what an engine emits.
 
 Assertions are the unittest methods, never bare `assert`. Do not reach for
 `pytest.mark.django_db` — the base class already declares what database access the test gets.
@@ -251,58 +280,74 @@ Assertions are the unittest methods, never bare `assert`. Do not reach for
 ## Debugging
 
 ```bash
-# is the stream receiving anything?
-docker compose exec redis redis-cli XLEN aztec.events
-docker compose exec redis redis-cli XREVRANGE aztec.events + - COUNT 5
+# the first command, always: is anything stuck or dead?
+make outbox
+curl -s localhost:8000/api/v1/health/pipeline
 
-# groups, their lag and their consumers
-docker compose exec redis redis-cli XINFO GROUPS aztec.events
-docker compose exec redis redis-cli XPENDING aztec.events risk-evaluator - + 10
+# the whole event path in one log stream
+make logs-worker
 
-# events stuck in the dead letter stream
-docker compose exec redis redis-cli XLEN aztec.events.dlq
-docker compose exec redis redis-cli XRANGE aztec.events.dlq - + COUNT 10
+# is the worker alive, and what is retrying?
+docker compose exec api celery -A config inspect ping
+docker compose exec api celery -A config inspect active
+docker compose exec api celery -A config inspect scheduled
 
-# is it stuck before Redis? unpublished outbox rows
-make relay   # run the relay in the foreground and watch it drain
+# which handlers are actually registered (catches a module not named handlers.py)
+docker compose exec api python manage.py shell -c \
+  "from apps.events.registry import registered_handlers; print(registered_handlers())"
+
+# force one drain pass synchronously
+docker compose exec api python manage.py shell -c \
+  "from apps.events.tasks import drain_outbox; print(drain_outbox(batch_size=50))"
+
+# is the fan-out publishing? (leave open, then trigger a change)
+docker compose exec redis redis-cli SUBSCRIBE aztec.sse
 ```
 
-Read the symptom this way: rows pile up in `OutboxEvent` unpublished → the relay is down.
-`XLEN` grows but `XPENDING` grows with it → a consumer reads and never acks, or it crashes
-before the ack. `XPENDING` flat and the DLQ growing → the handler raises deterministically on
-that payload. Everything empty and the UI still stale → the service never wrote the outbox row.
+Read the symptom this way. `pending` climbing in `make outbox` → the worker is down or cannot reach
+the broker. `dispatched` climbing but nothing reacts → the event was dispatched to nobody: the
+handler is not registered, or not subscribed to that topic. `dead_lettered > 0` → the handler raises
+deterministically on that payload; read `last_error` on the row. Everything zero and the UI still
+stale → the service never wrote the outbox row. Rows applied by every handler but the browser blank
+→ SSE, not the bus (RUNBOOK §11).
+
+`SELECT handler FROM events_processedevent WHERE event_id = '<uuid>'` is the replacement for
+`XINFO CONSUMERS`: it says exactly which handlers applied a given event and which one is missing.
 
 ## Common mistakes
 
-- **Publishing from the service.** `redis` imported anywhere under `services/` is the bug; the
-  service writes `OutboxEvent` only.
-- **Non-idempotent consumers.** Incrementing a counter, appending an `ActivityRecord` or
-  emitting a downstream event without checking `ProcessedEvent` first. At-least-once guarantees
-  the duplicate will arrive.
-- **Forgetting `XACK`** — especially on the duplicate path and after a caught exception. The
-  entry stays pending, gets reclaimed, reprocessed, and the group's lag never drops.
-- **Payload without `version`.** The first consumer change then has to guess the shape from the
+- **Publishing from the service, or calling `.delay()` from it.** Both are the bug: the first is a
+  dual write, the second is a producer naming its consumer. The service writes `OutboxEvent` only.
+- **A handler declared outside `handlers.py`.** It is never imported and never runs, with no error
+  anywhere. This is the one failure mode of the registry design and it is silent.
+- **Non-idempotent handlers.** Incrementing a counter, appending an `ActivityRecord` or emitting a
+  downstream event without relying on the `ProcessedEvent` claim. At-least-once guarantees the
+  duplicate will arrive.
+- **Reading `timezone.now()` inside a handler.** A redelivery then produces a different number than
+  the original, and nobody can reconstruct which one was right.
+- **Opening a transaction inside a handler.** It breaks the enclosing claim and therefore the
+  deduplication.
+- **Swallowing handler exceptions** (`try/except: pass`). Nothing retries, nothing dead-letters, and
+  the row is marked applied. Let it raise; the retry and dead-letter path exist for this.
+- **Payload without `version`.** The first handler change then has to guess the shape from the
   field set.
-- **Undocumented topics** — not added to the list in §6, so nobody knows the event exists.
-- **Swallowing handler exceptions** (`try/except: pass`, or acking on failure). The event never
-  reaches the DLQ and the failure is invisible. Let it raise; the retry and DLQ path exist for
-  this.
-- Acking before the effect commits, so a crash between the two loses the work silently.
+- **Undocumented topics** — not in `docs/EVENTS.md` §4 and not in `envelope.py`, so
+  `register_handler` refuses the subscription at import, or nobody knows the event exists.
 - Using the primary key in `entity.id` instead of the business code, coupling contexts.
 - Adding a topic to `sse-fanout` without adding it to the frontend store — published, received,
   ignored.
 - **Untyped envelope.** A payload passed around as `dict[str, Any]` past the layer that reads the
-  JSONB column, or a handler indexing `envelope["payload"]["from"]` instead of a model field.
-  The field names are then invisible to the next consumer and to mypy (BACKEND §1).
-- **`except Exception` outside the consumer boundary** — in a service, a queryset method, the relay's
-  claim query. And at the boundary, a catch-all that skips one of log, DLQ, `XACK`: each omission
-  loses the failure, the evidence or the slot (BACKEND §5).
-- **An outbox test written on `TestCase`.** It is a false pass. The test transaction never
-  commits, so `on_commit` never fires and the relay's `FOR UPDATE SKIP LOCKED` on a second
-  connection sees nothing; the assertions pass on rows that no other process could ever have
-  read. Outbox writes, the relay, consumer idempotency and SSE fanout are `TransactionTestCase`
-  (CLAUDE.md rule 15). Likewise `pytest.mark.django_db` or a module-level `def test_...` on this
-  path — the base class is the declaration of what the test may touch.
-- **Handler docstring that paraphrases the signature.** No topic named, no `(event_id,
-  consumer_group)` key stated, no duplicate-path behaviour. `ruff D` passes on it and a reviewer
-  still cannot tell whether the handler is idempotent (BACKEND §2).
+  JSONB column, or a handler indexing `envelope.payload["from"]` instead of a model field. The field
+  names are then invisible to the next handler and to mypy (BACKEND §1).
+- **`except Exception` outside `apps/events/tasks.py`** — in a service, a handler, a queryset
+  method. The delivery boundary already implements the full shape; a second one hides failures
+  (BACKEND §5).
+- **An outbox test written on `TestCase`.** It is a false pass: the test transaction never commits,
+  so `on_commit` never fires and the drain sees nothing. Outbox writes, the drain, handler
+  idempotency and SSE fanout are `TransactionTestCase` (CLAUDE.md rule 15). Likewise
+  `pytest.mark.django_db` or a module-level `def test_...` on this path.
+- **A handler test that does not call `only_handlers(...)`.** Under eager Celery the committed row
+  kicks the drain inline and the full registry reaches Redis through `sse-fanout`.
+- **Handler docstring that paraphrases the signature.** No topic named, no `Raises:` stating what a
+  failure means. `ruff D` passes on it and a reviewer still cannot tell whether the handler is
+  idempotent (BACKEND §2).

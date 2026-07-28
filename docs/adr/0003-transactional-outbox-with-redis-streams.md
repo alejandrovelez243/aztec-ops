@@ -4,6 +4,11 @@
 
 Accepted — 2026-07-28. Amended by [0009](0009-celery-beat-for-scheduling.md), which corrects the
 `transaction.on_commit` and Celery entries below and scopes the rejection of Celery to the bus.
+Amended again by [0010](0010-celery-as-the-bus.md): **the outbox below stands exactly as written,
+the Redis Streams transport under it does not.** Celery tasks now drain the outbox and dispatch to
+a handler registry; there is no relay process, no `aztec.events` stream, no consumer group and no
+DLQ stream. Read the Decision section here for the outbox and 0010 for everything below the commit
+line — including why the reasoning against Celery *as the bus* no longer applies.
 
 ## Context
 

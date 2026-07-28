@@ -29,7 +29,9 @@ from django.conf import settings
 from django.db import connection, models
 from django.db.models import Count, F, Min, Q
 
+from apps.shared.refs import TaxonomyRef
 from apps.work.domain.value_objects import BlockerKind, OpenBlockerSummary, ProjectTaskCounts
+from apps.work.domain.views import BlockerView, DependencyRef, NoteView, TaskView
 from apps.workflow.models import StateCategory
 
 if TYPE_CHECKING:
@@ -59,6 +61,14 @@ CODE_DIGITS: Final = 4
 #: as state codes — a state invented from the admin is open by default instead of being invisible
 #: to every count (DATA_MODEL §12).
 CLOSED_CATEGORIES: Final = (StateCategory.DONE, StateCategory.CANCELLED)
+
+#: Separator between a project's code and its task number (``PRJ-01-T03``). A task code is scoped
+#: to its project on purpose — see :meth:`TaskQuerySet.next_code_for`.
+TASK_CODE_INFIX: Final = "-T"
+
+#: Minimum width of a task's number inside its project. A floor, not a limit: a project's 100th
+#: task is ``-T100``.
+TASK_CODE_DIGITS: Final = 2
 
 #: The joins every projection of a task reads. Kept in one bundle so no caller half-populates a
 #: task and then pays for the rest one lazy query at a time.
@@ -198,6 +208,87 @@ class TaskQuerySet(models.QuerySet["Task"]):
         """Order by workflow position then code, the order the project detail view renders."""
         return self.order_by("workflow_state__order", "code")
 
+    def in_attention_order(self) -> TaskQuerySet:
+        """Order the way an operator triages: most severe first, then soonest due, then code.
+
+        Severity is ``Priority.weight`` descending, read from the taxonomy rather than from a
+        list of codes, so a priority inserted above ``critica`` sorts correctly with no code
+        change (CLAUDE.md rule 1). Undated tasks sort after dated ones — an unset due date is not
+        an infinitely urgent one. ``code`` is appended as the final key so a page boundary can
+        never repeat or drop a row when two tasks tie on both.
+        """
+        return self.order_by("-priority__weight", F("due_date").asc(nulls_last=True), "code")
+
+    def with_dependencies(self) -> TaskQuerySet:
+        """Prefetch each task's prerequisites and the task each one points at.
+
+        Without it, rendering a page of tasks costs two queries per row. Opt-in rather than
+        automatic: the counts and the overdue aggregates read no dependency at all.
+        """
+        return self.prefetch_related("dependencies__depends_on")
+
+    def search(self, term: str) -> TaskQuerySet:
+        """Narrow to tasks whose code or title contains ``term``, case-insensitively.
+
+        Deliberately not a search over ``detail`` or ``last_progress``: those are long prose
+        fields, and a substring scan over them turns the task list into a sequential read while
+        matching text no operator was looking for.
+
+        Args:
+            term: Free text. An empty or whitespace-only term does not filter, so a cleared
+                search box shows everything rather than nothing.
+        """
+        if not term.strip():
+            return self
+        return self.filter(Q(code__icontains=term) | Q(title__icontains=term))
+
+    def next_code_for(self, project_code: str) -> str:
+        """Mint the next task code inside one project — ``PRJ-01-T03``.
+
+        **Ends the chain**: it materialises the project's existing codes. Task codes are scoped to
+        their project rather than drawn from a global sequence like ``Blocker`` and ``Note``,
+        because the source data numbers them that way and an operator reads ``PRJ-01-T03`` as "the
+        third task of PRJ-01" — a global ``TSK-0417`` would lose that.
+
+        The numbering is derived from the highest suffix already present rather than from a count,
+        so deleting a task never causes the next one to reuse a retired code.
+
+        This is *not* collision-proof under concurrency: two simultaneous creations can read the
+        same maximum. The unique constraint on ``code`` catches that, and the losing transaction
+        rolls back — acceptable while task creation is a single operator clicking a button, and the
+        reason a real sequence would be the fix if it ever stops being one.
+
+        Args:
+            project_code: ``portfolio.Project.code`` the task belongs to.
+
+        Returns:
+            The next free code for that project.
+        """
+        prefix = f"{project_code}{TASK_CODE_INFIX}"
+        used = self.for_project(project_code).values_list("code", flat=True)
+        highest = 0
+        for code in used:
+            suffix = str(code).removeprefix(prefix)
+            if suffix.isdigit():
+                highest = max(highest, int(suffix))
+        return f"{prefix}{highest + 1:0{TASK_CODE_DIGITS}d}"
+
+    def as_views(self, *, today: date) -> tuple[TaskView, ...]:
+        """Materialise the selection as the projections the API renders.
+
+        **Ends the chain**: the query executes here, so nothing downstream can narrow the set
+        after the response shape was decided, and no field is resolved lazily after the
+        transaction that read the rows has closed.
+
+        Chain :meth:`with_relations` and :meth:`with_dependencies` first; on rows fetched without
+        them this is still correct but costs six queries per task.
+
+        Args:
+            today: The date every ``is_overdue`` in this response is measured against. One
+                instant for the whole page, so two rows cannot be aged against two clocks.
+        """
+        return tuple(task.to_view(today=today) for task in self)
+
     def counts(self, *, today: date) -> ProjectTaskCounts:
         """Aggregate the four task counts the priority engine and the snapshot both read.
 
@@ -277,6 +368,41 @@ class Task(models.Model):
 
     def __str__(self) -> str:
         return f"{self.code} {self.title}"
+
+    def to_view(self, *, today: date) -> TaskView:
+        """Describe this task as the projection the API returns.
+
+        ``is_overdue`` is derived here and never read from a column. The source spreadsheet's
+        ``Si``/``No`` overdue flag is deliberately not imported (ARCHITECTURE §10.1): a stored
+        flag is wrong the morning after it was written, and two readers of the same row would
+        then disagree about whether the task is late.
+
+        Reads ``priority``, ``workflow_state``, ``assignee`` and the prefetched ``dependencies``;
+        chain :meth:`TaskQuerySet.with_relations` and :meth:`TaskQuerySet.with_dependencies` on
+        the query that produced this instance.
+
+        Args:
+            today: The date lateness is measured against, supplied by the caller so a whole page
+                — and a replay — uses one instant.
+
+        Returns:
+            The task as an immutable :class:`~apps.work.domain.views.TaskView`.
+        """
+        return TaskView(
+            code=self.code,
+            title=self.title,
+            assignee=self.assignee.to_ref() if self.assignee else None,
+            priority=TaxonomyRef.of(
+                code=self.priority.code,
+                label=self.priority.label,
+                color=self.priority.color,
+            ),
+            state=self.workflow_state.to_ref(),
+            due_date=self.due_date,
+            is_overdue=self.due_date is not None and self.due_date < today,
+            last_progress=self.last_progress,
+            dependencies=tuple(edge.to_ref() for edge in self.dependencies.all()),
+        )
 
 
 class TaskDependencyQuerySet(models.QuerySet["TaskDependency"]):
@@ -366,6 +492,21 @@ class TaskDependency(models.Model):
         target = self.depends_on.code if self.depends_on is not None else self.raw_label
         return f"{self.task.code} depends on {target}"
 
+    def to_ref(self) -> DependencyRef:
+        """Describe this edge as the projection a task carries.
+
+        Both halves travel: an edge that resolved still ships its ``raw_label``, because that is
+        the sentence the operation wrote and the resolution is an inference on top of it. Reads
+        ``depends_on``, so callers chain :meth:`TaskQuerySet.with_dependencies`.
+
+        Returns:
+            The prerequisite as an immutable :class:`~apps.work.domain.views.DependencyRef`.
+        """
+        return DependencyRef(
+            task_code=self.depends_on.code if self.depends_on is not None else None,
+            raw_label=self.raw_label,
+        )
+
 
 class BlockerQuerySet(models.QuerySet["Blocker"]):
     """Reads over ``work_blocker``. Openness is ``resolved_at IS NULL`` and nothing else."""
@@ -421,6 +562,27 @@ class BlockerQuerySet(models.QuerySet["Blocker"]):
         score — which is why it is not left to the model's newest-first default.
         """
         return self.order_by("raised_at")
+
+    def in_panel_order(self) -> BlockerQuerySet:
+        """Order as the detail view renders: open first, then the newest within each group.
+
+        Open before resolved because an impediment nobody has cleared is the only one anybody can
+        act on; ``-raised_at`` inside each group because the newest is the one the reader has not
+        seen yet. ``-pk`` breaks a tie so a page boundary is stable.
+        """
+        return self.order_by(F("resolved_at").asc(nulls_first=True), "-raised_at", "-pk")
+
+    def as_views(self, *, now: datetime) -> tuple[BlockerView, ...]:
+        """Materialise the selection as the projections the blocker panel renders.
+
+        **Ends the chain**: the query executes here. Chain :meth:`with_relations` first, or each
+        row costs three lazy queries.
+
+        Args:
+            now: The instant every ``age_days`` in this response is measured against, so two
+                blockers rendered together cannot be aged against two different clocks.
+        """
+        return tuple(blocker.to_view(now=now) for blocker in self)
 
     def summary(self) -> OpenBlockerSummary:
         """Aggregate how many blockers are selected and when the oldest was raised.
@@ -533,6 +695,37 @@ class Blocker(models.Model):
             self.code = _next_business_code(BLOCKER_CODE_SEQUENCE, BLOCKER_CODE_PREFIX)
         super().save(*args, **kwargs)
 
+    def to_view(self, *, now: datetime) -> BlockerView:
+        """Describe this blocker as the projection the API returns.
+
+        ``age_days`` is derived, never stored: it changes every midnight, and a stored copy would
+        be the number the panel shows while the ``blockage`` signal used a fresh one. It is
+        measured from ``raised_at`` to ``now`` for an open blocker and to ``resolved_at`` for a
+        closed one, so a resolved row keeps saying how long it actually blocked the work rather
+        than growing forever.
+
+        Reads ``task`` and ``owner``; chain :meth:`BlockerQuerySet.with_relations`.
+
+        Args:
+            now: The instant an open blocker's age is measured against.
+
+        Returns:
+            The blocker as an immutable :class:`~apps.work.domain.views.BlockerView`.
+        """
+        until = self.resolved_at if self.resolved_at is not None else now
+        return BlockerView(
+            id=self.pk,
+            code=self.code,
+            kind=self.kind,
+            description=self.description,
+            owner=self.owner.to_ref() if self.owner else None,
+            raised_at=self.raised_at,
+            resolved_at=self.resolved_at,
+            resolution_reason=self.resolution_reason,
+            age_days=max(0, (until - self.raised_at).days),
+            task_code=self.task.code if self.task else None,
+        )
+
 
 class NoteQuerySet(models.QuerySet["Note"]):
     """Reads over ``work_note``, all of them chronological."""
@@ -621,3 +814,24 @@ class Note(models.Model):
         if self._state.adding and not self.code:
             self.code = _next_business_code(NOTE_CODE_SEQUENCE, NOTE_CODE_PREFIX)
         super().save(*args, **kwargs)
+
+    def to_view(self) -> NoteView:
+        """Describe this note as the projection the API returns.
+
+        ``author`` stays the denormalized code rather than being resolved to a person: the column
+        exists precisely so a note survives its author leaving the roster and so a consumer can
+        write one as ``system``, and resolving it would fail for exactly those rows.
+
+        Reads ``task``; chain ``select_related("task")`` when rendering many.
+
+        Returns:
+            The note as an immutable :class:`~apps.work.domain.views.NoteView`.
+        """
+        return NoteView(
+            id=self.pk,
+            code=self.code,
+            body=self.body,
+            author=self.author,
+            created_at=self.created_at,
+            task_code=self.task.code if self.task else None,
+        )

@@ -1,0 +1,216 @@
+# Aztec Ops — local stack.
+#
+# Six services, three of them application processes. That is the whole system:
+#
+#   api      uvicorn (ASGI) — the REST contract under /api/v1 and the open SSE stream.
+#   worker   `celery -A config worker` — THE ONLY WORKER, and it does two jobs that used to be
+#            two systems. It drains the transactional outbox and runs every registered event
+#            handler (priority recalculation, risk evaluation, SSE fan-out), and it executes the
+#            scheduled clock ticks that Beat enqueues. There is no separate event bus: Celery *is*
+#            the bus, and the outbox table in PostgreSQL is the durability guarantee.
+#   beat     `celery -A config beat` — holds the schedule and enqueues. Executes nothing, keeps
+#            no domain state.
+#
+# **Do not re-split the worker.** This file used to run five application processes — a relay plus
+# three Redis Streams consumer groups plus a Celery worker — for 22 projects and 82 tasks, with
+# two job systems doing the same job. One queue per handler is a throughput answer to a problem
+# this workload does not have. If one ever needs isolating, the honest version is `--queues` and a
+# routing rule for that handler alone, plus a measurement in the commit message that justifies it.
+#
+# Ordering is by healthcheck, never by sleep: the backing services (postgres, redis) gate on
+# `condition: service_healthy`. A sleep is a guess about someone else's startup time and it is wrong
+# on a cold machine. The application services carry no healthcheck of their own.
+#
+# Platform: every image here is multi-arch (arm64 and amd64) and no `platform:` key is pinned, so
+# the same file works on an Apple Silicon laptop and on an x86 CI runner without emulation.
+#
+# Secrets: none are committed. Every credential comes from `.env` (git-ignored, created with
+# `cp .env.example .env`), and the defaults below are throwaway local values.
+
+name: aztec-ops
+
+# The three Django/Celery services are one image and one environment; they differ only by
+# `command`. Anchors keep that literally true instead of approximately true.
+x-django-image: &django-image
+  build:
+    context: ./backend
+    # `dev` adds pytest/ruff/mypy on top of the locked runtime deps, so `make test` and `make lint`
+    # run inside the container that actually ships. The `runtime` target is what a deploy builds.
+    target: dev
+  image: aztec-ops-backend:dev
+
+x-django-env: &django-env
+  ENVIRONMENT: ${ENVIRONMENT:-local}
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-not-a-secret}
+  DJANGO_DEBUG: ${DJANGO_DEBUG:-true}
+  # JSON arrays: these two are list[str] on the Settings model, and pydantic-settings parses
+  # complex fields as JSON. A bare `*` raises SettingsError before Django finishes importing.
+  DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-["*"]}
+  # Service names, not localhost: inside the compose network the database is `postgres:5432`.
+  # These deliberately override whatever DATABASE_URL/REDIS_URL say in .env, which describe the
+  # host's view of the same containers.
+  DATABASE_URL: postgres://${POSTGRES_USER:-aztec}:${POSTGRES_PASSWORD:-aztec}@postgres:5432/${POSTGRES_DB:-aztec}
+  REDIS_URL: redis://redis:6379/0
+  CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-["http://localhost:4321"]}
+  TICKER_INTERVAL_SECONDS: ${TICKER_INTERVAL_SECONDS:-300}
+  STALENESS_THRESHOLD_DAYS: ${STALENESS_THRESHOLD_DAYS:-14}
+  EVENT_MAX_ATTEMPTS: ${EVENT_MAX_ATTEMPTS:-5}
+  EVENT_DRAIN_INTERVAL_SECONDS: ${EVENT_DRAIN_INTERVAL_SECONDS:-5}
+  EVENT_DRAIN_BATCH_SIZE: ${EVENT_DRAIN_BATCH_SIZE:-100}
+  PYTHONUNBUFFERED: "1"
+
+x-django-depends: &django-depends
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+
+# `worker` waits for `api` as well, and the reason is migrations, not politeness: `api` applies them
+# before it binds its port. With no healthcheck on `api` this is only `service_started`, so the
+# worker can still reach `events_outboxevent` before the table exists and die on a ProgrammingError.
+# `restart: on-failure:5` is what recovers it — the schema is there by the second attempt.
+x-django-depends-migrated: &django-depends-migrated
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  api:
+    condition: service_started
+
+# A service that has failed five times running is broken, not unlucky. Stopping makes the failure
+# visible in `docker compose ps` instead of burying it under an endless restart log.
+x-restart: &restart on-failure:5
+
+services:
+  # --- backing services ------------------------------------------------------------------------
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aztec}
+      POSTGRES_USER: ${POSTGRES_USER:-aztec}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aztec}
+    ports:
+      # Not 5432. That port belongs to whatever the developer already runs on their machine.
+      - "${POSTGRES_PORT:-55433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # -d as well as -U: pg_isready answers "accepting connections" before the init scripts have
+      # created the application database, and a migrate against a missing database is the failure
+      # this check exists to prevent.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aztec} -d ${POSTGRES_DB:-aztec}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # appendonly keeps the Celery queue across a restart, so a `docker compose restart redis` does
+    # not drop the tasks already enqueued. Losing them would not lose events — every one of them is
+    # a row in the outbox and Beat's sweeper picks it up again — but it would delay them by an
+    # interval, and a broker that forgets by default is a bad habit to keep locally.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-56379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  # --- application -----------------------------------------------------------------------------
+
+  api:
+    <<: *django-image
+    environment: *django-env
+    depends_on: *django-depends
+    # ASGI, not WSGI, and not negotiable: `GET /api/stream` holds a connection open per dashboard,
+    # and a WSGI worker holds a whole thread for each one. Ten open tabs would exhaust the pool.
+    # Migrations run here, once, before the port is bound — so `make up` leaves a schema that is
+    # ready and `&&` means a failed migration stops the container instead of serving a broken one.
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             exec uvicorn config.asgi:application --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      # Source is bind-mounted for --reload. The virtualenv lives at /opt/venv precisely so this
+      # mount cannot hide it.
+      - ./backend:/app
+    # No container healthcheck. `/api/v1/health/live` and `/api/v1/health/ready` still exist and are
+    # what an orchestrator or a load balancer should probe; Compose does not need to duplicate them
+    # to run the stack locally.
+    restart: *restart
+
+  worker:
+    <<: *django-image
+    environment: *django-env
+    depends_on: *django-depends-migrated
+    # The only worker, and it is the event bus. It runs `events.drain_outbox` (which claims
+    # unpublished OutboxEvent rows with SELECT ... FOR UPDATE SKIP LOCKED and fans one
+    # `events.handle_event` task out per registered handler per event), the handler tasks
+    # themselves, and the scheduled clock ticks. Deduplication is `ProcessedEvent(event_id,
+    # handler)`, so at-least-once delivery is safe; past EVENT_MAX_ATTEMPTS an event is
+    # dead-lettered on its own row and shows up in the admin.
+    #
+    # `--concurrency 2` because the work is database-bound and each worker process holds its own
+    # PostgreSQL connection; raising this raises the connection count, so raise `max_connections`
+    # with it or do not raise it.
+    command: ["celery", "-A", "config", "worker", "--loglevel", "info", "--concurrency", "2"]
+    volumes:
+      - ./backend:/app
+    restart: *restart
+
+  beat:
+    <<: *django-image
+    environment: *django-env
+    depends_on:
+      redis:
+        condition: service_healthy
+    # Celery Beat: holds CELERY_BEAT_SCHEDULE (emit-interval-tick every TICKER_INTERVAL_SECONDS,
+    # emit-day-boundary-tick at local midnight, drain-outbox every EVENT_DRAIN_INTERVAL_SECONDS)
+    # and enqueues. It executes nothing and keeps no domain state, which is why it depends on
+    # redis alone. The drain entry is a safety net, not the hot path — `transaction.on_commit`
+    # kicks a drain the moment a service writes an outbox row; Beat only catches what the broker
+    # dropped.
+    command: ["celery", "-A", "config", "beat", "--loglevel", "info"]
+    volumes:
+      - ./backend:/app
+    restart: *restart
+
+  # --- frontend --------------------------------------------------------------------------------
+
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    image: aztec-ops-frontend:dev
+    # Node 22 is a hard requirement, not a preference: Astro 7 needs >= 22.12 and a host on Node 20
+    # cannot run this. That mismatch is exactly why the runtime belongs in a container.
+    environment:
+      # SSR runs inside the network and calls the API by service name; the browser runs on the
+      # host and reaches the same API through the published port. Two URLs, two callers.
+      PUBLIC_API_URL: http://localhost:${API_PORT:-8000}
+      INTERNAL_API_URL: http://api:8000
+    depends_on:
+      api:
+        condition: service_started
+    ports:
+      - "${FRONTEND_PORT:-4321}:4321"
+    volumes:
+      - ./frontend:/app
+      # Anonymous volume so the container's own node_modules survives the bind mount above —
+      # otherwise the host's (possibly absent, possibly wrong-arch) directory shadows it.
+      - /app/node_modules
+    restart: *restart
+
+volumes:
+  postgres-data:
+  redis-data:

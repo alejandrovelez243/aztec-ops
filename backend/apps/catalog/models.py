@@ -1,14 +1,15 @@
 """Persistence for the configurable taxonomies (``DATA_MODEL`` §1).
 
-The five tables here are the operation's vocabulary: engagement types, project types, stages,
-priorities and roles. They are rows rather than Python enums so the operation can rename, recolor,
-reorder or retire a value from the admin without a deploy, which is why nothing in this module
-carries a business rule — the rules read ``code``, ``weight`` or ``is_urgent`` from these rows.
+The six tables here are the operation's vocabulary: engagement types, project types, stages,
+priorities, roles and currencies. They are rows rather than Python enums so the operation can
+rename, recolor, reorder or retire a value from the admin without a deploy, which is why nothing in
+this module carries a business rule — the rules read ``code``, ``weight`` or ``is_urgent`` from
+these rows.
 
 Named queries live on :class:`TaxonomyQuerySet` and are exposed through each taxonomy's manager
-(CLAUDE.md rule 6): the five tables share one abstract base, so they share one queryset and
+(CLAUDE.md rule 6): the six tables share one abstract base, so they share one queryset and
 ``EngagementType.objects.active().indexed_by_code()`` means the same thing everywhere. Beyond the
-queryset this module holds fields, constraints and indexes only.
+queryset this module holds fields, constraints, indexes and each row's projection of itself.
 """
 
 from decimal import Decimal
@@ -17,14 +18,29 @@ from typing import ClassVar, Self
 from django.db import models
 
 from apps.catalog.domain.errors import UnknownCode
+from apps.catalog.domain.value_objects import CurrencyRef
+from apps.shared.refs import TaxonomyRef
 
 #: Default multiplier for the taxonomies the prioritization engine reads. A weight of 1.00 is the
 #: neutral element of the modifier product, so a freshly created row cannot silently move a score.
 NEUTRAL_WEIGHT = Decimal("1.00")
 
+#: Shape of an ISO-4217 alphabetic currency code: exactly three upper-case letters. Enforced in the
+#: database rather than only in a form, because ``loaddata`` and the ORM both bypass form cleaning.
+ISO_4217_CODE_PATTERN = r"^[A-Z]{3}$"
+
+#: Decimal places of the currencies most of the world bills in, and therefore the safe default for
+#: a newly created row: getting it wrong is a rendering error of two orders of magnitude.
+DEFAULT_MINOR_UNITS = 2
+
+#: The largest exponent ISO-4217 defines (CLF, the Chilean unidad de fomento). A larger value is
+#: not a currency the standard knows, so the database refuses it instead of letting a client
+#: render an amount nobody can reconcile.
+MAX_MINOR_UNITS = 4
+
 
 class TaxonomyQuerySet[TaxonomyT: "TaxonomyBase"](models.QuerySet[TaxonomyT]):
-    """The questions every taxonomy is asked, written once for all five tables.
+    """The questions every taxonomy is asked, written once for all six tables.
 
     Generic over the concrete model so a chain keeps its type: ``Stage.objects.active()`` is a
     queryset of :class:`Stage`, not of the abstract base, and mypy rejects reading a field the
@@ -163,6 +179,18 @@ class TaxonomyBase(models.Model):
         """Show the operator-facing label; the code is an implementation detail to them."""
         return self.label
 
+    def to_ref(self) -> TaxonomyRef:
+        """Describe this row as the ``{code, label, color}`` every read surface renders.
+
+        Issues no query: it reads three of its own columns. Lives on the model because the row owns
+        the mapping of its own fields (CLAUDE.md rule 6) — a free ``_to_ref(row)`` in a service
+        would fragment the moment a second read surface needed the same projection.
+
+        Returns:
+            The reference, with an unset color normalized to ``None``.
+        """
+        return TaxonomyRef.of(code=self.code, label=self.label, color=self.color)
+
 
 class EngagementType(TaxonomyBase):
     """How an engagement behaves commercially and in the ranking.
@@ -256,6 +284,64 @@ class Priority(TaxonomyBase):
                 condition=models.Q(weight__gt=0),
                 name="catalog_priority_weight_positive",
             ),
+        )
+
+
+class Currency(TaxonomyBase):
+    """The currency a project is billed in — an ISO-4217 alphabetic code and how it is written.
+
+    A taxonomy rather than a ``CharField`` on ``Project`` for the reason every other taxonomy is
+    one: the frontend renders a validated select, and the only way to do that without hardcoding a
+    list in the client is to serve it. A free-text column would also accept ``"usd"``,
+    ``"US$"`` and ``"Dolar"`` as three different currencies.
+
+    ``minor_units`` is not decoration. It is the number of decimal places the amount is written
+    with, and it is a property of the currency rather than of the formatter: JPY and CLP have 0,
+    USD and EUR have 2, so ``28000`` is ¥28,000 in one and $280.00 in the other. A client that
+    guessed 2 everywhere would render a Chilean contract a hundred times too small. Constrained to
+    the 0-4 the standard actually uses (CLF, the Chilean unidad de fomento, is the 4).
+
+    ``code`` is the ISO alphabetic code in upper case, checked in the database: the taxonomy is
+    interoperable vocabulary here, not an operator-invented slug, so ``eur`` and ``EURO`` are
+    rejected at write time rather than discovered later by a client that could not match them.
+    """
+
+    minor_units = models.PositiveSmallIntegerField(default=DEFAULT_MINOR_UNITS)
+
+    objects = TaxonomyQuerySet["Currency"].as_manager()
+
+    class Meta(TaxonomyBase.Meta):
+        """Adds the ISO-4217 shape check and the minor-unit range to the base constraints."""
+
+        verbose_name = "currency"
+        verbose_name_plural = "currencies"
+        constraints = (
+            *TaxonomyBase.Meta.constraints,
+            models.CheckConstraint(
+                condition=models.Q(code__regex=ISO_4217_CODE_PATTERN),
+                name="catalog_currency_code_is_iso_4217",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(minor_units__lte=MAX_MINOR_UNITS),
+                name="catalog_currency_minor_units_within_iso_range",
+            ),
+        )
+
+    def to_currency_ref(self) -> CurrencyRef:
+        """Describe this row as the reference a client needs to *format* an amount.
+
+        Separate from :meth:`TaxonomyBase.to_ref` because the extra field is load-bearing: a caller
+        handed a plain ``{code, label}`` has to guess the decimal places, and the guess is wrong for
+        every zero-decimal currency. Issues no query.
+
+        Returns:
+            The reference, with an unset color normalized to ``None``.
+        """
+        return CurrencyRef(
+            code=self.code,
+            label=self.label,
+            color=self.color or None,
+            minor_units=self.minor_units,
         )
 
 

@@ -11,9 +11,10 @@ writing a predicate on ``accounts`` from here, and only the error mapping is don
 """
 
 from apps.accounts.models import User
-from apps.catalog.models import EngagementType, ProjectType, Stage
+from apps.catalog.models import Currency, EngagementType, ProjectType, Stage
 from apps.portfolio.domain.errors import (
     ClientNotFound,
+    CurrencyNotFound,
     EngagementTypeNotFound,
     OwnerNotFound,
     ProjectTypeNotFound,
@@ -104,6 +105,35 @@ def resolve_stage(stage_code: str | None) -> Stage | None:
     if stage is None:
         raise StageNotFound(stage_code)
     return stage
+
+
+def resolve_currency(currency_code: str | None) -> Currency:
+    """Resolve a required currency.
+
+    Required because an amount without a currency is not an amount: the queue renders it, the
+    ``business_value`` signal ranks on it, and a project that lost it would be compared against
+    dollars whatever it was actually billed in. Callers that send nothing get the default from the
+    command schema, never a null here.
+
+    Retired currencies still resolve — this reads the unfiltered manager on purpose, exactly as
+    ``resolve_owner`` does: deactivating a currency must take it out of the picker, not make every
+    project already billed in it unsaveable.
+
+    Args:
+        currency_code: ``Currency.code``, the ISO-4217 alphabetic code, e.g. ``"COP"``.
+
+    Returns:
+        The currency row.
+
+    Raises:
+        CurrencyNotFound: The code is None or matches no row.
+    """
+    if currency_code is None:
+        raise CurrencyNotFound("")
+    currency = Currency.objects.filter(code=currency_code).first()
+    if currency is None:
+        raise CurrencyNotFound(currency_code)
+    return currency
 
 
 def resolve_owner(owner_code: str | None) -> User | None:

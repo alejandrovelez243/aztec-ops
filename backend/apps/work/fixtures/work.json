@@ -1,0 +1,3078 @@
+[
+  {
+    "model": "work.task",
+    "pk": 1,
+    "fields": {
+      "code": "PRJ-01-T01",
+      "project": 1,
+      "assignee": 3,
+      "priority": 2,
+      "workflow_state": 12,
+      "due_date": "2026-07-12",
+      "title": "Plan next delivery iteration - Global Contract Management",
+      "detail": "Next iteration is being scoped with deliverables and owners.",
+      "last_progress": "Next iteration is being scoped with deliverables and owners.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 2,
+    "fields": {
+      "code": "PRJ-01-T02",
+      "project": 1,
+      "assignee": 3,
+      "priority": 1,
+      "workflow_state": 11,
+      "due_date": "2026-07-10",
+      "title": "Resolve priority issue in pilot or production - Global Contract Management",
+      "detail": "There is a user-visible issue affecting trust or adoption.",
+      "last_progress": "There is a user-visible issue affecting trust or adoption.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 3,
+    "fields": {
+      "code": "PRJ-01-T03",
+      "project": 1,
+      "assignee": 3,
+      "priority": 3,
+      "workflow_state": 14,
+      "due_date": "2026-07-14",
+      "title": "Align external dependency with client or vendor - Global Contract Management",
+      "detail": "Waiting on client response, credentials, external API or business definition.",
+      "last_progress": "Waiting on client response, credentials, external API or business definition.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 4,
+    "fields": {
+      "code": "PRJ-01-T04",
+      "project": 1,
+      "assignee": 3,
+      "priority": 2,
+      "workflow_state": 13,
+      "due_date": "2026-07-16",
+      "title": "Functional validation and release checklist - Global Contract Management",
+      "detail": "Core build exists, but edge cases still need validation before closing the front.",
+      "last_progress": "Core build exists, but edge cases still need validation before closing the front.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 5,
+    "fields": {
+      "code": "PRJ-02-T01",
+      "project": 2,
+      "assignee": 3,
+      "priority": 3,
+      "workflow_state": 12,
+      "due_date": "2026-07-14",
+      "title": "Weekly KPI and quality monitoring - Observability Hub",
+      "detail": "Weekly review of volume, response time and out-of-range events.",
+      "last_progress": "Weekly review of volume, response time and out-of-range events.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 6,
+    "fields": {
+      "code": "PRJ-02-T02",
+      "project": 2,
+      "assignee": 3,
+      "priority": 2,
+      "workflow_state": 11,
+      "due_date": "2026-07-11",
+      "title": "Adjust the rule or automation causing most friction - Observability Hub",
+      "detail": "One automation is creating manual errors or rework and needs tuning.",
+      "last_progress": "One automation is creating manual errors or rework and needs tuning.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 7,
+    "fields": {
+      "code": "PRJ-02-T03",
+      "project": 2,
+      "assignee": 3,
+      "priority": 4,
+      "workflow_state": 13,
+      "due_date": "2026-07-18",
+      "title": "Review historical backlog and clean stale tasks - Observability Hub",
+      "detail": "Old, duplicate or unclear tasks still need cleanup.",
+      "last_progress": "Old, duplicate or unclear tasks still need cleanup.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 8,
+    "fields": {
+      "code": "PRJ-02-T04",
+      "project": 2,
+      "assignee": 3,
+      "priority": 2,
+      "workflow_state": 14,
+      "due_date": "2026-07-09",
+      "title": "Unblock recurrent service dependency - Observability Hub",
+      "detail": "A recurrent technical or operational dependency is hurting stability or improvements.",
+      "last_progress": "A recurrent technical or operational dependency is hurting stability or improvements.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 9,
+    "fields": {
+      "code": "PRJ-03-T01",
+      "project": 3,
+      "assignee": 2,
+      "priority": 3,
+      "workflow_state": 12,
+      "due_date": "2026-07-14",
+      "title": "Weekly KPI and quality monitoring - Patient Care Assistant",
+      "detail": "Weekly review of volume, response time and out-of-range events.",
+      "last_progress": "Weekly review of volume, response time and out-of-range events.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 10,
+    "fields": {
+      "code": "PRJ-03-T02",
+      "project": 3,
+      "assignee": 2,
+      "priority": 2,
+      "workflow_state": 11,
+      "due_date": "2026-07-11",
+      "title": "Adjust the rule or automation causing most friction - Patient Care Assistant",
+      "detail": "One automation is creating manual errors or rework and needs tuning.",
+      "last_progress": "One automation is creating manual errors or rework and needs tuning.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 11,
+    "fields": {
+      "code": "PRJ-03-T03",
+      "project": 3,
+      "assignee": 2,
+      "priority": 4,
+      "workflow_state": 13,
+      "due_date": "2026-07-18",
+      "title": "Review historical backlog and clean stale tasks - Patient Care Assistant",
+      "detail": "Old, duplicate or unclear tasks still need cleanup.",
+      "last_progress": "Old, duplicate or unclear tasks still need cleanup.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 12,
+    "fields": {
+      "code": "PRJ-03-T04",
+      "project": 3,
+      "assignee": 2,
+      "priority": 2,
+      "workflow_state": 14,
+      "due_date": "2026-07-09",
+      "title": "Unblock recurrent service dependency - Patient Care Assistant",
+      "detail": "A recurrent technical or operational dependency is hurting stability or improvements.",
+      "last_progress": "A recurrent technical or operational dependency is hurting stability or improvements.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 13,
+    "fields": {
+      "code": "PRJ-04-T01",
+      "project": 4,
+      "assignee": 2,
+      "priority": 2,
+      "workflow_state": 12,
+      "due_date": "2026-07-12",
+      "title": "Plan next delivery iteration - Quotation Engine",
+      "detail": "Next iteration is being scoped with deliverables and owners.",
+      "last_progress": "Next iteration is being scoped with deliverables and owners.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 14,
+    "fields": {
+      "code": "PRJ-04-T02",
+      "project": 4,
+      "assignee": 2,
+      "priority": 1,
+      "workflow_state": 11,
+      "due_date": "2026-07-10",
+      "title": "Resolve priority issue in pilot or production - Quotation Engine",
+      "detail": "There is a user-visible issue affecting trust or adoption.",
+      "last_progress": "There is a user-visible issue affecting trust or adoption.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 15,
+    "fields": {
+      "code": "PRJ-04-T03",
+      "project": 4,
+      "assignee": 2,
+      "priority": 3,
+      "workflow_state": 14,
+      "due_date": "2026-07-14",
+      "title": "Align external dependency with client or vendor - Quotation Engine",
+      "detail": "Waiting on client response, credentials, external API or business definition.",
+      "last_progress": "Waiting on client response, credentials, external API or business definition.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 16,
+    "fields": {
+      "code": "PRJ-04-T04",
+      "project": 4,
+      "assignee": 2,
+      "priority": 2,
+      "workflow_state": 13,
+      "due_date": "2026-07-16",
+      "title": "Functional validation and release checklist - Quotation Engine",
+      "detail": "Core build exists, but edge cases still need validation before closing the front.",
+      "last_progress": "Core build exists, but edge cases still need validation before closing the front.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 17,
+    "fields": {
+      "code": "PRJ-05-T01",
+      "project": 5,
+      "assignee": 4,
+      "priority": 3,
+      "workflow_state": 12,
+      "due_date": "2026-07-14",
+      "title": "Weekly KPI and quality monitoring - Multi-Brand Sales Assistant",
+      "detail": "Weekly review of volume, response time and out-of-range events.",
+      "last_progress": "Weekly review of volume, response time and out-of-range events.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 18,
+    "fields": {
+      "code": "PRJ-05-T02",
+      "project": 5,
+      "assignee": 4,
+      "priority": 2,
+      "workflow_state": 11,
+      "due_date": "2026-07-11",
+      "title": "Adjust the rule or automation causing most friction - Multi-Brand Sales Assistant",
+      "detail": "One automation is creating manual errors or rework and needs tuning.",
+      "last_progress": "One automation is creating manual errors or rework and needs tuning.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 19,
+    "fields": {
+      "code": "PRJ-05-T03",
+      "project": 5,
+      "assignee": 4,
+      "priority": 4,
+      "workflow_state": 13,
+      "due_date": "2026-07-18",
+      "title": "Review historical backlog and clean stale tasks - Multi-Brand Sales Assistant",
+      "detail": "Old, duplicate or unclear tasks still need cleanup.",
+      "last_progress": "Old, duplicate or unclear tasks still need cleanup.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 20,
+    "fields": {
+      "code": "PRJ-05-T04",
+      "project": 5,
+      "assignee": 4,
+      "priority": 2,
+      "workflow_state": 14,
+      "due_date": "2026-07-09",
+      "title": "Unblock recurrent service dependency - Multi-Brand Sales Assistant",
+      "detail": "A recurrent technical or operational dependency is hurting stability or improvements.",
+      "last_progress": "A recurrent technical or operational dependency is hurting stability or improvements.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 21,
+    "fields": {
+      "code": "PRJ-06-T01",
+      "project": 6,
+      "assignee": 4,
+      "priority": 3,
+      "workflow_state": 12,
+      "due_date": "2026-07-14",
+      "title": "Weekly KPI and quality monitoring - Recovery and Compensation Ops",
+      "detail": "Weekly review of volume, response time and out-of-range events.",
+      "last_progress": "Weekly review of volume, response time and out-of-range events.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 22,
+    "fields": {
+      "code": "PRJ-06-T02",
+      "project": 6,
+      "assignee": 4,
+      "priority": 2,
+      "workflow_state": 11,
+      "due_date": "2026-07-11",
+      "title": "Adjust the rule or automation causing most friction - Recovery and Compensation Ops",
+      "detail": "One automation is creating manual errors or rework and needs tuning.",
+      "last_progress": "One automation is creating manual errors or rework and needs tuning.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 23,
+    "fields": {
+      "code": "PRJ-06-T03",
+      "project": 6,
+      "assignee": 4,
+      "priority": 4,
+      "workflow_state": 13,
+      "due_date": "2026-07-18",
+      "title": "Review historical backlog and clean stale tasks - Recovery and Compensation Ops",
+      "detail": "Old, duplicate or unclear tasks still need cleanup.",
+      "last_progress": "Old, duplicate or unclear tasks still need cleanup.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 24,
+    "fields": {
+      "code": "PRJ-06-T04",
+      "project": 6,
+      "assignee": 4,
+      "priority": 2,
+      "workflow_state": 14,
+      "due_date": "2026-07-09",
+      "title": "Unblock recurrent service dependency - Recovery and Compensation Ops",
+      "detail": "A recurrent technical or operational dependency is hurting stability or improvements.",
+      "last_progress": "A recurrent technical or operational dependency is hurting stability or improvements.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 25,
+    "fields": {
+      "code": "PRJ-07-T01",
+      "project": 7,
+      "assignee": 2,
+      "priority": 2,
+      "workflow_state": 12,
+      "due_date": "2026-07-12",
+      "title": "Plan next delivery iteration - Credit Assistant",
+      "detail": "Next iteration is being scoped with deliverables and owners.",
+      "last_progress": "Next iteration is being scoped with deliverables and owners.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 26,
+    "fields": {
+      "code": "PRJ-07-T02",
+      "project": 7,
+      "assignee": 2,
+      "priority": 1,
+      "workflow_state": 11,
+      "due_date": "2026-07-10",
+      "title": "Resolve priority issue in pilot or production - Credit Assistant",
+      "detail": "There is a user-visible issue affecting trust or adoption.",
+      "last_progress": "There is a user-visible issue affecting trust or adoption.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 27,
+    "fields": {
+      "code": "PRJ-07-T03",
+      "project": 7,
+      "assignee": 2,
+      "priority": 3,
+      "workflow_state": 14,
+      "due_date": "2026-07-14",
+      "title": "Align external dependency with client or vendor - Credit Assistant",
+      "detail": "Waiting on client response, credentials, external API or business definition.",
+      "last_progress": "Waiting on client response, credentials, external API or business definition.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 28,
+    "fields": {
+      "code": "PRJ-07-T04",
+      "project": 7,
+      "assignee": 2,
+      "priority": 2,
+      "workflow_state": 13,
+      "due_date": "2026-07-16",
+      "title": "Functional validation and release checklist - Credit Assistant",
+      "detail": "Core build exists, but edge cases still need validation before closing the front.",
+      "last_progress": "Core build exists, but edge cases still need validation before closing the front.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 29,
+    "fields": {
+      "code": "PRJ-08-T01",
+      "project": 8,
+      "assignee": 2,
+      "priority": 2,
+      "workflow_state": 12,
+      "due_date": "2026-07-12",
+      "title": "Plan next delivery iteration - Messaging Qualification Engine",
+      "detail": "Next iteration is being scoped with deliverables and owners.",
+      "last_progress": "Next iteration is being scoped with deliverables and owners.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 30,
+    "fields": {
+      "code": "PRJ-08-T02",
+      "project": 8,
+      "assignee": 2,
+      "priority": 1,
+      "workflow_state": 11,
+      "due_date": "2026-07-10",
+      "title": "Resolve priority issue in pilot or production - Messaging Qualification Engine",
+      "detail": "There is a user-visible issue affecting trust or adoption.",
+      "last_progress": "There is a user-visible issue affecting trust or adoption.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 31,
+    "fields": {
+      "code": "PRJ-08-T03",
+      "project": 8,
+      "assignee": 2,
+      "priority": 3,
+      "workflow_state": 14,
+      "due_date": "2026-07-14",
+      "title": "Align external dependency with client or vendor - Messaging Qualification Engine",
+      "detail": "Waiting on client response, credentials, external API or business definition.",
+      "last_progress": "Waiting on client response, credentials, external API or business definition.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 32,
+    "fields": {
+      "code": "PRJ-08-T04",
+      "project": 8,
+      "assignee": 2,
+      "priority": 2,
+      "workflow_state": 13,
+      "due_date": "2026-07-16",
+      "title": "Functional validation and release checklist - Messaging Qualification Engine",
+      "detail": "Core build exists, but edge cases still need validation before closing the front.",
+      "last_progress": "Core build exists, but edge cases still need validation before closing the front.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 33,
+    "fields": {
+      "code": "PRJ-09-T01",
+      "project": 9,
+      "assignee": 2,
+      "priority": 2,
+      "workflow_state": 12,
+      "due_date": "2026-07-12",
+      "title": "Plan next delivery iteration - Industrial OCR Quoter",
+      "detail": "Next iteration is being scoped with deliverables and owners.",
+      "last_progress": "Next iteration is being scoped with deliverables and owners.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 34,
+    "fields": {
+      "code": "PRJ-09-T02",
+      "project": 9,
+      "assignee": 2,
+      "priority": 1,
+      "workflow_state": 11,
+      "due_date": "2026-07-10",
+      "title": "Resolve priority issue in pilot or production - Industrial OCR Quoter",
+      "detail": "There is a user-visible issue affecting trust or adoption.",
+      "last_progress": "There is a user-visible issue affecting trust or adoption.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 35,
+    "fields": {
+      "code": "PRJ-09-T03",
+      "project": 9,
+      "assignee": 2,
+      "priority": 3,
+      "workflow_state": 14,
+      "due_date": "2026-07-14",
+      "title": "Align external dependency with client or vendor - Industrial OCR Quoter",
+      "detail": "Waiting on client response, credentials, external API or business definition.",
+      "last_progress": "Waiting on client response, credentials, external API or business definition.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 36,
+    "fields": {
+      "code": "PRJ-09-T04",
+      "project": 9,
+      "assignee": 2,
+      "priority": 2,
+      "workflow_state": 13,
+      "due_date": "2026-07-16",
+      "title": "Functional validation and release checklist - Industrial OCR Quoter",
+      "detail": "Core build exists, but edge cases still need validation before closing the front.",
+      "last_progress": "Core build exists, but edge cases still need validation before closing the front.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 37,
+    "fields": {
+      "code": "PRJ-10-T01",
+      "project": 10,
+      "assignee": 2,
+      "priority": 2,
+      "workflow_state": 12,
+      "due_date": "2026-07-12",
+      "title": "Plan next delivery iteration - Commercial Image Pipeline",
+      "detail": "Next iteration is being scoped with deliverables and owners.",
+      "last_progress": "Next iteration is being scoped with deliverables and owners.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 38,
+    "fields": {
+      "code": "PRJ-10-T02",
+      "project": 10,
+      "assignee": 2,
+      "priority": 1,
+      "workflow_state": 11,
+      "due_date": "2026-07-10",
+      "title": "Resolve priority issue in pilot or production - Commercial Image Pipeline",
+      "detail": "There is a user-visible issue affecting trust or adoption.",
+      "last_progress": "There is a user-visible issue affecting trust or adoption.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 39,
+    "fields": {
+      "code": "PRJ-10-T03",
+      "project": 10,
+      "assignee": 2,
+      "priority": 3,
+      "workflow_state": 14,
+      "due_date": "2026-07-14",
+      "title": "Align external dependency with client or vendor - Commercial Image Pipeline",
+      "detail": "Waiting on client response, credentials, external API or business definition.",
+      "last_progress": "Waiting on client response, credentials, external API or business definition.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 40,
+    "fields": {
+      "code": "PRJ-10-T04",
+      "project": 10,
+      "assignee": 2,
+      "priority": 2,
+      "workflow_state": 13,
+      "due_date": "2026-07-16",
+      "title": "Functional validation and release checklist - Commercial Image Pipeline",
+      "detail": "Core build exists, but edge cases still need validation before closing the front.",
+      "last_progress": "Core build exists, but edge cases still need validation before closing the front.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 41,
+    "fields": {
+      "code": "PRJ-11-T01",
+      "project": 11,
+      "assignee": 4,
+      "priority": 2,
+      "workflow_state": 12,
+      "due_date": "2026-07-12",
+      "title": "Plan next delivery iteration - Public Service Desk",
+      "detail": "Next iteration is being scoped with deliverables and owners.",
+      "last_progress": "Next iteration is being scoped with deliverables and owners.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 42,
+    "fields": {
+      "code": "PRJ-11-T02",
+      "project": 11,
+      "assignee": 4,
+      "priority": 1,
+      "workflow_state": 11,
+      "due_date": "2026-07-10",
+      "title": "Resolve priority issue in pilot or production - Public Service Desk",
+      "detail": "There is a user-visible issue affecting trust or adoption.",
+      "last_progress": "There is a user-visible issue affecting trust or adoption.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 43,
+    "fields": {
+      "code": "PRJ-11-T03",
+      "project": 11,
+      "assignee": 4,
+      "priority": 3,
+      "workflow_state": 14,
+      "due_date": "2026-07-14",
+      "title": "Align external dependency with client or vendor - Public Service Desk",
+      "detail": "Waiting on client response, credentials, external API or business definition.",
+      "last_progress": "Waiting on client response, credentials, external API or business definition.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 44,
+    "fields": {
+      "code": "PRJ-11-T04",
+      "project": 11,
+      "assignee": 4,
+      "priority": 2,
+      "workflow_state": 13,
+      "due_date": "2026-07-16",
+      "title": "Functional validation and release checklist - Public Service Desk",
+      "detail": "Core build exists, but edge cases still need validation before closing the front.",
+      "last_progress": "Core build exists, but edge cases still need validation before closing the front.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 45,
+    "fields": {
+      "code": "PRJ-12-T01",
+      "project": 12,
+      "assignee": 5,
+      "priority": 2,
+      "workflow_state": 12,
+      "due_date": "2026-07-12",
+      "title": "Plan next delivery iteration - Plant Operations Automation",
+      "detail": "Next iteration is being scoped with deliverables and owners.",
+      "last_progress": "Next iteration is being scoped with deliverables and owners.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 46,
+    "fields": {
+      "code": "PRJ-12-T02",
+      "project": 12,
+      "assignee": 5,
+      "priority": 1,
+      "workflow_state": 11,
+      "due_date": "2026-07-10",
+      "title": "Resolve priority issue in pilot or production - Plant Operations Automation",
+      "detail": "There is a user-visible issue affecting trust or adoption.",
+      "last_progress": "There is a user-visible issue affecting trust or adoption.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 47,
+    "fields": {
+      "code": "PRJ-12-T03",
+      "project": 12,
+      "assignee": 5,
+      "priority": 3,
+      "workflow_state": 14,
+      "due_date": "2026-07-14",
+      "title": "Align external dependency with client or vendor - Plant Operations Automation",
+      "detail": "Waiting on client response, credentials, external API or business definition.",
+      "last_progress": "Waiting on client response, credentials, external API or business definition.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 48,
+    "fields": {
+      "code": "PRJ-12-T04",
+      "project": 12,
+      "assignee": 5,
+      "priority": 2,
+      "workflow_state": 13,
+      "due_date": "2026-07-16",
+      "title": "Functional validation and release checklist - Plant Operations Automation",
+      "detail": "Core build exists, but edge cases still need validation before closing the front.",
+      "last_progress": "Core build exists, but edge cases still need validation before closing the front.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 49,
+    "fields": {
+      "code": "PRJ-13-T01",
+      "project": 13,
+      "assignee": 6,
+      "priority": 2,
+      "workflow_state": 12,
+      "due_date": "2026-07-11",
+      "title": "Stakeholder mapping and scope - Commercial Automation Discovery",
+      "detail": "Interviews and dependency map are in progress.",
+      "last_progress": "Interviews and dependency map are in progress.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 50,
+    "fields": {
+      "code": "PRJ-13-T02",
+      "project": 13,
+      "assignee": 6,
+      "priority": 1,
+      "workflow_state": 11,
+      "due_date": "2026-07-09",
+      "title": "Audit current flow and breakpoints - Commercial Automation Discovery",
+      "detail": "Current process timings, handoffs and failure points are still undocumented.",
+      "last_progress": "Current process timings, handoffs and failure points are still undocumented.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 51,
+    "fields": {
+      "code": "PRJ-13-T03",
+      "project": 13,
+      "assignee": 6,
+      "priority": 3,
+      "workflow_state": 13,
+      "due_date": "2026-07-15",
+      "title": "Define solution hypotheses and quick wins - Commercial Automation Discovery",
+      "detail": "First set of quick wins is drafted and waiting for validation.",
+      "last_progress": "First set of quick wins is drafted and waiting for validation.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 52,
+    "fields": {
+      "code": "PRJ-13-T04",
+      "project": 13,
+      "assignee": 6,
+      "priority": 2,
+      "workflow_state": 14,
+      "due_date": "2026-07-08",
+      "title": "Get access to key data sources - Commercial Automation Discovery",
+      "detail": "Blocked by permissions, repository access or owner confirmation.",
+      "last_progress": "Blocked by permissions, repository access or owner confirmation.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 53,
+    "fields": {
+      "code": "PRJ-14-T01",
+      "project": 14,
+      "assignee": 5,
+      "priority": 2,
+      "workflow_state": 12,
+      "due_date": "2026-07-11",
+      "title": "Stakeholder mapping and scope - Vehicle Photography Platform",
+      "detail": "Interviews and dependency map are in progress.",
+      "last_progress": "Interviews and dependency map are in progress.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 54,
+    "fields": {
+      "code": "PRJ-14-T02",
+      "project": 14,
+      "assignee": 5,
+      "priority": 1,
+      "workflow_state": 11,
+      "due_date": "2026-07-09",
+      "title": "Audit current flow and breakpoints - Vehicle Photography Platform",
+      "detail": "Current process timings, handoffs and failure points are still undocumented.",
+      "last_progress": "Current process timings, handoffs and failure points are still undocumented.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 55,
+    "fields": {
+      "code": "PRJ-14-T03",
+      "project": 14,
+      "assignee": 5,
+      "priority": 3,
+      "workflow_state": 13,
+      "due_date": "2026-07-15",
+      "title": "Define solution hypotheses and quick wins - Vehicle Photography Platform",
+      "detail": "First set of quick wins is drafted and waiting for validation.",
+      "last_progress": "First set of quick wins is drafted and waiting for validation.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 56,
+    "fields": {
+      "code": "PRJ-14-T04",
+      "project": 14,
+      "assignee": 5,
+      "priority": 2,
+      "workflow_state": 14,
+      "due_date": "2026-07-08",
+      "title": "Get access to key data sources - Vehicle Photography Platform",
+      "detail": "Blocked by permissions, repository access or owner confirmation.",
+      "last_progress": "Blocked by permissions, repository access or owner confirmation.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 57,
+    "fields": {
+      "code": "PRJ-15-T01",
+      "project": 15,
+      "assignee": 4,
+      "priority": 2,
+      "workflow_state": 12,
+      "due_date": "2026-07-11",
+      "title": "Stakeholder mapping and scope - Legal Documents Assistant",
+      "detail": "Interviews and dependency map are in progress.",
+      "last_progress": "Interviews and dependency map are in progress.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 58,
+    "fields": {
+      "code": "PRJ-15-T02",
+      "project": 15,
+      "assignee": 4,
+      "priority": 1,
+      "workflow_state": 11,
+      "due_date": "2026-07-09",
+      "title": "Audit current flow and breakpoints - Legal Documents Assistant",
+      "detail": "Current process timings, handoffs and failure points are still undocumented.",
+      "last_progress": "Current process timings, handoffs and failure points are still undocumented.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 59,
+    "fields": {
+      "code": "PRJ-15-T03",
+      "project": 15,
+      "assignee": 4,
+      "priority": 3,
+      "workflow_state": 13,
+      "due_date": "2026-07-15",
+      "title": "Define solution hypotheses and quick wins - Legal Documents Assistant",
+      "detail": "First set of quick wins is drafted and waiting for validation.",
+      "last_progress": "First set of quick wins is drafted and waiting for validation.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 60,
+    "fields": {
+      "code": "PRJ-15-T04",
+      "project": 15,
+      "assignee": 4,
+      "priority": 2,
+      "workflow_state": 14,
+      "due_date": "2026-07-08",
+      "title": "Get access to key data sources - Legal Documents Assistant",
+      "detail": "Blocked by permissions, repository access or owner confirmation.",
+      "last_progress": "Blocked by permissions, repository access or owner confirmation.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 61,
+    "fields": {
+      "code": "PRJ-16-T01",
+      "project": 16,
+      "assignee": 5,
+      "priority": 2,
+      "workflow_state": 12,
+      "due_date": "2026-07-11",
+      "title": "Stakeholder mapping and scope - Lead Acquisition System",
+      "detail": "Interviews and dependency map are in progress.",
+      "last_progress": "Interviews and dependency map are in progress.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 62,
+    "fields": {
+      "code": "PRJ-16-T02",
+      "project": 16,
+      "assignee": 5,
+      "priority": 1,
+      "workflow_state": 11,
+      "due_date": "2026-07-09",
+      "title": "Audit current flow and breakpoints - Lead Acquisition System",
+      "detail": "Current process timings, handoffs and failure points are still undocumented.",
+      "last_progress": "Current process timings, handoffs and failure points are still undocumented.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 63,
+    "fields": {
+      "code": "PRJ-16-T03",
+      "project": 16,
+      "assignee": 5,
+      "priority": 3,
+      "workflow_state": 13,
+      "due_date": "2026-07-15",
+      "title": "Define solution hypotheses and quick wins - Lead Acquisition System",
+      "detail": "First set of quick wins is drafted and waiting for validation.",
+      "last_progress": "First set of quick wins is drafted and waiting for validation.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 64,
+    "fields": {
+      "code": "PRJ-16-T04",
+      "project": 16,
+      "assignee": 5,
+      "priority": 2,
+      "workflow_state": 14,
+      "due_date": "2026-07-08",
+      "title": "Get access to key data sources - Lead Acquisition System",
+      "detail": "Blocked by permissions, repository access or owner confirmation.",
+      "last_progress": "Blocked by permissions, repository access or owner confirmation.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 65,
+    "fields": {
+      "code": "PRJ-17-T01",
+      "project": 17,
+      "assignee": 3,
+      "priority": 3,
+      "workflow_state": 12,
+      "due_date": "2026-08-14",
+      "title": "Iteracion en curso con entregables definidos - Billing Reconciliation Bot",
+      "detail": "Scope acordado con el cliente, avance segun plan.",
+      "last_progress": "Scope acordado con el cliente, avance segun plan.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 66,
+    "fields": {
+      "code": "PRJ-17-T02",
+      "project": 17,
+      "assignee": 3,
+      "priority": 2,
+      "workflow_state": 11,
+      "due_date": "2026-08-20",
+      "title": "Validacion funcional del modulo - Billing Reconciliation Bot",
+      "detail": "Pendiente de arrancar cuando cierre la iteracion actual.",
+      "last_progress": "Pendiente de arrancar cuando cierre la iteracion actual.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 67,
+    "fields": {
+      "code": "PRJ-17-T03",
+      "project": 17,
+      "assignee": 3,
+      "priority": 4,
+      "workflow_state": 13,
+      "due_date": "2026-08-25",
+      "title": "Documentacion para operacion del cliente - Billing Reconciliation Bot",
+      "detail": "Borrador listo, esperando revision del owner.",
+      "last_progress": "Borrador listo, esperando revision del owner.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 68,
+    "fields": {
+      "code": "PRJ-18-T01",
+      "project": 18,
+      "assignee": 5,
+      "priority": 3,
+      "workflow_state": 12,
+      "due_date": "2026-08-14",
+      "title": "Iteracion en curso con entregables definidos - Inventory Forecasting",
+      "detail": "Scope acordado con el cliente, avance segun plan.",
+      "last_progress": "Scope acordado con el cliente, avance segun plan.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 69,
+    "fields": {
+      "code": "PRJ-18-T02",
+      "project": 18,
+      "assignee": 5,
+      "priority": 2,
+      "workflow_state": 11,
+      "due_date": "2026-08-20",
+      "title": "Validacion funcional del modulo - Inventory Forecasting",
+      "detail": "Pendiente de arrancar cuando cierre la iteracion actual.",
+      "last_progress": "Pendiente de arrancar cuando cierre la iteracion actual.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 70,
+    "fields": {
+      "code": "PRJ-18-T03",
+      "project": 18,
+      "assignee": 5,
+      "priority": 4,
+      "workflow_state": 13,
+      "due_date": "2026-08-25",
+      "title": "Documentacion para operacion del cliente - Inventory Forecasting",
+      "detail": "Borrador listo, esperando revision del owner.",
+      "last_progress": "Borrador listo, esperando revision del owner.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 71,
+    "fields": {
+      "code": "PRJ-18-T04",
+      "project": 18,
+      "assignee": 5,
+      "priority": 3,
+      "workflow_state": 11,
+      "due_date": "2026-09-02",
+      "title": "Cierre de fase y handoff - Inventory Forecasting",
+      "detail": "Depende del cierre de la validacion funcional.",
+      "last_progress": "Depende del cierre de la validacion funcional.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 72,
+    "fields": {
+      "code": "PRJ-19-T01",
+      "project": 19,
+      "assignee": 1,
+      "priority": 3,
+      "workflow_state": 12,
+      "due_date": "2026-08-14",
+      "title": "Iteracion en curso con entregables definidos - Contract Clause Extractor",
+      "detail": "Scope acordado con el cliente, avance segun plan.",
+      "last_progress": "Scope acordado con el cliente, avance segun plan.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 73,
+    "fields": {
+      "code": "PRJ-19-T02",
+      "project": 19,
+      "assignee": 1,
+      "priority": 2,
+      "workflow_state": 11,
+      "due_date": "2026-08-20",
+      "title": "Validacion funcional del modulo - Contract Clause Extractor",
+      "detail": "Pendiente de arrancar cuando cierre la iteracion actual.",
+      "last_progress": "Pendiente de arrancar cuando cierre la iteracion actual.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 74,
+    "fields": {
+      "code": "PRJ-19-T03",
+      "project": 19,
+      "assignee": 1,
+      "priority": 4,
+      "workflow_state": 13,
+      "due_date": "2026-08-25",
+      "title": "Documentacion para operacion del cliente - Contract Clause Extractor",
+      "detail": "Borrador listo, esperando revision del owner.",
+      "last_progress": "Borrador listo, esperando revision del owner.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 75,
+    "fields": {
+      "code": "PRJ-19-T04",
+      "project": 19,
+      "assignee": 1,
+      "priority": 3,
+      "workflow_state": 11,
+      "due_date": "2026-09-02",
+      "title": "Cierre de fase y handoff - Contract Clause Extractor",
+      "detail": "Depende del cierre de la validacion funcional.",
+      "last_progress": "Depende del cierre de la validacion funcional.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 76,
+    "fields": {
+      "code": "PRJ-20-T01",
+      "project": 20,
+      "assignee": 4,
+      "priority": 3,
+      "workflow_state": 12,
+      "due_date": "2026-08-14",
+      "title": "Iteracion en curso con entregables definidos - Claims Status Notifier",
+      "detail": "Scope acordado con el cliente, avance segun plan.",
+      "last_progress": "Scope acordado con el cliente, avance segun plan.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 77,
+    "fields": {
+      "code": "PRJ-20-T02",
+      "project": 20,
+      "assignee": 4,
+      "priority": 2,
+      "workflow_state": 11,
+      "due_date": "2026-08-20",
+      "title": "Validacion funcional del modulo - Claims Status Notifier",
+      "detail": "Pendiente de arrancar cuando cierre la iteracion actual.",
+      "last_progress": "Pendiente de arrancar cuando cierre la iteracion actual.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 78,
+    "fields": {
+      "code": "PRJ-20-T03",
+      "project": 20,
+      "assignee": 4,
+      "priority": 4,
+      "workflow_state": 13,
+      "due_date": "2026-08-25",
+      "title": "Documentacion para operacion del cliente - Claims Status Notifier",
+      "detail": "Borrador listo, esperando revision del owner.",
+      "last_progress": "Borrador listo, esperando revision del owner.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 79,
+    "fields": {
+      "code": "PRJ-22-T01",
+      "project": 22,
+      "assignee": 2,
+      "priority": 2,
+      "workflow_state": 12,
+      "due_date": "2026-07-12",
+      "title": "Plan next delivery iteration - Messaging Qualification Engine (Fase 2)",
+      "detail": "Next iteration is being scoped with deliverables and owners.",
+      "last_progress": "Next iteration is being scoped with deliverables and owners.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 80,
+    "fields": {
+      "code": "PRJ-22-T02",
+      "project": 22,
+      "assignee": 2,
+      "priority": 1,
+      "workflow_state": 11,
+      "due_date": "2026-07-10",
+      "title": "Resolve priority issue in pilot or production - Messaging Qualification Engine (Fase 2)",
+      "detail": "There is a user-visible issue affecting trust or adoption.",
+      "last_progress": "There is a user-visible issue affecting trust or adoption.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 81,
+    "fields": {
+      "code": "PRJ-22-T03",
+      "project": 22,
+      "assignee": 2,
+      "priority": 3,
+      "workflow_state": 14,
+      "due_date": "2026-07-14",
+      "title": "Align external dependency with client or vendor - Messaging Qualification Engine (Fase 2)",
+      "detail": "Waiting on client response, credentials, external API or business definition.",
+      "last_progress": "Waiting on client response, credentials, external API or business definition.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.task",
+    "pk": 82,
+    "fields": {
+      "code": "PRJ-22-T04",
+      "project": 22,
+      "assignee": 2,
+      "priority": 2,
+      "workflow_state": 13,
+      "due_date": "2026-07-16",
+      "title": "Functional validation and release checklist - Messaging Qualification Engine (Fase 2)",
+      "detail": "Core build exists, but edge cases still need validation before closing the front.",
+      "last_progress": "Core build exists, but edge cases still need validation before closing the front.",
+      "created_at": "2026-06-13T12:00:00+00:00",
+      "updated_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 1,
+    "fields": {
+      "task": 2,
+      "depends_on": 4,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 2,
+    "fields": {
+      "task": 3,
+      "depends_on": 2,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 3,
+    "fields": {
+      "task": 4,
+      "depends_on": 1,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 4,
+    "fields": {
+      "task": 6,
+      "depends_on": 5,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 5,
+    "fields": {
+      "task": 7,
+      "depends_on": 5,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 6,
+    "fields": {
+      "task": 8,
+      "depends_on": 6,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 7,
+    "fields": {
+      "task": 10,
+      "depends_on": 9,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 8,
+    "fields": {
+      "task": 11,
+      "depends_on": 9,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 9,
+    "fields": {
+      "task": 12,
+      "depends_on": 10,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 10,
+    "fields": {
+      "task": 14,
+      "depends_on": 15,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 11,
+    "fields": {
+      "task": 15,
+      "depends_on": 14,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 12,
+    "fields": {
+      "task": 16,
+      "depends_on": 13,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 13,
+    "fields": {
+      "task": 18,
+      "depends_on": 17,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 14,
+    "fields": {
+      "task": 19,
+      "depends_on": 17,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 15,
+    "fields": {
+      "task": 20,
+      "depends_on": 18,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 16,
+    "fields": {
+      "task": 22,
+      "depends_on": 21,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 17,
+    "fields": {
+      "task": 23,
+      "depends_on": 21,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 18,
+    "fields": {
+      "task": 24,
+      "depends_on": 22,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 19,
+    "fields": {
+      "task": 26,
+      "depends_on": 28,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 20,
+    "fields": {
+      "task": 27,
+      "depends_on": 26,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 21,
+    "fields": {
+      "task": 28,
+      "depends_on": 25,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 22,
+    "fields": {
+      "task": 30,
+      "depends_on": 32,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 23,
+    "fields": {
+      "task": 31,
+      "depends_on": 30,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 24,
+    "fields": {
+      "task": 32,
+      "depends_on": 29,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 25,
+    "fields": {
+      "task": 34,
+      "depends_on": 36,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 26,
+    "fields": {
+      "task": 35,
+      "depends_on": 34,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 27,
+    "fields": {
+      "task": 36,
+      "depends_on": 33,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 28,
+    "fields": {
+      "task": 38,
+      "depends_on": 40,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 29,
+    "fields": {
+      "task": 39,
+      "depends_on": 38,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 30,
+    "fields": {
+      "task": 40,
+      "depends_on": 37,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 31,
+    "fields": {
+      "task": 42,
+      "depends_on": 44,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 32,
+    "fields": {
+      "task": 43,
+      "depends_on": 42,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 33,
+    "fields": {
+      "task": 44,
+      "depends_on": 41,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 34,
+    "fields": {
+      "task": 46,
+      "depends_on": 48,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 35,
+    "fields": {
+      "task": 47,
+      "depends_on": 46,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 36,
+    "fields": {
+      "task": 48,
+      "depends_on": 45,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 37,
+    "fields": {
+      "task": 50,
+      "depends_on": 49,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 38,
+    "fields": {
+      "task": 51,
+      "depends_on": 50,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 39,
+    "fields": {
+      "task": 52,
+      "depends_on": 49,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 40,
+    "fields": {
+      "task": 54,
+      "depends_on": 53,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 41,
+    "fields": {
+      "task": 55,
+      "depends_on": 54,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 42,
+    "fields": {
+      "task": 56,
+      "depends_on": 53,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 43,
+    "fields": {
+      "task": 58,
+      "depends_on": 57,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 44,
+    "fields": {
+      "task": 59,
+      "depends_on": 58,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 45,
+    "fields": {
+      "task": 60,
+      "depends_on": 57,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 46,
+    "fields": {
+      "task": 62,
+      "depends_on": 61,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 47,
+    "fields": {
+      "task": 63,
+      "depends_on": 62,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 48,
+    "fields": {
+      "task": 64,
+      "depends_on": 61,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 49,
+    "fields": {
+      "task": 66,
+      "depends_on": 65,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 50,
+    "fields": {
+      "task": 67,
+      "depends_on": 65,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 51,
+    "fields": {
+      "task": 69,
+      "depends_on": 68,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 52,
+    "fields": {
+      "task": 70,
+      "depends_on": 68,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 53,
+    "fields": {
+      "task": 71,
+      "depends_on": 69,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 54,
+    "fields": {
+      "task": 73,
+      "depends_on": 72,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 55,
+    "fields": {
+      "task": 74,
+      "depends_on": 72,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 56,
+    "fields": {
+      "task": 75,
+      "depends_on": 73,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 57,
+    "fields": {
+      "task": 77,
+      "depends_on": 76,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 58,
+    "fields": {
+      "task": 78,
+      "depends_on": 76,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 59,
+    "fields": {
+      "task": 80,
+      "depends_on": 82,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 60,
+    "fields": {
+      "task": 81,
+      "depends_on": 80,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.taskdependency",
+    "pk": 61,
+    "fields": {
+      "task": 82,
+      "depends_on": 79,
+      "raw_label": "",
+      "is_resolved": true,
+      "created_at": "2026-06-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 1,
+    "fields": {
+      "code": "BLK-0001",
+      "project": 1,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-07-10T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 3,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 2,
+    "fields": {
+      "code": "BLK-0002",
+      "project": 1,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-07-10T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 3,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 3,
+    "fields": {
+      "code": "BLK-0003",
+      "project": 1,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-07-10T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 3,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 4,
+    "fields": {
+      "code": "BLK-0004",
+      "project": 2,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-07-04T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 3,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 5,
+    "fields": {
+      "code": "BLK-0005",
+      "project": 2,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-07-04T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 3,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 6,
+    "fields": {
+      "code": "BLK-0006",
+      "project": 2,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-07-04T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 3,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 7,
+    "fields": {
+      "code": "BLK-0007",
+      "project": 2,
+      "task": null,
+      "description": "This service requires ongoing follow-up and periodic cleanup.",
+      "kind": "TECHNICAL",
+      "raised_at": "2026-07-04T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 3,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 8,
+    "fields": {
+      "code": "BLK-0008",
+      "project": 3,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-06-26T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 9,
+    "fields": {
+      "code": "BLK-0009",
+      "project": 3,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-06-26T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 10,
+    "fields": {
+      "code": "BLK-0010",
+      "project": 3,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-06-26T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 11,
+    "fields": {
+      "code": "BLK-0011",
+      "project": 3,
+      "task": null,
+      "description": "This service requires ongoing follow-up and periodic cleanup.",
+      "kind": "TECHNICAL",
+      "raised_at": "2026-06-26T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 12,
+    "fields": {
+      "code": "BLK-0012",
+      "project": 4,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-06-17T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 13,
+    "fields": {
+      "code": "BLK-0013",
+      "project": 4,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-06-17T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 14,
+    "fields": {
+      "code": "BLK-0014",
+      "project": 4,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-06-17T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 15,
+    "fields": {
+      "code": "BLK-0015",
+      "project": 5,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-06-09T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 4,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 16,
+    "fields": {
+      "code": "BLK-0016",
+      "project": 5,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-06-09T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 4,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 17,
+    "fields": {
+      "code": "BLK-0017",
+      "project": 5,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-06-09T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 4,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 18,
+    "fields": {
+      "code": "BLK-0018",
+      "project": 5,
+      "task": null,
+      "description": "This service requires ongoing follow-up and periodic cleanup.",
+      "kind": "TECHNICAL",
+      "raised_at": "2026-06-09T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 4,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 19,
+    "fields": {
+      "code": "BLK-0019",
+      "project": 6,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-06-02T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 4,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 20,
+    "fields": {
+      "code": "BLK-0020",
+      "project": 6,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-06-02T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 4,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 21,
+    "fields": {
+      "code": "BLK-0021",
+      "project": 6,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-06-02T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 4,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 22,
+    "fields": {
+      "code": "BLK-0022",
+      "project": 6,
+      "task": null,
+      "description": "This service requires ongoing follow-up and periodic cleanup.",
+      "kind": "TECHNICAL",
+      "raised_at": "2026-06-02T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 4,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 23,
+    "fields": {
+      "code": "BLK-0023",
+      "project": 7,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-07-10T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 24,
+    "fields": {
+      "code": "BLK-0024",
+      "project": 7,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-07-10T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 25,
+    "fields": {
+      "code": "BLK-0025",
+      "project": 7,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-07-10T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 26,
+    "fields": {
+      "code": "BLK-0026",
+      "project": 8,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-07-04T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 27,
+    "fields": {
+      "code": "BLK-0027",
+      "project": 8,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-07-04T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 28,
+    "fields": {
+      "code": "BLK-0028",
+      "project": 8,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-07-04T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 29,
+    "fields": {
+      "code": "BLK-0029",
+      "project": 9,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-06-26T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 30,
+    "fields": {
+      "code": "BLK-0030",
+      "project": 9,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-06-26T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 31,
+    "fields": {
+      "code": "BLK-0031",
+      "project": 9,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-06-26T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 32,
+    "fields": {
+      "code": "BLK-0032",
+      "project": 10,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-06-17T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 33,
+    "fields": {
+      "code": "BLK-0033",
+      "project": 10,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-06-17T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 34,
+    "fields": {
+      "code": "BLK-0034",
+      "project": 10,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-06-17T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 35,
+    "fields": {
+      "code": "BLK-0035",
+      "project": 11,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-06-09T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 4,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 36,
+    "fields": {
+      "code": "BLK-0036",
+      "project": 11,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-06-09T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 4,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 37,
+    "fields": {
+      "code": "BLK-0037",
+      "project": 11,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-06-09T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 4,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 38,
+    "fields": {
+      "code": "BLK-0038",
+      "project": 12,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-06-02T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 5,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 39,
+    "fields": {
+      "code": "BLK-0039",
+      "project": 12,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-06-02T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 5,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 40,
+    "fields": {
+      "code": "BLK-0040",
+      "project": 12,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-06-02T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 5,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 41,
+    "fields": {
+      "code": "BLK-0041",
+      "project": 13,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-07-10T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 6,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 42,
+    "fields": {
+      "code": "BLK-0042",
+      "project": 13,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-07-10T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 6,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 43,
+    "fields": {
+      "code": "BLK-0043",
+      "project": 13,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-07-10T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 6,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 44,
+    "fields": {
+      "code": "BLK-0044",
+      "project": 14,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-07-04T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 5,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 45,
+    "fields": {
+      "code": "BLK-0045",
+      "project": 14,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-07-04T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 5,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 46,
+    "fields": {
+      "code": "BLK-0046",
+      "project": 14,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-07-04T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 5,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 47,
+    "fields": {
+      "code": "BLK-0047",
+      "project": 15,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-06-26T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 4,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 48,
+    "fields": {
+      "code": "BLK-0048",
+      "project": 15,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-06-26T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 4,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 49,
+    "fields": {
+      "code": "BLK-0049",
+      "project": 15,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-06-26T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 4,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 50,
+    "fields": {
+      "code": "BLK-0050",
+      "project": 16,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-06-17T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 5,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 51,
+    "fields": {
+      "code": "BLK-0051",
+      "project": 22,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "EXTERNAL_DEPENDENCY",
+      "raised_at": "2026-06-09T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 52,
+    "fields": {
+      "code": "BLK-0052",
+      "project": 22,
+      "task": null,
+      "description": "There are external dependencies or pending accesses.",
+      "kind": "ACCESS",
+      "raised_at": "2026-06-09T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.blocker",
+    "pk": 53,
+    "fields": {
+      "code": "BLK-0053",
+      "project": 22,
+      "task": null,
+      "description": "There are overdue tasks without a clear close path.",
+      "kind": "DECISION",
+      "raised_at": "2026-06-09T12:00:00+00:00",
+      "resolved_at": null,
+      "owner": 2,
+      "resolution_reason": ""
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 1,
+    "fields": {
+      "code": "NOTE-0001",
+      "project": 3,
+      "task": null,
+      "body": "Recently completed: TUE-24 · Revisar outbounds | TUE-3 · Tabla de tags del bot | TUE-4 · Horarios por sedes",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 2,
+    "fields": {
+      "code": "NOTE-0002",
+      "project": 4,
+      "task": null,
+      "body": "Recently completed: GRQ-20 · Bloqueo soft seguros | GRQ-9 · Condiciones a estructura existente | GRQ-2 · Primera version de slips",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 3,
+    "fields": {
+      "code": "NOTE-0003",
+      "project": 5,
+      "task": null,
+      "body": "Recently completed: ALC-15 · Identificar ciudad del usuario | ALC-2 · Eficiencia operativa del asesor | ALC-42 · Google Sheets Meta Leads",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 4,
+    "fields": {
+      "code": "NOTE-0004",
+      "project": 6,
+      "task": null,
+      "body": "Recently completed: REV-1 · Conectar Wati | REV-11 · Asociar fases del proyecto | REV-17 · Feedback pruebas produccion",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 5,
+    "fields": {
+      "code": "NOTE-0005",
+      "project": 7,
+      "task": null,
+      "body": "Recently completed: SUE-1 · Respuesta errada | SUE-11 · Error en capacidad | SUE-12 · Error en capacidad",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 6,
+    "fields": {
+      "code": "NOTE-0006",
+      "project": 8,
+      "task": null,
+      "body": "Recently completed: QUI-10 · Mapa comerciales | QUI-11 · Criterios calificacion | QUI-12 · Canal WhatsApp CO",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 7,
+    "fields": {
+      "code": "NOTE-0007",
+      "project": 9,
+      "task": null,
+      "body": "Recently completed: TMX-13 · Cotizador con conexion real | TMX-14 · Clave de acceso + proxy | TMX-4 · Espera integracion API",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 8,
+    "fields": {
+      "code": "NOTE-0008",
+      "project": 10,
+      "task": null,
+      "body": "Recently completed: NEQ-10 · Soporte upload Excel | NEQ-11 · Templates banner in-app | NEQ-12 · Motor pixel-perfect headless",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 9,
+    "fields": {
+      "code": "NOTE-0009",
+      "project": 11,
+      "task": null,
+      "body": "Recently completed: GOB-2 · Kick off | GOB-4 · Crear grupo de WA | GOB-5 · Analisis del kick off",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 10,
+    "fields": {
+      "code": "NOTE-0010",
+      "project": 12,
+      "task": null,
+      "body": "Recently completed: NTB-1 · Kick off | NTB-3 · Prototipo de detalle | NTB-4 · Feedback prototipo",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 11,
+    "fields": {
+      "code": "NOTE-0011",
+      "project": 13,
+      "task": null,
+      "body": "Recently completed: SVT-1 · NDA | SVT-4 · Repasar reunion | SVT-5 · Muestra del MVP",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 12,
+    "fields": {
+      "code": "NOTE-0012",
+      "project": 14,
+      "task": null,
+      "body": "Recently completed: Darle accesos a David",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 13,
+    "fields": {
+      "code": "NOTE-0013",
+      "project": 16,
+      "task": null,
+      "body": "Recently completed: Hacer kick off del proyecto",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 14,
+    "fields": {
+      "code": "NOTE-0014",
+      "project": 17,
+      "task": null,
+      "body": "Recently completed: AST-8 · Reglas de matcheo | AST-9 · Reporte semanal automatico",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 15,
+    "fields": {
+      "code": "NOTE-0015",
+      "project": 18,
+      "task": null,
+      "body": "Recently completed: AND-3 · Modelo base | AND-7 · Integracion POS | AND-11 · Panel de reposicion",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 16,
+    "fields": {
+      "code": "NOTE-0016",
+      "project": 19,
+      "task": null,
+      "body": "Recently completed: MER-2 · Corpus de prueba | MER-5 · Extractor v1 | MER-6 · Validacion con abogados",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 17,
+    "fields": {
+      "code": "NOTE-0017",
+      "project": 20,
+      "task": null,
+      "body": "Recently completed: NOV-4 · Plantillas aprobadas | NOV-9 · Reintentos con backoff",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  },
+  {
+    "model": "work.note",
+    "pk": 18,
+    "fields": {
+      "code": "NOTE-0018",
+      "project": 22,
+      "task": null,
+      "body": "Recently completed: QUI-10 · Mapa comerciales | QUI-11 · Criterios calificacion | QUI-12 · Canal WhatsApp CO",
+      "author": "system",
+      "created_at": "2026-07-13T12:00:00+00:00"
+    }
+  }
+]

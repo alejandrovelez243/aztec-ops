@@ -6,8 +6,8 @@ into a defensible daily decision by answering three questions every morning: wha
 worked on today and why exactly that; what is at risk, blocked, or has no clear next step; and
 who is overloaded. The ranking is a deterministic 0–100 score with a persisted per-signal reason
 breakdown — no LLM in the ranking, no opinion, no unexplained number. Stack: Django 6 +
-django-ninja + PostgreSQL 16 + Redis Streams (transactional outbox) + SSE + Astro 7, on Docker
-Compose.
+django-ninja + PostgreSQL 16 + a transactional outbox drained onto Celery + SSE + Astro 7, on
+Docker Compose.
 
 ---
 
@@ -46,21 +46,23 @@ docker compose exec api python manage.py migrate
 make seed
 ```
 
-`make up` starts eight services: `postgres`, `redis`, `api` (Django on ASGI), `relay` (outbox
-relay), `worker` (Redis Streams consumer groups — the event bus, `manage.py run_consumer`), `beat`
-(Celery Beat: holds the schedule, executes nothing), `celery-worker` (executes the scheduled Celery
-tasks — only ever the clock ticks that emit `clock.ticked`), `frontend` (Astro). `worker` and
-`celery-worker` are different processes and are never interchangeable. `make seed` runs
-`loaddata catalog workflows portfolio work activity` followed by `make recompute`, which
-computes `PriorityScore`, risk flags and `ProjectSnapshot`. Fixtures use explicit stable primary
-keys, so running `make seed` twice leaves the database identical.
+`make up` starts six services — three of them application processes: `postgres`, `redis`, `api`
+(Django on ASGI), `worker` (the single Celery worker: it drains the outbox, runs every event
+handler and executes the clock ticks), `beat` (Celery Beat: holds the schedule, executes nothing),
+`frontend` (Astro). There is deliberately one worker and one job system; see
+[ADR 0010](docs/adr/0010-celery-as-the-bus.md) for why there used to be a relay and three.
+`make seed` is the only management command: it loads the fixtures, realigns the business-code
+sequences and recomputes `PriorityScore`, risk flags and `ProjectSnapshot`. Fixtures use explicit
+stable primary keys, so running `make seed` twice leaves the database identical.
 
 | URL | What it is |
 |---|---|
 | http://localhost:4321 | Web UI — the command center and project detail views |
 | http://localhost:8000/api/docs | OpenAPI docs for the django-ninja API |
-| http://localhost:8000/admin/ | Django admin — taxonomies, workflows, transitions, outbox, DLQ |
-| http://localhost:8000/api/health | Liveness probe |
+| http://localhost:8000/admin/ | Django admin — taxonomies, workflows, transitions, and the outbox with its dead-letter filter and re-queue action |
+| http://localhost:8000/api/v1/health/live | Liveness probe — process only, touches no dependency |
+| http://localhost:8000/api/v1/health/ready | Readiness — PostgreSQL and Redis, 200 or 503 |
+| http://localhost:8000/api/v1/health/pipeline | Outbox backlog, dead letters and the last clock tick |
 
 The seed creates a local superuser: **`admin` / `aztec-ops`**. It exists only to make the admin
 reachable in a five-minute review; it is a fixture, not a credential to reuse anywhere.
@@ -68,11 +70,13 @@ reachable in a five-minute review; it is a fixture, not a credential to reuse an
 Then:
 
 ```bash
-make logs     # docker compose logs -f api relay worker
-make test     # pytest inside the api container
-make lint     # ruff check + ruff format --check + mypy
-make reset    # drop volumes, migrate, seed from scratch
-make down     # stop, keeping volumes
+make logs         # docker compose logs -f
+make logs-worker  # worker + beat: the whole event path
+make outbox       # pending / dispatched / dead-lettered event counts
+make test         # pytest inside the api container
+make lint         # ruff check + ruff format --check + mypy
+make reset        # drop volumes, migrate, seed from scratch
+make down         # stop, keeping volumes
 ```
 
 Management commands must run inside the `api` container (`docker compose exec api ...`) so they
@@ -87,13 +91,10 @@ refuses to build on anything older. Python is 3.12, managed with `uv`.
 uv sync                                   # backend deps from uv.lock
 uv run pre-commit install                 # ruff check --fix, ruff format, uv lock --check
 uv run python manage.py migrate
-uv run python manage.py loaddata catalog workflows portfolio work activity
-uv run python manage.py recompute
+uv run python manage.py seed              # fixtures + code sequences + recompute
 uv run uvicorn config.asgi:application --port 8000
-uv run python manage.py run_outbox_relay  # separate shell
-uv run python manage.py run_consumers     # separate shell — Redis Streams consumer groups
-uv run celery -A config beat              # separate shell — the schedule
-uv run celery -A config worker            # separate shell — runs the scheduled tasks
+uv run celery -A config worker            # separate shell — the bus: drain, handlers, ticks
+uv run celery -A config beat              # separate shell — the schedule and the outbox sweep
 
 cd web && npm install && npm run dev      # http://localhost:4321
 ```
@@ -229,14 +230,20 @@ against labels, which are Spanish user-facing data.
 ## The event-driven path
 
 A state change is a single database transaction that mutates the aggregate, appends the
-`ActivityRecord` and writes an `OutboxEvent` — all three commit together, so an event can never
-be lost or invented by a crash between two systems. A separate relay process is the only thing
-allowed to publish: it drains the outbox with `SELECT ... FOR UPDATE SKIP LOCKED` and `XADD`s to
-the `aztec.events` Redis stream, where three independent consumer groups pick it up. Consumers
-are idempotent and deduplicate on `event.id` via `ProcessedEvent`, because at-least-once delivery
-means the same event will arrive twice; a failing group does not block the others, and an event
-that exhausts its retries lands in `aztec.events.dlq` and shows up in the admin instead of dying
-quietly.
+`ActivityRecord` and writes an `OutboxEvent` — all three commit together, so an event can never be
+lost or invented by a crash between two systems. Nothing publishes from a service. A Celery task,
+`events.drain_outbox`, claims committed rows with `SELECT ... FOR UPDATE SKIP LOCKED` and asks a
+**handler registry** who subscribed to that topic, then queues one delivery task per handler. The
+producer names a topic and never a handler, so adding a reaction is one decorated function and zero
+edits upstream — the fan-out property that used to justify a second job system, kept without one.
+`transaction.on_commit` kicks the drain so latency stays low, and Beat sweeps the same table on an
+interval so a broker outage costs latency rather than an event.
+
+Handlers are idempotent and deduplicate on `(event.id, handler)` via `ProcessedEvent`, because
+at-least-once delivery means the same event will arrive twice. Each handler gets its own delivery
+task, so a failing one does not block the others, and an event that exhausts its retry budget is
+dead-lettered **on its own outbox row** — flagged, never deleted, filtered in the admin and
+replayable with a re-queue action, instead of dying quietly.
 
 ```
 POST /api/projects/{code}/transition
@@ -250,14 +257,18 @@ POST /api/projects/{code}/transition
   ──── commit ──────────────────────────────────────────────────┘
         │
         ▼
-  Outbox relay  (separate process; SELECT ... FOR UPDATE SKIP LOCKED)
-        │  XADD aztec.events
+  events.drain_outbox   (Celery task; SELECT ... FOR UPDATE SKIP LOCKED)
+    · kicked by transaction.on_commit, swept by Beat
+    · asks the registry which handlers subscribe — the producer never knew
+        │  one events.handle_event task per subscribed handler
         ▼
-  Redis Streams  ──┬── consumer group: priority-recalculator
+  Celery broker  ──┬── handler: priority-recalculator
                    │      └─> emits project.priority.recalculated
-                   ├── consumer group: risk-evaluator
+                   ├── handler: risk-evaluator
                    │      └─> emits project.risk.changed
-                   └── consumer group: sse-fanout
+                   ├── handler: snapshot-builder
+                   │      └─> rebuilds ProjectSnapshot (emits nothing)
+                   └── handler: sse-fanout
                           └─> PUBLISH aztec.sse
                                     │
                                     ▼
@@ -294,8 +305,8 @@ backend/apps/
   work/             # Task, TaskDependency, Blocker, Note
   activity/         # ActivityRecord (append-only) and the timeline read side
   prioritization/   # signal strategies, PriorityPolicy, PriorityScore, PriorityOverride, risk specifications
-  bus/              # OutboxEvent, ProcessedEvent, relay, consumer groups, SSE endpoint
-  readmodel/        # ProjectSnapshot, the denormalized read side the command center queries
+  events/           # OutboxEvent, ProcessedEvent, the drain/delivery tasks, the handler registry
+                    #   ProjectSnapshot, the denormalized read side, lives in portfolio/
 config/             # Django settings, ASGI entrypoint, API router assembly
 frontend/                # Astro 7 frontend: command center, project detail, SSE islands
 data/raw/           # dataset.json, the normalized export of the source spreadsheet
@@ -307,8 +318,9 @@ Makefile
 
 Inside each app: `domain/` (pure logic, no Django imports, testable with no database),
 `models.py` (persistence and the named queries, as `QuerySet`/`Manager` methods),
-`services/` (transactional use cases), `api/` (ninja routers and schemas, zero logic), `consumers/` (event handlers). `api/`
-never imports `models`; `domain/` imports neither Django nor another app.
+`services/` (transactional use cases), `api/` (ninja routers and schemas, zero logic),
+`handlers.py` (event reactors — the module name is fixed, app-ready autodiscovers exactly that).
+`api/` never imports `models`; `domain/` imports neither Django nor another app.
 
 ### Further documentation
 
@@ -317,7 +329,7 @@ never imports `models`; `domain/` imports neither Django nor another app.
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Normative spec: decisions and their rejected alternatives, layers, the full domain model |
 | [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) | Tables, fields, constraints and invariants |
 | [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) | How to work here: dependency CLI rules, pre-commit, migrations, commits |
-| [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Operating it: relay stuck, pending consumer entries, DLQ, resets |
+| [`docs/RUNBOOK.md`](docs/RUNBOOK.md) | Operating it: outbox backlog, a failing handler, dead-lettered events, resets |
 | [`docs/EVENTS.md`](docs/EVENTS.md) | Topic catalogue and the stable event envelope |
 | [`docs/API.md`](docs/API.md) | Endpoints, schemas, domain error to HTTP mapping |
 | [`docs/adr/`](docs/adr/) | One file per architectural decision, with its context and consequences |
@@ -332,7 +344,7 @@ rather than kept in someone's chat history.
 
 **`CLAUDE.md`** holds the project rules an agent must not violate: dependencies only through a
 CLI, no business enums in code, state changes only through transitions, every meaningful change
-writes an `ActivityRecord`, events only through the outbox, idempotent consumers, the layer
+writes an `ActivityRecord`, events only through the outbox, idempotent handlers, the layer
 boundaries, deterministic and explainable prioritization, and "a new signal or risk criterion is
 one class plus one registry entry — if you had to edit an existing `if`, the design is wrong."
 
@@ -344,7 +356,7 @@ handed a task without loading the whole system: `domain-architect`, `api-enginee
 **Six skills**, canonical in `.agents/skills/`: `aztec-domain`, `django-clean-arch`,
 `prioritization-engine`, `event-driven-flow`, `astro-sse-client`, `aztec-local-dev`. They carry
 the procedural knowledge that would otherwise be re-derived every session — how to add a signal
-without breaking reproducibility, how to diagnose a relay that is not publishing, why an SSE
+without breaking reproducibility, how to diagnose an outbox that is not draining, why an SSE
 stream that works under `curl` but not in the browser is a CORS or buffering problem.
 
 **The canonical-skills convention.** Skills are never written into a tool directory. They live in
@@ -377,8 +389,8 @@ Stated here rather than hidden, with what each would actually take.
   `accounts.User`, an organization FK on every aggregate, and a default queryset scoped by it —
   which is a data model change, not a middleware change, and would rewrite every fixture.
 - **External notifications (Slack, email).** The bus already carries everything a notifier would
-  need. It is one more consumer group on `aztec.events` plus a per-user subscription table
-  deciding which topics reach whom.
+  need. It is one more registered handler plus a per-user subscription table deciding which topics
+  reach whom — no producer would change.
 - **Task drag and drop.** Transitions happen through buttons that render only the legal moves
   for that workflow. Drag and drop would need an optimistic client-side move, a reconciliation
   when the transition service rejects it, and a UI answer for `requires_reason` transitions that

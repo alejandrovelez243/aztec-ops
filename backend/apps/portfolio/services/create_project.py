@@ -18,6 +18,7 @@ from apps.portfolio.domain.value_objects import CreateProjectCommand, ProjectRes
 from apps.portfolio.models import Project
 from apps.portfolio.services._references import (
     resolve_client,
+    resolve_currency,
     resolve_engagement_type,
     resolve_owner,
     resolve_project_type,
@@ -47,6 +48,10 @@ def create_project(
     Scoring and risk evaluation are not done here either — they are consumers reacting to
     ``project.created``, so a failing recalculation cannot roll back a legitimate creation.
 
+    ``command.code`` left empty means "allocate one": the next ``PRJ-NN`` is minted inside this
+    transaction, so a rollback frees the number. The HTTP API always leaves it empty; a fixture
+    pins its own.
+
     Args:
         command: The requested project, addressed by business codes.
         actor: ``accounts.User.code``, or "system" when the engine caused the change.
@@ -63,13 +68,17 @@ def create_project(
         WorkflowNotConfigured: No workflow binding or default answers for projects, or the
             resolved workflow has no entry node.
         ClientNotFound: ``client_code`` matches no client.
-        TaxonomyEntryNotFound: An engagement type, project type or stage code matches no row.
+        TaxonomyEntryNotFound: An engagement type, project type, stage or currency code matches
+            no row.
         OwnerNotFound: ``owner_code`` matches nobody.
         InvalidDateWindow: ``start_date`` is after ``target_date``.
         NegativeBusinessValue: ``business_value`` is below zero.
     """
-    if Project.objects.by_code(command.code).exists():
-        raise DuplicateProjectCode(command.code)
+    # An empty code means "allocate one": the HTTP API never accepts a project code from a client,
+    # while a fixture pins its own. Minted inside this transaction, so a rollback frees the number.
+    code = command.code or Project.objects.next_code()
+    if Project.objects.by_code(code).exists():
+        raise DuplicateProjectCode(code)
 
     ensure_valid_date_window(command.start_date, command.target_date)
     ensure_non_negative_business_value(command.business_value)
@@ -82,7 +91,7 @@ def create_project(
     initial_state = WorkflowState.objects.entry_state(workflow_id=workflow.pk)
 
     project = Project.objects.create(
-        code=command.code,
+        code=code,
         name=command.name,
         client=resolve_client(command.client_code),
         engagement_type=engagement_type,
@@ -93,7 +102,7 @@ def create_project(
         start_date=command.start_date,
         target_date=command.target_date,
         business_value=command.business_value,
-        currency=command.currency,
+        currency=resolve_currency(command.currency_code),
         summary=command.summary,
         next_step=command.next_step,
         imported_health=command.imported_health,
@@ -131,7 +140,7 @@ def create_project(
             "business_value": (
                 float(project.business_value) if project.business_value is not None else None
             ),
-            "currency": project.currency,
+            "currency": project.currency.code,
         },
         actor=actor,
         correlation_id=correlation_id,

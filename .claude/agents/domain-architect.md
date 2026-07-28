@@ -12,7 +12,7 @@ Owns the domain model and the layering of `backend/apps/catalog`, `backend/apps/
 `QuerySet`/`Manager` that carries each model's named queries, and the invariants of
 ARCHITECTURE §3 and §5.
 
-Does NOT write: ninja routers or schemas (`api/`), Redis consumers or the outbox relay,
+Does NOT write: ninja routers or schemas (`api/`), event handlers or the outbox transport,
 `ProjectSnapshot` rebuild logic, prioritization signal weights (`backend/apps/prioritization`), or
 frontend code. When a request needs one of those, stop, state which agent owns it
 (api, event-bus, prioritization, frontend), and hand back with the domain part finished.

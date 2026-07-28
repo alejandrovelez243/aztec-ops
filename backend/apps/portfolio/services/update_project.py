@@ -22,6 +22,7 @@ from apps.portfolio.domain.value_objects import ProjectResult, UpdateProjectComm
 from apps.portfolio.models import Project
 from apps.portfolio.services._references import (
     resolve_client,
+    resolve_currency,
     resolve_engagement_type,
     resolve_owner,
     resolve_project_type,
@@ -34,7 +35,6 @@ _SCALAR_FIELDS: Final[tuple[str, ...]] = (
     "start_date",
     "target_date",
     "business_value",
-    "currency",
     "summary",
     "next_step",
     "is_archived",
@@ -43,6 +43,7 @@ _SCALAR_FIELDS: Final[tuple[str, ...]] = (
 #: Command fields that name another row, mapped to the model attribute and its resolver.
 _REFERENCE_FIELDS: Final[dict[str, tuple[str, Callable[[str | None], object]]]] = {
     "client_code": ("client", resolve_client),
+    "currency_code": ("currency", resolve_currency),
     "engagement_type_code": ("engagement_type", resolve_engagement_type),
     "project_type_code": ("project_type", resolve_project_type),
     "stage_code": ("stage", resolve_stage),

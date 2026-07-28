@@ -1,29 +1,40 @@
 ---
 name: aztec-local-dev
-description: Operating Aztec Ops locally — docker compose up/down, migrations, make seed with Django fixtures, tests and lint, Django admin, running the outbox relay in the foreground, inspecting the aztec.events stream and the DLQ, resetting the database. Load it when a command fails, when the relay does not publish, when a consumer group has stuck pending entries, when SSE never reaches the browser, or when loaddata breaks.
+description: Operating Aztec Ops locally — docker compose up/down, migrations, make seed with Django fixtures, tests and lint, Django admin, inspecting the outbox backlog and dead-lettered events, forcing a drain, celery inspect, resetting the database. Load it when a command fails, when the outbox is not draining, when a handler keeps failing, when SSE never reaches the browser, or when loaddata breaks.
 ---
 
 # Operating Aztec Ops locally
 
-Six services in `docker-compose.yml`: `postgres` (16), `redis` (7), `api` (Django/ASGI on 8000),
-`relay` (outbox relay), `worker` (consumer groups: priority-recalculator, risk-evaluator,
-sse-fanout), `web` (Astro 5 on 4321). Python deps are managed with `uv`.
+Six services in `docker-compose.yml`, three of them application processes: `postgres` (16),
+`redis` (7 — Celery broker plus the `aztec.sse` pub/sub channel, no durable event state), `api`
+(Django/ASGI on 8000), `worker` (the single Celery worker: it drains the outbox, runs every handler
+— priority-recalculator, risk-evaluator, snapshot-builder, sse-fanout — and executes the clock
+ticks), `beat` (Celery Beat: the schedule and the outbox sweep, executes nothing), `frontend`
+(Astro on 4321). Python deps are managed with `uv`.
+
+**Celery is the bus** ([ADR 0010](../../../docs/adr/0010-celery-as-the-bus.md)). There is no relay,
+no Redis stream, no consumer group and no DLQ stream. `XADD`, `XPENDING` and `XINFO GROUPS` do not
+apply here — the outbox table is the instrument.
 
 ## Command table
 
 | Command | What it does |
 |---|---|
-| `make up` | `docker compose up -d` for postgres, redis, api, relay, worker, web |
+| `make up` | `docker compose up -d` for postgres, redis, api, worker, beat, frontend |
 | `make down` | `docker compose down` (keeps volumes) |
-| `make logs` | `docker compose logs -f api relay worker` |
+| `make logs` | `docker compose logs -f` |
+| `make logs-worker` | `docker compose logs -f worker beat` — the whole event path |
+| `make outbox` | pending / dispatched / dead-lettered counts from `events_outboxevent` |
 | `make migrate` | `docker compose exec api python manage.py migrate` |
-| `make seed` | `loaddata catalog workflows portfolio work activity` + `make recompute` |
-| `make recompute` | recompute `PriorityScore`, risk flags and `ProjectSnapshot` |
+| `make seed` | the **only** management command: fixtures + code sequences + recompute |
 | `make test` | `docker compose exec api pytest` — the runner is pytest via pytest-django, collecting Django `TestCase` classes natively |
-| `make lint` | `ruff check . && ruff format --check . && mypy` |
-| `make relay` | runs the relay in the foreground with `--verbosity 2` (debugging) |
+| `make lint` | `ruff check`, `ruff format --check`, and `make typecheck` for mypy |
 | `make shell` | `docker compose exec api python manage.py shell` |
 | `make reset` | drops volumes, migrates, seeds from scratch |
+
+There is deliberately **no `make recompute` and no `make relay`**. Recompute is the
+"Recompute priority for selected projects" admin action or `POST /api/v1/recompute`; a command that
+only works from a checkout is not an operation.
 
 Always run management commands inside the `api` container so they see the compose network
 (`postgres:5432`, `redis:6379`), not localhost.
@@ -40,7 +51,8 @@ docker compose exec api python manage.py createsuperuser
 ```
 
 Admin: http://localhost:8000/admin/ — taxonomies (`catalog`), workflows and transitions
-(`workflow`), `OutboxEvent`, `ProcessedEvent` and the DLQ view live there.
+(`workflow`), `ProcessedEvent`, and `OutboxEvent` with its pending / dispatched / dead-lettered
+filter and the **"Re-queue selected dead-lettered events"** action (which replaced stream replay).
 API docs: http://localhost:8000/api/docs. Frontend: http://localhost:4321.
 
 Health check before debugging anything else:
@@ -49,44 +61,75 @@ Health check before debugging anything else:
 docker compose ps
 docker compose exec postgres pg_isready -U aztec
 docker compose exec redis redis-cli PING
-curl -s localhost:8000/api/health
+curl -s localhost:8000/api/v1/health/live       # process only
+curl -s localhost:8000/api/v1/health/ready      # PostgreSQL + Redis, 200 or 503
+curl -s localhost:8000/api/v1/health/pipeline   # outbox backlog, dead letters, last tick
 ```
 
-## Running the relay in the foreground
+## Driving the bus by hand
 
-The relay is the only process allowed to `XADD`. To watch it while you trigger a transition:
+There is no relay to run in the foreground; the drain is a Celery task, so you call it like one.
+Nothing competes for rows — the claim is `SELECT ... FOR UPDATE SKIP LOCKED`, so a hand-run drain
+and the worker's own take disjoint batches.
 
 ```bash
-docker compose stop relay
-make relay        # or: docker compose run --rm relay python manage.py run_outbox_relay --verbosity 2
+# force one drain pass synchronously and see how many events it dispatched
+docker compose exec api python manage.py shell -c \
+  "from apps.events.tasks import drain_outbox; print(drain_outbox(batch_size=50))"
+
+# or enqueue it for the worker
+docker compose exec api celery -A config call events.drain_outbox
+
+# force a clock tick
+docker compose exec api celery -A config call events.emit_interval_tick
 ```
 
-In another shell, cause an event and watch it drain:
+In another shell, cause an event and watch it go:
 
 ```bash
-curl -s -X POST localhost:8000/api/projects/PRJ-01/transition \
+curl -s -X POST localhost:8000/api/v1/projects/PRJ-01/transition \
   -H 'Content-Type: application/json' -H 'X-Actor: camila' \
   -d '{"to_state": "blocked", "reason": "waiting for client access"}'
+
+make logs-worker
 ```
 
-## Inspecting the stream and the DLQ
+## Inspecting the bus
+
+The outbox table is the instrument. It replaced `XPENDING` and `XINFO GROUPS`, and it is better:
+it lives in PostgreSQL, it survives a Redis restart, and the admin renders it.
 
 ```bash
-docker compose exec redis redis-cli XINFO STREAM aztec.events
-docker compose exec redis redis-cli XLEN aztec.events
-docker compose exec redis redis-cli XRANGE aztec.events - + COUNT 5
-docker compose exec redis redis-cli XINFO GROUPS aztec.events
-docker compose exec redis redis-cli XPENDING aztec.events sse-fanout
-docker compose exec redis redis-cli XLEN aztec.events.dlq
-docker compose exec redis redis-cli XRANGE aztec.events.dlq - + COUNT 10
-docker compose exec redis redis-cli SUBSCRIBE aztec.sse     # fan-out channel
+make outbox                                      # pending / dispatched / dead_lettered
+curl -s localhost:8000/api/v1/health/pipeline    # the same, plus oldest backlog age and last tick
+
+docker compose exec api celery -A config inspect ping        # is the worker alive
+docker compose exec api celery -A config inspect active      # tasks running now
+docker compose exec api celery -A config inspect scheduled   # retries waiting on backoff
+docker compose exec api celery -A config inspect registered  # did the deploy ship the tasks
+
+docker compose exec redis redis-cli SUBSCRIBE aztec.sse      # fan-out channel
 ```
 
-Undelivered outbox rows (the relay is behind or dead):
+Which handlers are registered at all — this catches the one silent failure mode of the design, a
+reactor in a module not called `handlers.py`:
 
 ```bash
 docker compose exec api python manage.py shell -c \
-  "from apps.bus.models import OutboxEvent; print(OutboxEvent.objects.filter(published_at__isnull=True).count())"
+  "from apps.events.registry import registered_handlers; print(registered_handlers())"
+```
+
+Anything more specific is SQL (`make dbshell`):
+
+```sql
+SELECT id, topic, occurred_at, published_at, attempts, dead_lettered_at
+FROM events_outboxevent ORDER BY occurred_at DESC LIMIT 10;
+
+SELECT id, topic, attempts, last_error FROM events_outboxevent
+WHERE dead_lettered_at IS NOT NULL ORDER BY dead_lettered_at DESC;
+
+-- which handlers applied a given event: the replacement for XINFO CONSUMERS
+SELECT handler, processed_at FROM events_processedevent WHERE event_id = '<uuid>';
 ```
 
 ## Resetting the database
@@ -99,36 +142,61 @@ docker compose exec api python manage.py migrate
 make seed
 ```
 
-Redis only, keeping the database (clears stream, groups and dedup state):
+Redis only, keeping the database. There is no stream or consumer group to clear; the dedup table is
+what actually makes an already-processed event process again:
 
 ```bash
-docker compose exec redis redis-cli DEL aztec.events aztec.events.dlq
+docker compose exec redis redis-cli FLUSHALL          # queued Celery messages only
 docker compose exec api python manage.py shell -c \
-  "from apps.bus.models import ProcessedEvent; ProcessedEvent.objects.all().delete()"
+  "from apps.events.models import ProcessedEvent; ProcessedEvent.objects.all().delete()"
+docker compose restart worker
 ```
 
-Deleting `aztec.events` destroys the consumer groups too. The worker recreates them with
-`XGROUP CREATE ... MKSTREAM` on start; restart it: `docker compose restart worker`.
+To make the outbox re-deliver everything it already dispatched, clear the claim *and* the mark:
+
+```bash
+docker compose exec api python manage.py shell -c \
+  "from apps.events.models import OutboxEvent, ProcessedEvent; \
+   ProcessedEvent.objects.all().delete(); \
+   OutboxEvent.objects.update(published_at=None, dead_lettered_at=None, attempts=0)"
+```
+
+The next drain re-dispatches. Safe by construction: handlers are idempotent, so the worst case is
+recomputing what was already computed.
 
 ## Usual failures
 
-**Relay not publishing.** Check in order: `OutboxEvent` rows with `published_at IS NULL`
-(if zero, the service never wrote to the outbox — that is a service bug, not a relay bug);
-`docker compose logs relay`; `redis-cli PING` from the `api` container. A service that imports
-the Redis client bypasses the outbox and the relay will never see the event — that is rule 4 of
-CLAUDE.md and it is a bug, not a shortcut.
+**Events written but never dispatched.** `make outbox` first. If `pending` is climbing, the
+`worker` is down or cannot reach the broker — `docker compose ps worker`,
+`docker compose logs worker`, `celery -A config inspect ping`. If every count is zero after a
+transition, the service never wrote to the outbox: that is a service bug, not a transport bug. A
+service that imports the Redis client or calls `.delay()` bypasses the outbox entirely — rule 4 of
+CLAUDE.md, and a bug rather than a shortcut. If `dispatched` climbs but nothing reacts, the event
+was dispatched to *nobody*: check `registered_handlers()` and confirm the module is named
+`handlers.py`.
 
-**Consumer stuck with pending entries.** `XPENDING aztec.events <group>` shows entries that were
-read and never acked, usually because the handler crashed. Inspect and reclaim:
+**A handler keeps failing.** `docker compose logs worker | grep -i -A20 traceback`. The log line
+carries `event_id`, `topic`, `handler` and `attempt`; `attempts` and `last_error` are on the outbox
+row. Retries are automatic with backoff up to `EVENT_MAX_ATTEMPTS`, and
+`celery -A config inspect scheduled` shows the ones waiting. Reproduce against the exact payload
+before changing code:
 
 ```bash
-docker compose exec redis redis-cli XPENDING aztec.events risk-evaluator - + 10
-docker compose exec redis redis-cli XAUTOCLAIM aztec.events risk-evaluator worker-1 60000 0
-docker compose exec redis redis-cli XACK aztec.events risk-evaluator <entry-id>
+docker compose exec api python manage.py shell -c \
+  "from apps.events.models import OutboxEvent; \
+   from apps.events.registry import get_handler; \
+   from apps.events.tasks import apply_once; \
+   row = OutboxEvent.objects.get(id='<uuid>'); \
+   print(apply_once(get_handler('risk-evaluator'), row.to_envelope()))"
 ```
 
-Do not ack blindly to make the number go down — read the worker traceback first. Reprocessing is
-safe: consumers deduplicate on `event.id` via `ProcessedEvent`.
+It returns `False` if that pair is already claimed — delete the one `ProcessedEvent` row to re-run.
+Reprocessing is safe: deduplication is `(event_id, handler)`.
+
+**An event was dead-lettered.** The row *is* the dead letter — `dead_lettered_at` and `last_error`
+set, nothing copied, nothing deleted. Read it in the admin, fix the handler, then use
+**"Re-queue selected dead-lettered events"**. Handlers that already applied it dedup; the one that
+failed applies it for the first time. Never clear the flag to make a number go down.
 
 **SSE never reaching the browser.** Test the endpoint outside the browser first:
 
@@ -216,7 +284,8 @@ Three things to know when a run looks wrong:
   `domain/` is no longer pure.
 - A `TransactionTestCase` truncates tables instead of rolling back and does not reuse
   `setUpTestData` caching, so it is slower and it wipes rows other classes seeded. That is the
-  price of real commits; keep those classes limited to outbox, `on_commit` and relay behaviour.
+  price of real commits; keep those classes limited to outbox, `on_commit`, drain and handler
+  behaviour.
 - Subtests report as one test id. `-k` selects the whole method, not an individual
   `with self.subTest(days=...)` case; read the failure output to see which parameter failed.
 
@@ -250,10 +319,10 @@ git commit                                                     # hooks run; no -
 
 - Running `python manage.py ...` on the host instead of `docker compose exec api ...`, then
   debugging a connection refused to `postgres:5432`.
-- Killing pending entries with `XACK` or `XGROUP DESTROY` before reading the worker traceback,
-  which hides a consumer bug that will come back on the next event.
-- Running `make relay` while the `relay` container is still up: two publishers compete for the
-  same outbox rows. `docker compose stop relay` first.
+- Clearing `dead_lettered_at` or deleting `ProcessedEvent` rows before reading the worker
+  traceback, which hides a handler bug that comes back on the next event.
+- Reaching for `XADD`, `XPENDING` or `XINFO GROUPS`. They no longer apply: `make outbox` and
+  `/api/v1/health/pipeline` are the equivalents.
 - Using `runserver` to test `/api/stream`. It buffers; the stream looks broken when the code is
   fine.
 - `docker compose down -v` when only Redis needed clearing — you lose the seeded database for no
@@ -263,9 +332,10 @@ git commit                                                     # hooks run; no -
 - Adding a workflow state through a migration instead of the admin. States are data (rule 1).
 - Committing with `--no-verify` because a hook was slow or noisy, then discovering `uv.lock` no
   longer matches `pyproject.toml` when the next `make up` rebuilds the image.
-- Debugging "the relay never publishes in the test" when the test is a `TestCase`. It wraps every
-  test in a transaction that never commits, so `on_commit` does not fire and the relay's second
-  connection cannot see the outbox row. Move the class to `TransactionTestCase`.
+- Debugging "the drain never dispatches in the test" when the test is a `TestCase`. It wraps every
+  test in a transaction that never commits, so `on_commit` does not fire and the claim cannot see
+  the outbox row. Move the class to `TransactionTestCase`, and narrow the registry with
+  `only_handlers(...)` so the event does not fan out to `sse-fanout` and reach Redis.
 - Trying to select a single test with `-k test_something` after copying a module-level
   `def test_...` from another project. There are none here; tests are `TestCase` classes, so
   select by class name or by `path::Class::method`.

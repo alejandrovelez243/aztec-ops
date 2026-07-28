@@ -1,0 +1,98 @@
+/**
+ * Design tokens — the single source of truth for the Aztec Ops visual system.
+ *
+ * Implements DESIGN.md (repo root). This is the ONLY file where literal colour,
+ * font and spacing values may appear; every other stylesheet and component
+ * consumes these custom properties. A hex, rgb(), gradient, border-radius or
+ * box-shadow anywhere else is a defect.
+ */
+
+@import url("https://fonts.googleapis.com/css2?family=Archivo+Narrow:wght@600&family=Archivo:wght@400;600&family=JetBrains+Mono:wght@500;600&display=swap");
+
+:root {
+  /* --- Colour: painted console body, instruments sunk into it (DESIGN.md §Colors) --- */
+
+  /** Console Green-Grey — the panel body, default ground of every surface. */
+  --color-panel: #2e3532;
+  /** Plotboard Black — inset plates holding numeric readouts. Recessed regions only. */
+  --color-plate: #141917;
+  /** Signal Green — GO: nominal state, live figures, a legal transition. */
+  --color-go: #63a17a;
+  /** Caution Amber — attention required, but not today. */
+  --color-caution: #d9a441;
+  /** No-Go Red — a human must intervene today. Never decoration (Reserved Red Rule). */
+  --color-nogo: #c4483c;
+  /** Legend Ivory — primary text and engraved legends. Warm, never pure white. */
+  --color-legend: #e8e4d9;
+  /** Legend Dim — secondary text, units, column headers, unlit legend state. */
+  --color-legend-dim: #8a928d;
+  /** Rule Grey — hairline dividers, plate edges, table rules. */
+  --color-rule: #414a46;
+  /**
+   * Lighter top edge of an inset plate. Together with --color-rule it reads as a
+   * milled recess without any blur (DESIGN.md §Elevation & Depth).
+   */
+  --color-plate-edge: #565f59;
+
+  /* --- Type families (DESIGN.md §Typography) --- */
+
+  /** Display / legend face: engraved instrument plates, letterspaced caps. */
+  --font-display: "Archivo Narrow", "Arial Narrow", sans-serif;
+  /** Body face: summaries, reasons, timeline entries — human-written text. */
+  --font-body: "Archivo", system-ui, sans-serif;
+  /** Numeric / mono face: scores, countdown clocks, load figures, timestamps. */
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  /* --- Type scale (DESIGN.md §Typography, Hierarchy) --- */
+
+  /** Display: the score and the countdown clock. JetBrains Mono 600, 40–56px, 1.0. */
+  --text-display-size: clamp(40px, 4.5vw, 56px);
+  --text-display-line: 1;
+  --text-display-weight: 600;
+
+  /** Headline: board titles and section plates. Archivo Narrow 600, 20px, 1.2, +0.06em, uppercase. */
+  --text-headline-size: 20px;
+  --text-headline-line: 1.2;
+  --text-headline-weight: 600;
+  --text-headline-tracking: 0.06em;
+
+  /** Title: project names and task titles. Archivo 600, 15px, 1.3. */
+  --text-title-size: 15px;
+  --text-title-line: 1.3;
+  --text-title-weight: 600;
+
+  /** Body: summaries, blocker descriptions, reasons. Archivo 400, 14px, 1.5, max 70ch. */
+  --text-body-size: 14px;
+  --text-body-line: 1.5;
+  --text-body-weight: 400;
+  --text-body-max: 70ch;
+
+  /** Label: column headers, status legends, verdicts, controls. Archivo Narrow 600, 11px, 1.1, +0.1em, uppercase. */
+  --text-label-size: 11px;
+  --text-label-line: 1.1;
+  --text-label-weight: 600;
+  --text-label-tracking: 0.1em;
+
+  /** Figure: in-table numerics, task counts, dates. JetBrains Mono 500, 13px, tabular. */
+  --text-figure-size: 13px;
+  --text-figure-line: 1.3;
+  --text-figure-weight: 500;
+
+  /* --- Spacing: strict 4px base in 4 / 8 / 12 / 16 / 24 / 32 steps (DESIGN.md §Layout) --- */
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* --- Shape & density --- */
+
+  /** Zero radius, everywhere, without exception (The Square Plate Rule). */
+  --radius: 0;
+  /** Hairline border width for plates, rules and cells. */
+  --border-width: 1px;
+  /** Status matrix row height: 22 rows visible at 1440×900 (DESIGN.md §Layout). */
+  --size-row: 40px;
+}

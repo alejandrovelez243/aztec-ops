@@ -1,0 +1,68 @@
+---
+import type { CountdownTone } from "../../lib/format/countdown";
+
+/**
+ * The countdown clock of one matrix row.
+ *
+ * The tone selects the semantic colour token through `data-tone` (DESIGN.md, The Three
+ * Meanings Rule): `go` inside schedule, `caution` inside the final week, `nogo` in overrun,
+ * `dim` for the named `NO DATE` condition — never an empty cell.
+ */
+export interface Props {
+  /** Pre-formatted readout from `formatCountdown` (`12d`, `+3d OVERRUN`, `NO DATE`). */
+  text: string;
+  tone: CountdownTone;
+  /** Marks the cell as patchable by the queue island; screen readers announce the new clock. */
+  live?: boolean;
+}
+
+const { text, tone, live = false } = Astro.props;
+---
+
+<td
+  class="countdown-cell"
+  data-countdown
+  data-tone={tone}
+  aria-live={live ? "polite" : undefined}
+>
+  <span class="plate figure">{text}</span>
+</td>
+
+<!-- Global: the queue island rebuilds this markup client-side on stream reset, and Astro's
+     scoped styles would not match DOM it creates. -->
+<style is:global>
+  .countdown-cell {
+    padding: var(--space-1) var(--space-3);
+    white-space: nowrap;
+  }
+
+  .countdown-cell .plate {
+    display: inline-block;
+    padding: var(--space-1) var(--space-2);
+    min-width: 7ch;
+    text-align: right;
+  }
+
+  .countdown-cell[data-tone="go"] .plate {
+    color: var(--color-go);
+  }
+
+  .countdown-cell[data-tone="caution"] .plate {
+    color: var(--color-caution);
+  }
+
+  .countdown-cell[data-tone="nogo"] .plate {
+    color: var(--color-nogo);
+  }
+
+  .countdown-cell[data-tone="dim"] .plate {
+    color: var(--color-legend-dim);
+  }
+
+  /* Below 1024px the matrix sheds columns in the DESIGN.md order: client, owner, countdown. */
+  @media (max-width: 768px) {
+    .countdown-cell {
+      display: none;
+    }
+  }
+</style>

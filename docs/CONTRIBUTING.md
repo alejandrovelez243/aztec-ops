@@ -73,32 +73,35 @@ Then bring the system up:
 ```bash
 cp .env.example .env
 
-make up                                             # postgres, redis, api, relay, worker, beat, celery-worker, frontend
+make up                                             # postgres, redis, api, worker, beat, frontend
 docker compose exec api python manage.py migrate
-make seed                                           # loaddata fixtures + recompute scores
+make seed                                           # the only management command
 docker compose exec api python manage.py createsuperuser
 ```
 
-Three of those services are easy to confuse, so name them precisely:
+Three application processes, one job system:
 
 | Service | What it is |
 |---|---|
-| `worker` | Redis Streams consumer groups (`manage.py run_consumer`). The event bus. |
-| `celery-worker` | Executes scheduled Celery tasks. Only ever runs the clock ticks. |
-| `beat` | Celery Beat. Holds the schedule, executes nothing. |
+| `worker` | The single Celery worker. It **is** the bus: `events.drain_outbox`, every registered handler, and the clock ticks. |
+| `beat` | Celery Beat. Holds the schedule (two ticks plus the outbox sweep), executes nothing. |
+| `api` | Django on ASGI: the REST API, `GET /api/stream`, the admin. |
 
-Celery does scheduling only. It is not the bus and carries no domain events: a scheduled task
-writes an `OutboxEvent` like any service, and the relay publishes it.
+Celery is the transport, but a producer still never names a consumer: a service writes an
+`OutboxEvent` and the drain asks the handler registry who subscribed
+([ADR 0010](adr/0010-celery-as-the-bus.md)).
 
 Then verify:
 
 ```bash
 docker compose ps
-curl -s localhost:8000/api/health
+curl -s localhost:8000/api/v1/health/live
+curl -s localhost:8000/api/v1/health/ready
 ```
 
 - API docs: http://localhost:8000/api/docs
-- Django admin (taxonomies, workflows, outbox, DLQ): http://localhost:8000/admin/
+- Django admin (taxonomies, workflows, and the outbox with its dead-letter filter and re-queue
+  action): http://localhost:8000/admin/
 - Frontend: http://localhost:4321
 
 ### Repository layout
@@ -113,8 +116,8 @@ data/raw/    Normalized source dataset (gitignored; fixtures are the committed f
 `make seed` is idempotent — fixtures carry stable primary keys, so `loaddata` upserts. Run it
 twice and the database is identical. If it is not, that is a bug for `seed-data-engineer`.
 
-Operating the system day to day (relay in the foreground, stream inspection, DLQ, resets) is in
-the `aztec-local-dev` skill, not here.
+Operating the system day to day (`make outbox`, forcing a drain, dead-lettered events, resets) is
+in the `aztec-local-dev` skill and `docs/RUNBOOK.md`, not here.
 
 ## 3. Dependency policy — CLI only
 
@@ -188,7 +191,7 @@ feature           ●●                   ●               feature/priority-ov
 ```
 
 The branch prefix carries the same meaning as the commit type, so a branch holding a fix is
-`feature/fix-relay-ack` only when it targets `develop`; a genuine production fix is
+`feature/fix-drain-backoff` only when it targets `develop`; a genuine production fix is
 `hotfix/0.1.1`.
 
 ```bash
@@ -276,9 +279,9 @@ ones above it. Owning skill: `.agents/skills/django-clean-arch/`. Worked example
    in a `filter()`. A `repositories.py` module is only for a query that spans contexts.
 5. **`backend/apps/<context>/services/<use_case>.py`** — one module, one public function, decorated
    `@transaction.atomic`. In this order inside the transaction: mutate the aggregate, write the
-   `ActivityRecord`, write the `OutboxEvent`. No Redis import anywhere under `services/`; the
-   relay is the only process that publishes. `correlation_id` is threaded through from the API
-   boundary.
+   `ActivityRecord`, write the `OutboxEvent`. No Redis import and no `.delay()` anywhere under
+   `services/` — the service names a topic, never a handler. `correlation_id` is threaded through
+   from the API boundary.
 6. **The outbox event** — written by the service with `enqueue_event(...)` in the same
    transaction. If the topic is new, follow §10 below before continuing.
 7. **`backend/apps/<context>/api/schemas.py`** — typed input and output schemas. No bare `dict`
@@ -286,8 +289,9 @@ ones above it. Owning skill: `.agents/skills/django-clean-arch/`. Worked example
 8. **`backend/apps/<context>/api/routers.py`** — one route, one service call, return the schema. No `if`,
    no queryset, no per-view `try/except`.
 9. **`backend/apps/<context>/admin.py`** — expose the new field only if the operation must edit it.
-10. **Consumers** — the `ProjectSnapshot` rebuild and the risk evaluator already subscribe to the
-    `project.*` and `blocker.*` families. Edit a consumer only if the topic is genuinely new.
+10. **Handlers** — `snapshot-builder` subscribes to every topic except `clock.ticked`, and the two
+    prioritization engines to the whole write side. Touch `apps/<context>/handlers.py` only if the
+    topic is genuinely new, and never touch the producer to add a reaction.
 11. **Tests** — one `TestCase` class per behaviour under test, and the base class is picked per
     layer you touched, because it changes what the test can prove (CLAUDE.md rule 15):
 
@@ -296,7 +300,7 @@ ones above it. Owning skill: `.agents/skills/django-clean-arch/`. Worked example
     | step 1–2, `domain/errors.py`, `domain/events.py` | `django.test.SimpleTestCase` | The error condition and the payload model hold with no database. `SimpleTestCase` forbids database access, so the purity of `domain/` is enforced by the base class. |
     | step 4–5, queryset methods and `services/` | `django.test.TestCase` | Exactly one `ActivityRecord` and one `OutboxEvent` written, zero of both after a rollback. Each test is wrapped in a transaction and rolled back. |
     | step 7–8, `api/` | `django.test.TestCase` | The route returns the error status code and the output schema. |
-    | step 6 and 10, the outbox actually reaching the relay or a consumer | `django.test.TransactionTestCase` | Real commits, so `on_commit` fires and the relay's `SELECT ... FOR UPDATE SKIP LOCKED` on a second connection sees the row. On `TestCase` the transaction never commits and this test passes while proving nothing. |
+    | step 6 and 10, the outbox actually reaching the drain or a handler | `django.test.TransactionTestCase` | Real commits, so `on_commit` fires and the drain's `SELECT ... FOR UPDATE SKIP LOCKED` sees the row. On `TestCase` the transaction never commits and this test passes while proving nothing. |
 
     ```python
     # backend/apps/work/tests/test_resolve_blocker.py
@@ -474,7 +478,8 @@ One class plus one registry entry. The evaluator is never edited. Owning skill:
    ```
 
 5. Run `uv run --project backend pytest apps/prioritization -k <SignalClass>Tests`, `make lint`,
-   then `make recompute` so persisted scores reflect the new policy version.
+   then recompute the portfolio (the admin action or `POST /api/v1/recompute`) so persisted scores
+   reflect the new policy version.
 
 A risk criterion follows the same shape: one `Specification` subclass, a `flag_code`, a severity,
 one `@register_risk` line. If you are editing an existing `if`, stop — the design is wrong.
@@ -484,51 +489,51 @@ one `@register_risk` line. If you are editing an existing `if`, stop — the des
 Owning skill: `.agents/skills/event-driven-flow/`.
 
 1. Name the topic `<entity>.<event>` or `<entity>.<aspect>.<event>` — lowercase, dot-separated,
-   past tense — and add it to the topic list in `docs/ARCHITECTURE.md` §6 **in the same commit**.
-   An undocumented topic is invisible to whoever writes the next consumer.
+   past tense — and add the full entry to `docs/EVENTS.md` §4, the line to `docs/ARCHITECTURE.md`
+   §6 and the `TOPIC_*` constant to `backend/apps/events/domain/envelope.py` **in the same commit**.
+   That catalog is enforced: `register_handler` validates every subscription against it at import,
+   so an unregistered topic is a boot failure rather than a handler that silently never fires.
 2. Declare the payload as a `pydantic.BaseModel` in `backend/apps/<context>/domain/events.py`, `version: 1`.
    `entity.id` is the business code (`PRJ-01`), never a primary key. Adding an optional field
-   keeps the version; removing or retyping one means `version: 2` and a consumer that handles
+   keeps the version; removing or retyping one means `version: 2` and a handler that handles
    both until nothing emits 1.
 3. Emit it from the application service, inside the same `transaction.atomic()` as the mutation
-   and the `ActivityRecord`. Services write `OutboxEvent`; only the relay talks to Redis.
-4. Decide which existing consumer group reacts (`priority-recalculator`, `risk-evaluator`,
-   `sse-fanout`, plus the `ProjectSnapshot` rebuild). One group per reason to react, never one
-   per topic — a failing group must not block the others.
-5. Make the handler idempotent: claim `(event_id, consumer_group)` in `ProcessedEvent` inside the
-   same transaction as the effect, return early on a duplicate, and `XACK` on both paths.
+   and the `ActivityRecord`. Services write `OutboxEvent` and stop — no Redis, no `.delay()`.
+4. Decide which existing handler reacts (`priority-recalculator`, `risk-evaluator`,
+   `snapshot-builder`, `sse-fanout`) and add the constant to its `topics=` set. One handler per
+   reason to react, never one per topic — a failing one must not block the others. Adding a *new*
+   reaction is a decorated function in `apps/<context>/handlers.py` and **zero producer edits**;
+   the module name is fixed, because app-ready autodiscovers exactly `handlers`.
+5. Idempotency is free and mandatory: the transport claims `(event_id, handler)` in
+   `ProcessedEvent` in the same transaction as the effect. Your handler must **raise** on failure —
+   that is what produces the retry, the log line and finally the dead letter on the outbox row.
+   Never catch your own exception, never open your own transaction, never read `timezone.now()`.
 6. Decide whether the browser needs it. If yes, add the topic to the `sse-fanout` allowlist *and*
    to the shared store the Astro islands subscribe to. If nothing in the UI changes, leave it out
    rather than publishing noise the client discards.
-7. Add the delivery tests, split by what each one needs to prove. "One `OutboxEvent` row per
-   service call and zero after a rollback" is an ordinary database assertion and belongs on
-   `django.test.TestCase`. Everything downstream of the commit — the relay putting the envelope
-   on `aztec.events` intact, the handler run twice with the same `event.id` producing one effect
-   and two acks — goes on `django.test.TransactionTestCase`, because the relay reads the row on a
-   second connection with `SELECT ... FOR UPDATE SKIP LOCKED` and `TestCase` never commits it:
+7. Add the delivery tests, split by what each one needs to prove. Everything on this path commits
+   for real, so it is `django.test.TransactionTestCase` — `TestCase` never commits, so `on_commit`
+   never fires and the drain sees nothing, and the test passes while proving nothing. Use
+   `EagerCeleryMixin` and narrow the registry with `only_handlers(...)`
+   (`apps/events/tests/celery_support.py`, `apps/events/tests/registry_support.py`), or the
+   committed row fans out to `sse-fanout` and reaches Redis:
 
    ```python
    from django.test import TransactionTestCase
 
-   from apps.events.models import OutboxEvent
-   from apps.events.relay import drain_outbox
+   from apps.events.registry import get_handler
+   from apps.events.tasks import apply_once
+   from apps.events.tests.celery_support import EagerCeleryMixin
+   from apps.events.tests.registry_support import only_handlers
 
 
-   class OutboxDeliveryTests(TransactionTestCase):
-       def setUp(self) -> None:
-           self.stream = FakeStream()
-
-       def test_the_relay_publishes_the_envelope_intact(self) -> None:
-           OutboxEvent.objects.create(topic="blocker.resolved", payload={"blocker_id": 1})
-           drain_outbox(stream=self.stream)
-           self.assertEqual(len(self.stream.entries), 1)
-           self.assertEqual(self.stream.entries[0]["topic"], "blocker.resolved")
-
+   class BlockerResolvedDeliveryTests(EagerCeleryMixin, TransactionTestCase):
        def test_the_same_event_delivered_twice_produces_one_effect(self) -> None:
-           event = OutboxEvent.objects.create(topic="blocker.resolved", payload={"blocker_id": 1})
-           handle(event_id=str(event.id), payload=event.payload)
-           handle(event_id=str(event.id), payload=event.payload)
-           self.assertEqual(RiskFlag.objects.count(), 1)
+           envelope = envelope_for("blocker.resolved", entity_id="PRJ-01")
+
+           with only_handlers("risk-evaluator"):
+               self.assertTrue(apply_once(get_handler("risk-evaluator"), envelope))
+               self.assertFalse(apply_once(get_handler("risk-evaluator"), envelope))
    ```
 
 ## 11. Who to hand a task to
@@ -540,11 +545,11 @@ conversation. Each one hands work back rather than crossing into another's files
 |---|---|
 | `domain-architect` | A model, migration, taxonomy, workflow graph, `ActivityRecord` verb, typed domain error, risk specification, or a layering violation to review. |
 | `api-engineer` | A route under `backend/apps/*/api/`, a request/response schema, pagination or filtering, the domain-error-to-HTTP mapping, CORS, or the HTTP contract of `GET /api/stream`. |
-| `event-bus-engineer` | Anything between a committed transaction and a byte on the wire: `OutboxEvent`, the relay, consumer groups, `ProcessedEvent`, retries, the DLQ, SSE fan-out. "The event never arrived." |
+| `event-bus-engineer` | Anything between a committed transaction and a byte on the wire: `OutboxEvent`, the drain and delivery tasks, the handler registry, `ProcessedEvent`, retries, dead-lettering, SSE fan-out. "The event never arrived." |
 | `prioritization-engineer` | A signal strategy, `PriorityPolicy` weights or version, the `breakdown`, `PriorityOverride`, a risk specification's severity, derived health. "Why is this project ranked first?" |
 | `astro-frontend-engineer` | Anything under `frontend/`: pages, islands, the shared `EventSource` store, the typed API client, loading/empty/error/disconnected states. "The frontend does not update." |
 | `seed-data-engineer` | Fixtures under `backend/apps/*/fixtures/`, `backend/scripts/xlsx_to_fixtures.py`, the `make seed` target. "loaddata fails", "seed is not idempotent", "the spreadsheet changed." |
-| `test-engineer` | New coverage, `factory_boy` factories, the four integration tests (illegal transition and seed idempotency on `TestCase`; consumer idempotency and outbox delivery on `TransactionTestCase`), the choice of test base class, or a `make test` failure that lives in test code. |
+| `test-engineer` | New coverage, `factory_boy` factories, the four integration tests (illegal transition and seed idempotency on `TestCase`; handler idempotency and outbox delivery on `TransactionTestCase`), the choice of test base class, or a `make test` failure that lives in test code. |
 | `devops-engineer` | Dockerfiles, Compose services, healthchecks, startup ordering, `.env.example`, `Makefile` targets, the README bring-up section, SSE not streaming through the server. |
 
 If a task spans two of them, split it at the handoff the agents already define — for example
@@ -558,7 +563,7 @@ A change is done when all of these hold. Not four out of five.
       right base: `SimpleTestCase` for new pure logic (signals, specifications, value objects,
       policy maths), `TestCase` for queryset methods, services, routes, transitions and seed
       idempotency, `TransactionTestCase` for anything touching the outbox, `on_commit` or the
-      relay. No module-level `def test_...`, no `pytest.mark.django_db`, no bare `assert`.
+      drain. No module-level `def test_...`, no `pytest.mark.django_db`, no bare `assert`.
 - [ ] `make lint` passes: ruff check, ruff format, mypy strict over `domain/` and `services/`.
 - [ ] Pre-commit ran on every commit, including `uv lock --check`. No `--no-verify` anywhere in
       the branch.

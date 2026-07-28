@@ -2,7 +2,7 @@
 
 Every error carries the identifiers a log line or an admin page needs to act on it. The bus is
 operated by a human reading `docs/RUNBOOK.md`, so an error whose message does not name the
-event, the group or the topic is an error that costs a database session to diagnose.
+event, the handler or the topic is an error that costs a database session to diagnose.
 """
 
 
@@ -12,21 +12,6 @@ class EventsError(Exception):
     Callers catch this rather than :class:`Exception` when they need to distinguish a bus
     failure from a handler failure; nothing in this context raises a bare ``Exception``.
     """
-
-
-class EnvelopeDecodeError(EventsError):
-    """A stream entry could not be turned back into an :class:`EventEnvelope`.
-
-    The invariant broken is that everything on ``aztec.events`` was written by the relay from a
-    validated envelope. Raising instead of skipping is deliberate: a silently dropped entry is
-    indistinguishable from an empty stream, so the runner routes the raw entry to the dead letter
-    stream and the entry stays inspectable.
-    """
-
-    def __init__(self, entry_id: str, reason: str) -> None:
-        super().__init__(f"Stream entry {entry_id} is not a valid event envelope: {reason}")
-        self.entry_id = entry_id
-        self.reason = reason
 
 
 class UnknownTopicError(EventsError):
@@ -42,17 +27,54 @@ class UnknownTopicError(EventsError):
         self.topic = topic
 
 
-class ConsumerGroupNotRegisteredError(EventsError):
-    """No consumer class is registered under the requested group name.
+class EventNamesNoProjectError(EventsError):
+    """An envelope reached a project-scoped consumer without naming a project.
 
-    Almost always means the module holding the ``@register_consumer`` class was never imported:
-    consumers are discovered from ``apps/<context>/consumers/__init__.py`` at app-ready time.
+    Every topic those handlers subscribe to either carries ``entity.type == "project"`` or a
+    ``project_code`` in its payload (EVENTS.md §7.5) — that rule is what lets a consumer act on a
+    task or a blocker without a foreign key into ``apps.work``. An envelope that satisfies neither
+    is a producer bug, so it is raised rather than skipped: the delivery task retries it, dead-letters the
+    outbox row and leaves it inspectable, whereas returning quietly would drop a real state change.
     """
 
-    def __init__(self, group: str, known_groups: tuple[str, ...]) -> None:
+    def __init__(self, topic: str, entity_type: str, entity_id: str) -> None:
         super().__init__(
-            f"No consumer registered for group {group!r}. Registered groups: "
-            f"{', '.join(known_groups) or '(none)'}."
+            f"Event on topic {topic!r} for {entity_type}:{entity_id} names no project: "
+            "entity.type is not 'project' and payload.project_code is absent or empty."
         )
-        self.group = group
-        self.known_groups = known_groups
+        self.topic = topic
+        self.entity_type = entity_type
+        self.entity_id = entity_id
+
+
+class MalformedTickError(EventsError):
+    """A ``clock.ticked`` envelope carries no usable ``tick_at``.
+
+    The consumers select what to recompute with ``tick_at`` and never with their own wall clock,
+    so that a replayed tick lands on the same result. Falling back to ``now()`` would make a
+    redelivery non-deterministic, which is exactly the property the field exists to protect.
+    """
+
+    def __init__(self, event_id: str, raw: object) -> None:
+        super().__init__(f"clock.ticked event {event_id} carries no ISO-8601 tick_at: {raw!r}.")
+        self.event_id = event_id
+        self.raw = raw
+
+
+class HandlerNotRegisteredError(EventsError):
+    """No handler is registered under the name a delivery task carried.
+
+    Two causes, and the message names both because they are fixed differently: the module holding
+    the ``@register_handler`` function is not called ``handlers.py``, so app-ready never imported
+    it; or the task was queued by a previous deploy for a handler that has since been deleted, in
+    which case the event is already durable in the outbox and can be re-queued once a handler
+    exists again.
+    """
+
+    def __init__(self, name: str, known_handlers: tuple[str, ...]) -> None:
+        super().__init__(
+            f"No handler registered under the name {name!r}. Registered handlers: "
+            f"{', '.join(known_handlers) or '(none)'}."
+        )
+        self.name = name
+        self.known_handlers = known_handlers

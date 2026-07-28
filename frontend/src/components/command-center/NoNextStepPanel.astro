@@ -1,0 +1,186 @@
+---
+import type { ViewState } from "../../lib/view-state";
+import { assertNever } from "../../lib/view-state";
+
+/**
+ * One line of the no-next-step panel: a project whose queue row carries the `NO_NEXT_STEP`
+ * risk flag, with the reason the specification raised.
+ */
+export interface NoNextStepLine {
+  code: string;
+  name: string;
+  /** Owner display label, or `null` when the project is unassigned. */
+  ownerLabel: string | null;
+  reason: string;
+}
+
+/**
+ * No-next-step panel: projects with no recorded next step and no task in progress — the work
+ * that is drifting rather than blocked. Amber by right (attention required, but not today,
+ * DESIGN.md). All four view states render as real markup; the panel is server-rendered and
+ * re-rendered on navigation, never patched live.
+ */
+export interface Props {
+  state: ViewState<readonly NoNextStepLine[]>;
+}
+
+const { state } = Astro.props;
+---
+
+<section
+  class="panel"
+  data-panel="no-next-step"
+  aria-labelledby="no-next-step-title"
+>
+  <h2 class="headline panel-title" id="no-next-step-title">No next step</h2>
+  {
+    (() => {
+      switch (state.kind) {
+        case "loading":
+          return (
+            <div class="panel-loading" aria-busy="true">
+              {[0, 1, 2].map((row) => (
+                <div
+                  class="skeleton-row"
+                  aria-hidden="true"
+                  data-skeleton={row}
+                />
+              ))}
+              <span class="visually-hidden">
+                Loading projects without a next step…
+              </span>
+            </div>
+          );
+        case "empty":
+          return <p class="body-text panel-note">{state.message}</p>;
+        case "error":
+          return (
+            <div class="panel-note" role="alert">
+              <p class="body-text">
+                The queue could not be fetched ({state.code}).
+              </p>
+              <a class="label retry" href="/">
+                Retry
+              </a>
+            </div>
+          );
+        case "ready":
+        case "disconnected":
+          return (
+            <>
+              {state.kind === "disconnected" && (
+                <p class="label stale-marker" role="status">
+                  Disconnected — figures may be stale
+                  {state.lastEventAt !== null &&
+                    ` · last event ${state.lastEventAt}`}
+                </p>
+              )}
+              <ul class="line-list">
+                {state.data.map((line) => (
+                  <li class="line">
+                    <a class="figure line-code" href={`/projects/${line.code}`}>
+                      {line.code}
+                    </a>
+                    <span class="line-body">
+                      <span class="title line-name">{line.name}</span>
+                      <span class="body-text line-reason">{line.reason}</span>
+                    </span>
+                    <span class="label line-owner">
+                      {line.ownerLabel ?? "Unassigned"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          );
+        default:
+          return assertNever(state);
+      }
+    })()
+  }
+</section>
+
+<style>
+  .panel {
+    border: 1px solid var(--color-rule);
+    padding: var(--space-3);
+  }
+
+  .panel-title {
+    margin: 0 0 var(--space-3);
+    color: var(--color-legend);
+  }
+
+  .panel-note {
+    color: var(--color-legend-dim);
+    margin: 0;
+  }
+
+  .retry {
+    display: inline-block;
+    margin-top: var(--space-2);
+    color: var(--color-legend);
+    border: 1px solid var(--color-rule);
+    padding: var(--space-1) var(--space-2);
+    text-decoration: none;
+  }
+
+  .retry:hover {
+    background: var(--color-plate);
+  }
+
+  .stale-marker {
+    color: var(--color-caution);
+    margin: 0 0 var(--space-2);
+  }
+
+  .line-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .line {
+    display: grid;
+    grid-template-columns: 9ch 1fr 14ch;
+    gap: var(--space-2);
+    align-items: baseline;
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--color-rule);
+    border-inline-start: 2px solid var(--color-caution);
+    padding-inline-start: var(--space-2);
+  }
+
+  .line-code {
+    color: var(--color-legend);
+    text-decoration: none;
+  }
+
+  .line-code:hover {
+    text-decoration: underline;
+  }
+
+  .line-name {
+    display: block;
+    color: var(--color-legend);
+  }
+
+  .line-reason {
+    display: block;
+    color: var(--color-legend-dim);
+    font-size: 13px;
+  }
+
+  .line-owner {
+    color: var(--color-legend-dim);
+    text-align: right;
+  }
+
+  .skeleton-row {
+    height: 40px;
+    border-bottom: 1px solid var(--color-rule);
+    background: var(--color-plate);
+  }
+</style>

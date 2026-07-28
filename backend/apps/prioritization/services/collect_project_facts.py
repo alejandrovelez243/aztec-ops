@@ -86,7 +86,7 @@ def collect_project_facts(*, project_code: str, now: datetime) -> ProjectFacts:
         open_blocker_count=blockers.open_blocker_count,
         oldest_blocker_age_days=_age_in_days(blockers.oldest_raised_at, now),
         business_value=project.business_value,
-        currency=project.currency,
+        currency=project.currency.code,
         last_activity_at=last_activity_at,
         days_since_last_activity=_age_in_days(last_activity_at, now),
         staleness_threshold_days=settings.STALENESS_THRESHOLD_DAYS,
@@ -135,13 +135,21 @@ def _has_task_in_progress(project_id: int) -> bool:
 
 
 def _last_activity_at(project_code: str) -> datetime | None:
-    """When the audit trail last recorded anything about this project.
+    """When the audit trail last recorded a *person* doing something about this project.
 
     ``None`` means nothing has ever been recorded, which ``IsStale`` treats as longer than any
     threshold rather than as freshness.
+
+    The engine's own ``POLICY`` records are excluded. Counting them would let ``staleness`` read
+    the consequence of its own last reading, and a project would alternate between stale and fresh
+    on every tick without anybody touching it.
     """
     timeline = (
-        ActivityRecord.objects.for_project(project_code).newest_first().recent(1).as_entries()
+        ActivityRecord.objects.for_project(project_code)
+        .caused_by_people()
+        .newest_first()
+        .recent(1)
+        .as_entries()
     )
     if not timeline:
         return None

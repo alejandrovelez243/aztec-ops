@@ -1,0 +1,122 @@
+---
+import type { RiskFlag } from "../../lib/api/domain";
+
+/**
+ * The six-cell risk legend block of one matrix row.
+ *
+ * The Ghost Legend Rule (DESIGN.md): every flag renders in its fixed position at all times —
+ * lit in its severity colour when raised, drawn in Legend Dim with `aria-disabled` when not.
+ * Empty cells are forbidden, so the operator sees what could be wrong, not only what is wrong.
+ *
+ * The fixed `legendOrder` is a display contract, not a closed vocabulary: a flag whose code is
+ * outside it (the API keeps the set open, `docs/API.md` §4.2) is appended after the fixed cells
+ * and rendered with its own reason rather than dropped. Colour is selected by `severity`
+ * through `data-severity`, never by flag code.
+ *
+ * The island re-renders this block from `project.risk.changed` payloads; the cell markup here
+ * and the island's DOM builder must stay in lockstep.
+ */
+export interface Props {
+  /** The row's currently raised flags (`QueueItemView.risk_flags`). */
+  flags: readonly RiskFlag[];
+  /** Fixed legend positions, e.g. BLOCKED first; every entry renders lit or unlit. */
+  legendOrder: readonly string[];
+  /** Marks the block as patchable by the queue island; changes are announced politely. */
+  live?: boolean;
+}
+
+const { flags, legendOrder, live = false } = Astro.props;
+
+const byCode = new Map(flags.map((flag) => [flag.code, flag]));
+const ordered = legendOrder.map((code) => ({ code, flag: byCode.get(code) }));
+const extras = flags.filter((flag) => !legendOrder.includes(flag.code));
+---
+
+<td
+  class="legend-cell-wrap"
+  data-legend
+  aria-live={live ? "polite" : undefined}
+>
+  <span class="legend-block" role="group" aria-label="Risk legend">
+    {
+      ordered.map(({ code, flag }) =>
+        flag !== undefined ? (
+          <span
+            class="legend-cell"
+            data-flag={flag.code}
+            data-severity={flag.severity}
+            tabindex="0"
+            title={flag.reason}
+          >
+            {flag.code}
+          </span>
+        ) : (
+          <span class="legend-cell" data-flag={code} aria-disabled="true">
+            {code}
+          </span>
+        ),
+      )
+    }
+    {
+      extras.map((flag) => (
+        <span
+          class="legend-cell"
+          data-flag={flag.code}
+          data-severity={flag.severity}
+          tabindex="0"
+          title={flag.reason}
+        >
+          {flag.code}
+        </span>
+      ))
+    }
+  </span>
+</td>
+
+<!-- Global: the queue island rebuilds this markup client-side on stream reset, and Astro's
+     scoped styles would not match DOM it creates. -->
+<style is:global>
+  .legend-cell-wrap {
+    padding: var(--space-1) var(--space-3);
+  }
+
+  .legend-block {
+    display: inline-flex;
+    gap: var(--space-1);
+  }
+
+  .legend-cell {
+    font-family: var(--font-display);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    line-height: 1.1;
+    padding: var(--space-1);
+    border: 1px solid var(--color-rule);
+    color: var(--color-legend-dim);
+    white-space: nowrap;
+  }
+
+  .legend-cell:focus-visible {
+    outline: 1px solid var(--color-legend);
+    outline-offset: 0;
+  }
+
+  /* Lit cells: the severity picks the single semantic colour (Three Meanings Rule). */
+  .legend-cell[data-severity="CRITICAL"],
+  .legend-cell[data-severity="HIGH"] {
+    color: var(--color-nogo);
+    border-color: var(--color-nogo);
+  }
+
+  .legend-cell[data-severity="MEDIUM"] {
+    color: var(--color-caution);
+    border-color: var(--color-caution);
+  }
+
+  .legend-cell[data-severity="LOW"] {
+    color: var(--color-legend);
+    border-color: var(--color-legend);
+  }
+</style>

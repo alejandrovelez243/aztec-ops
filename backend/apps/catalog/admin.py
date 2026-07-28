@@ -17,6 +17,7 @@ from django.db.models import Model
 from django.utils.html import format_html
 
 from apps.catalog.models import (
+    Currency,
     EngagementType,
     Priority,
     ProjectType,
@@ -99,3 +100,15 @@ class PriorityAdmin(TaxonomyAdmin):
 @admin.register(Role)
 class RoleAdmin(TaxonomyAdmin):
     """Roles assigned to team members."""
+
+
+@admin.register(Currency)
+class CurrencyAdmin(TaxonomyAdmin):
+    """Currencies, with ``minor_units`` on the changelist because it is what the client formats with.
+
+    ``minor_units`` is deliberately *not* in ``list_editable``: getting it wrong renders every
+    amount in that currency off by two orders of magnitude, so it is changed on the detail page
+    like ``code`` is, not while reordering a menu.
+    """
+
+    list_display = ("code", "label", "minor_units", "order", "is_active", "color", "swatch")

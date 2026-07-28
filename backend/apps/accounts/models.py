@@ -40,6 +40,8 @@ from django.contrib.auth.models import AbstractUser
 from django.contrib.auth.models import UserManager as AuthUserManager
 from django.db import models
 
+from apps.shared.refs import ActorRef
+
 #: Default weekly capacity of a person, in points. It is the divisor of owner load, so the
 #: database refuses zero (DATA_MODEL §9.2) and the default is a working week's worth of tasks.
 DEFAULT_WEEKLY_CAPACITY_POINTS = 20
@@ -168,3 +170,25 @@ class User(AbstractUser):
     def __str__(self) -> str:
         """Return the display alias."""
         return self.alias
+
+    def to_ref(self) -> ActorRef:
+        """Describe this person as the reference shape every payload that names a person renders.
+
+        A method on the model rather than a converter in a router, for the reason CLAUDE.md rule 6
+        gives: a free function reading four attributes off a ``User`` it was handed fragments the
+        moment a second caller needs the same projection, and there are five of them here — the
+        queue's owner, a task's assignee, a blocker's owner, a note's author and the team-load row.
+
+        ``role`` is read through the relation, so a caller rendering many people chains
+        :meth:`UserQuerySet.with_role` first; on an instance fetched without it this is still
+        correct but costs one query per person.
+
+        Returns:
+            The person as an immutable :class:`~apps.shared.refs.ActorRef`, whose ``alias`` is the
+            stable ``code`` and whose ``label`` is the operator-editable display name.
+        """
+        return ActorRef.of(
+            code=self.code,
+            label=self.alias,
+            role=self.role.label if self.role else None,
+        )

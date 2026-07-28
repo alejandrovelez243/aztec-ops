@@ -110,7 +110,9 @@ class BlockageAgeSaturationTests(SimpleTestCase):
                 self.assertIn(str(days), reason)
 ```
 5. Run `pytest backend/apps/prioritization -k <code>` and `make lint` (mypy strict covers `domain/`).
-6. Run `make recompute` so persisted scores reflect the new policy version.
+6. Recompute so persisted scores reflect the new policy version: the
+   "Recompute priority for selected projects" admin action, or `POST /api/v1/recompute`. There is
+   deliberately no `make recompute` — a command run from a checkout is not an operation.
 
 A signal key present in `weights` with no registered strategy — or the reverse — raises at policy
 load. It is never silently defaulted.
@@ -217,7 +219,8 @@ pass while proving nothing.
   situation the ranking exists to expose.
 - Forgetting to recompute after changing data, a policy or a signal, so the API keeps serving
   stale `PriorityScore` and `ProjectSnapshot` rows. Recomputation is event-driven in normal
-  operation; after a seed or a policy change run `make recompute` explicitly.
+  operation; after a seed or a policy change recompute explicitly (admin action or
+  `POST /api/v1/recompute`; `make seed` already chains it).
 - Writing an override into `PriorityScore.value` "so the sorting is simpler". It destroys the
   audit trail and the UI can no longer label it as an override.
 - An unnamed numeric literal inside a strategy — `21`, `0.5`, `40` written inline. It becomes a
@@ -241,7 +244,7 @@ pass while proving nothing.
   already declares what database access a test gets; a second mechanism for the same decision is
   how a pure test quietly starts hitting the database (`CLAUDE.md` rule 15).
 - Testing the outbox emission of a recomputation on `TestCase`. It wraps the test in a transaction
-  that never commits, so `on_commit` never fires and the relay's `SELECT ... FOR UPDATE SKIP
+  that never commits, so `on_commit` never fires and the drain's `SELECT ... FOR UPDATE SKIP
   LOCKED` on another connection cannot see the row — use `TransactionTestCase`.
 - Bare `assert` in a test instead of `self.assertEqual` / `self.assertIn` / `self.assertRaises`,
   or duplicating a method per boundary value instead of one `subTest` loop.

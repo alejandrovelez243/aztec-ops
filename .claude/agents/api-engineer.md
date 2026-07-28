@@ -11,7 +11,7 @@ schemas), the root `NinjaAPI` instance and its exception handlers, pagination/fi
 parameters, CORS, versioning, and the HTTP contract of the SSE endpoint.
 
 Does NOT own: models, migrations, named queries, `services/`, `domain/`, consumers, the outbox
-relay, or the SSE fan-out mechanics inside Redis. If a route needs a new use case, a new domain
+the outbox drain, or the SSE fan-out mechanics inside Redis. If a route needs a new use case, a new domain
 error, or a query that does not exist, stop and hand back to `domain-architect` (model/service
 shape) or `events-engineer` (bus/fan-out) with the exact signature needed. Do not invent a
 service and do not put the logic in the view.

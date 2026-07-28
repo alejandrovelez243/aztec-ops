@@ -1,0 +1,548 @@
+[
+  {
+    "model": "workflow.workflow",
+    "pk": 1,
+    "fields": {
+      "code": "project_default",
+      "name": "Ciclo de vida de proyecto",
+      "applies_to": "PROJECT",
+      "is_default": true,
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "workflow.workflow",
+    "pk": 2,
+    "fields": {
+      "code": "task_default",
+      "name": "Ciclo de vida de tarea",
+      "applies_to": "TASK",
+      "is_default": true,
+      "is_active": true,
+      "created_at": "2026-01-05T09:00:00+00:00"
+    }
+  },
+  {
+    "model": "workflow.workflowstate",
+    "pk": 1,
+    "fields": {
+      "workflow": 1,
+      "code": "descubrimiento",
+      "label": "Descubrimiento",
+      "category": "BACKLOG",
+      "is_initial": true,
+      "is_terminal": false,
+      "order": 1,
+      "color": "#f59e0b"
+    }
+  },
+  {
+    "model": "workflow.workflowstate",
+    "pk": 2,
+    "fields": {
+      "workflow": 1,
+      "code": "ejecucion",
+      "label": "Ejecucion",
+      "category": "IN_PROGRESS",
+      "is_initial": false,
+      "is_terminal": false,
+      "order": 2,
+      "color": "#2563eb"
+    }
+  },
+  {
+    "model": "workflow.workflowstate",
+    "pk": 3,
+    "fields": {
+      "workflow": 1,
+      "code": "pausado",
+      "label": "Pausado",
+      "category": "BACKLOG",
+      "is_initial": false,
+      "is_terminal": false,
+      "order": 3,
+      "color": "#64748b"
+    }
+  },
+  {
+    "model": "workflow.workflowstate",
+    "pk": 4,
+    "fields": {
+      "workflow": 1,
+      "code": "bloqueado",
+      "label": "Bloqueado",
+      "category": "BLOCKED",
+      "is_initial": false,
+      "is_terminal": false,
+      "order": 4,
+      "color": "#dc2626"
+    }
+  },
+  {
+    "model": "workflow.workflowstate",
+    "pk": 5,
+    "fields": {
+      "workflow": 1,
+      "code": "entregado",
+      "label": "Entregado",
+      "category": "DONE",
+      "is_initial": false,
+      "is_terminal": true,
+      "order": 5,
+      "color": "#16a34a"
+    }
+  },
+  {
+    "model": "workflow.workflowstate",
+    "pk": 6,
+    "fields": {
+      "workflow": 1,
+      "code": "cancelado",
+      "label": "Cancelado",
+      "category": "CANCELLED",
+      "is_initial": false,
+      "is_terminal": true,
+      "order": 6,
+      "color": "#475569"
+    }
+  },
+  {
+    "model": "workflow.workflowstate",
+    "pk": 11,
+    "fields": {
+      "workflow": 2,
+      "code": "por_hacer",
+      "label": "Por hacer",
+      "category": "BACKLOG",
+      "is_initial": true,
+      "is_terminal": false,
+      "order": 1,
+      "color": "#94a3b8"
+    }
+  },
+  {
+    "model": "workflow.workflowstate",
+    "pk": 12,
+    "fields": {
+      "workflow": 2,
+      "code": "en_progreso",
+      "label": "En progreso",
+      "category": "IN_PROGRESS",
+      "is_initial": false,
+      "is_terminal": false,
+      "order": 2,
+      "color": "#2563eb"
+    }
+  },
+  {
+    "model": "workflow.workflowstate",
+    "pk": 13,
+    "fields": {
+      "workflow": 2,
+      "code": "en_revision",
+      "label": "En revision",
+      "category": "IN_PROGRESS",
+      "is_initial": false,
+      "is_terminal": false,
+      "order": 3,
+      "color": "#7c3aed"
+    }
+  },
+  {
+    "model": "workflow.workflowstate",
+    "pk": 14,
+    "fields": {
+      "workflow": 2,
+      "code": "bloqueada",
+      "label": "Bloqueada",
+      "category": "BLOCKED",
+      "is_initial": false,
+      "is_terminal": false,
+      "order": 4,
+      "color": "#dc2626"
+    }
+  },
+  {
+    "model": "workflow.workflowstate",
+    "pk": 15,
+    "fields": {
+      "workflow": 2,
+      "code": "hecha",
+      "label": "Hecha",
+      "category": "DONE",
+      "is_initial": false,
+      "is_terminal": true,
+      "order": 5,
+      "color": "#16a34a"
+    }
+  },
+  {
+    "model": "workflow.workflowstate",
+    "pk": 16,
+    "fields": {
+      "workflow": 2,
+      "code": "cancelada",
+      "label": "Cancelada",
+      "category": "CANCELLED",
+      "is_initial": false,
+      "is_terminal": true,
+      "order": 6,
+      "color": "#475569"
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 1,
+    "fields": {
+      "workflow": 1,
+      "from_state": 1,
+      "to_state": 2,
+      "label": "Iniciar ejecucion",
+      "requires_reason": false,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 1
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 2,
+    "fields": {
+      "workflow": 1,
+      "from_state": 1,
+      "to_state": 6,
+      "label": "Cancelar",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 2
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 3,
+    "fields": {
+      "workflow": 1,
+      "from_state": 2,
+      "to_state": 4,
+      "label": "Marcar bloqueado",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 1
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 4,
+    "fields": {
+      "workflow": 1,
+      "from_state": 2,
+      "to_state": 3,
+      "label": "Pausar",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 2
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 5,
+    "fields": {
+      "workflow": 1,
+      "from_state": 2,
+      "to_state": 5,
+      "label": "Marcar entregado",
+      "requires_reason": false,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 3
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 6,
+    "fields": {
+      "workflow": 1,
+      "from_state": 2,
+      "to_state": 6,
+      "label": "Cancelar",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 4
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 7,
+    "fields": {
+      "workflow": 1,
+      "from_state": 4,
+      "to_state": 2,
+      "label": "Desbloquear",
+      "requires_reason": true,
+      "requires_fields": [
+        "next_step"
+      ],
+      "guard": "",
+      "is_active": true,
+      "order": 1
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 8,
+    "fields": {
+      "workflow": 1,
+      "from_state": 4,
+      "to_state": 6,
+      "label": "Cancelar",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 2
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 9,
+    "fields": {
+      "workflow": 1,
+      "from_state": 3,
+      "to_state": 2,
+      "label": "Reanudar",
+      "requires_reason": false,
+      "requires_fields": [
+        "next_step"
+      ],
+      "guard": "",
+      "is_active": true,
+      "order": 1
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 10,
+    "fields": {
+      "workflow": 1,
+      "from_state": 3,
+      "to_state": 6,
+      "label": "Cancelar",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 2
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 11,
+    "fields": {
+      "workflow": 2,
+      "from_state": 11,
+      "to_state": 12,
+      "label": "Empezar",
+      "requires_reason": false,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 1
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 12,
+    "fields": {
+      "workflow": 2,
+      "from_state": 11,
+      "to_state": 14,
+      "label": "Bloquear",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 2
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 13,
+    "fields": {
+      "workflow": 2,
+      "from_state": 11,
+      "to_state": 16,
+      "label": "Cancelar",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 3
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 14,
+    "fields": {
+      "workflow": 2,
+      "from_state": 12,
+      "to_state": 13,
+      "label": "Enviar a revision",
+      "requires_reason": false,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 1
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 15,
+    "fields": {
+      "workflow": 2,
+      "from_state": 12,
+      "to_state": 14,
+      "label": "Bloquear",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 2
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 16,
+    "fields": {
+      "workflow": 2,
+      "from_state": 12,
+      "to_state": 11,
+      "label": "Devolver al backlog",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 3
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 17,
+    "fields": {
+      "workflow": 2,
+      "from_state": 12,
+      "to_state": 16,
+      "label": "Cancelar",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 4
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 18,
+    "fields": {
+      "workflow": 2,
+      "from_state": 13,
+      "to_state": 15,
+      "label": "Aprobar",
+      "requires_reason": false,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 1
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 19,
+    "fields": {
+      "workflow": 2,
+      "from_state": 13,
+      "to_state": 12,
+      "label": "Pedir cambios",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 2
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 20,
+    "fields": {
+      "workflow": 2,
+      "from_state": 13,
+      "to_state": 14,
+      "label": "Bloquear",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 3
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 21,
+    "fields": {
+      "workflow": 2,
+      "from_state": 14,
+      "to_state": 12,
+      "label": "Desbloquear",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 1
+    }
+  },
+  {
+    "model": "workflow.workflowtransition",
+    "pk": 22,
+    "fields": {
+      "workflow": 2,
+      "from_state": 14,
+      "to_state": 16,
+      "label": "Cancelar",
+      "requires_reason": true,
+      "requires_fields": [],
+      "guard": "",
+      "is_active": true,
+      "order": 2
+    }
+  },
+  {
+    "model": "workflow.workflowbinding",
+    "pk": 1,
+    "fields": {
+      "workflow": 1,
+      "applies_to": "PROJECT",
+      "engagement_type": null,
+      "is_active": true
+    }
+  },
+  {
+    "model": "workflow.workflowbinding",
+    "pk": 2,
+    "fields": {
+      "workflow": 2,
+      "applies_to": "TASK",
+      "engagement_type": null,
+      "is_active": true
+    }
+  }
+]

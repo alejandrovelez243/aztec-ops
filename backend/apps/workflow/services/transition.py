@@ -33,6 +33,7 @@ from apps.workflow.domain.errors import (
 )
 from apps.workflow.domain.guards import resolve_guard
 from apps.workflow.domain.value_objects import AttributeValue, TransitionCheck, TransitionSubject
+from apps.workflow.domain.views import required_field_names
 from apps.workflow.models import WorkflowState, WorkflowTransition
 
 
@@ -90,20 +91,19 @@ def validate_transition(
         GuardNotRegistered: The edge names a guard no module registered.
     """
     from_state = entity.workflow_state
-    transition = (
-        WorkflowTransition.objects.active()
-        .from_state(entity.workflow_state_id)
-        .to_state_code(to_state_code)
-        .with_states()
-        .first()
-    )
+    leaving = WorkflowTransition.objects.active().from_state(entity.workflow_state_id)
+    transition = leaving.to_state_code(to_state_code).with_states().first()
     if transition is None:
-        raise TransitionNotAllowed(entity.code, from_state.code, to_state_code)
+        # The second query runs only on the rejection path, and it is what makes the 409
+        # actionable: the client learns which moves *are* legal without a refetch.
+        raise TransitionNotAllowed(
+            entity.code, from_state.code, to_state_code, leaving.target_codes()
+        )
 
     if transition.requires_reason and not reason.strip():
         raise ReasonRequired(entity.code, from_state.code, to_state_code)
 
-    checked_fields = _required_field_names(transition.requires_fields)
+    checked_fields = required_field_names(transition.requires_fields)
     _assert_fields_are_filled(entity=entity, field_names=checked_fields, to_state=to_state_code)
 
     to_state = transition.to_state
@@ -141,13 +141,6 @@ def validate_transition(
         guard_reason=guard_reason,
         checked_at=now,
     )
-
-
-def _required_field_names(requires_fields: object) -> tuple[str, ...]:
-    """Read the JSONB list defensively: an operator edits it as free-form JSON in the admin."""
-    if not isinstance(requires_fields, list):
-        return ()
-    return tuple(str(name) for name in requires_fields if str(name).strip())
 
 
 def _assert_fields_are_filled(

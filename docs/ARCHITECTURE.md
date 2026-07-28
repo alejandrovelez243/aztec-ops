@@ -27,13 +27,13 @@ Minimum requirements from the challenge:
 |---|---|---|---|
 | 1 | Django 6 + django-ninja | Admin comes free for managing taxonomies (states, priorities, workflows) without writing CRUD; Ninja gives a typed API with Pydantic schemas | DRF — more ceremony, weaker typing |
 | 2 | PostgreSQL | Strong transactions for the outbox pattern; JSONB for event payloads and score breakdowns | SQLite — no useful `SELECT FOR UPDATE SKIP LOCKED` |
-| 3 | Transactional Outbox + Redis Streams | The event is written in the SAME transaction as the state change. No dual-write, no lost events. Consumer groups give real at-least-once delivery | Publishing straight from the service — events vanish if Redis is down right after commit |
+| 3 | Transactional Outbox, drained onto Celery | The event is written in the SAME transaction as the state change. No dual-write, no lost events. A drain task dispatches to a handler registry, so at-least-once fan-out costs no process and no producer ever names a consumer | Publishing straight from the service — events vanish if Redis is down right after commit. Redis Streams — real consumer groups, but a second job system beside Celery's ([ADR 0010](adr/0010-celery-as-the-bus.md)) |
 | 4 | SSE, not WebSockets | The flow is one-way, server to client. SSE reconnects on its own, survives proxies, and is trivial to demo | WebSockets — bidirectionality we do not need |
 | 5 | Deterministic, versioned prioritization | An operational ranking must be auditable and reproducible. Every score carries its reason breakdown | LLM-driven ranking — neither auditable nor reproducible |
 | 6 | States and workflows in the database, not enums | The operation must be able to evolve; adding a state cannot require a deploy | `TextChoices` on the model |
 | 7 | Django fixtures for seed data | Built into Django, versioned in git, deterministic, and `loaddata` is one command. Reviewers can read the data as JSON | A custom xlsx importer — more code to maintain and to trust |
 | 8 | Astro 7 + islands | Server render for a fast first paint; only the live regions hydrate and listen to SSE | Full SPA — unnecessary weight for four views |
-| 9 | Celery Beat for scheduling only | The schedule is declarative and stateless — `crontab(hour=0, minute=0)` replaces a loop that had to remember the last local date to detect a rollover, state that is wrong after a restart and duplicated by a second replica | A hand-rolled ticker loop; or Celery as the bus — a task queue makes the producer name every consumer, so adding a reactor would edit the producer |
+| 9 | Celery for the schedule **and** the bus | One job system, not two. Beat's `crontab(hour=0, minute=0)` replaces a loop that had to remember the last local date; the same worker drains the outbox and dispatches handlers, so seven application processes became three | A hand-rolled ticker loop; and keeping Redis Streams beside Celery — two brokers, two retry policies, two dead-letter stories for a bus moving a few dozen events an hour ([ADR 0010](adr/0010-celery-as-the-bus.md)) |
 
 ## 3. Domain model
 
@@ -46,9 +46,14 @@ Anything the operation might want to change without a deploy lives in admin-edit
 - `Stage` — Execution, Discovery, etc. Ordered.
 - `Priority` — Critical / High / Medium / Low, with numeric `weight` and `color`.
 - `Role` — team member role.
+- `Currency` — ISO-4217 code the project is billed in, with `minor_units` (the decimal places).
+  A taxonomy and not a `varchar(3)` because the frontend renders a validated select from the
+  served list, and `minor_units` is the one fact it cannot derive: 28000 CLP is not 28000 USD.
 
 Every taxonomy has: `code` (stable slug, the only thing code compares against), `label`,
 `order`, `is_active`, `color`, plus whatever weights the prioritization engine consumes.
+The whole vocabulary is served in one document by `GET /api/v1/catalog`, so the client never
+hardcodes a list of anything.
 **Code never compares against labels — only against `code`.**
 
 ### 3.2 Configurable workflows (`workflow` app)
@@ -134,7 +139,7 @@ Two things did **not** move into `accounts`:
   aggregation over `work.Task`. That query stays in `portfolio/repositories.py` — "who is
   overloaded" is a portfolio question, and `accounts` must not learn about `work`.
 - **`ActivityRecord.actor`.** It stays a string rather than a foreign key precisely so the
-  prioritization engine and the stream consumers can write records as `system`. A foreign key
+  prioritization engine and the event handlers can write records as `system`. A foreign key
   would force a fake user row to exist to satisfy it. `Note.author` is a string for the same
   reason, plus one more: a note must survive its author leaving the roster.
 
@@ -191,14 +196,17 @@ next to the number. That is what makes the ranking defensible.
 
 ### 4.2 When scores are recomputed
 
-Recomputation is automatic. `make recompute` exists only for two bootstrap cases: right after
+Recomputation is automatic. The manual path exists only for two bootstrap cases: right after
 seeding, and after activating a new `PriorityPolicy` version, when every score must be rebuilt
-against new weights. It is never part of normal operation.
+against new weights. It is never part of normal operation, and it is deliberately not a management
+command — a command run from a laptop against production is an accident waiting. It is the
+**"Recompute priority for selected projects"** admin action, or
+`POST /api/v1/projects/{code}/recompute` and `POST /api/v1/recompute`. `make seed` chains it.
 
 There are two triggers, because there are two ways a score can go stale.
 
 **Data changed.** Any project mutation writes an `OutboxEvent`; the `priority-recalculator`
-consumer group picks it up and recomputes that one project, then emits
+handler picks it up and recomputes that one project, then emits
 `project.priority.recalculated`, which reaches the browser through `sse-fanout`. This path is
 covered by the event flow in §6 and needs nothing extra.
 
@@ -208,10 +216,9 @@ event-driven system notices that on its own, so a clock has to be an explicit pa
 
 - Celery Beat holds the schedule: `events.emit_interval_tick` every `TICKER_INTERVAL_SECONDS`
   (default 5 minutes) and `events.emit_day_boundary_tick` at `crontab(hour=0, minute=0)`. Beat
-  only schedules. The `celery-worker` compose service runs the task, the task writes a
-  `clock.ticked` `OutboxEvent`, and the relay publishes it like any other event. `celery-worker`
-  is not `worker`: `worker` runs the Redis Streams consumer groups under `manage.py run_consumer`.
-  Celery is not the bus and carries no domain events.
+  only schedules; the `worker` service runs the task. The task writes a `clock.ticked`
+  `OutboxEvent` and returns — the clock is a producer like any other, and it goes through the
+  outbox and the drain exactly like a transition does.
 - Beat rather than a loop because the crontab entry removes the in-process date state: a loop had
   to remember the last local date it saw to detect a rollover, and that state is wrong after every
   restart and duplicated the moment a second replica exists.
@@ -219,7 +226,7 @@ event-driven system notices that on its own, so a clock has to be an explicit pa
   at any other. Instead each `PriorityScore` persists `valid_until`: the earliest future instant
   at which any time-dependent signal would change bucket — the target date itself, the start of
   the final week, or the staleness threshold, whichever comes first.
-- The `priority-recalculator` consumer reacts to `clock.ticked` by selecting only the projects
+- The `priority-recalculator` handler reacts to `clock.ticked` by selecting only the projects
   where `valid_until <= now`, and recomputing those. On a quiet tick that query returns nothing
   and the tick costs one index scan.
 
@@ -267,22 +274,36 @@ POST /api/projects/{code}/transition
   ──── commit ──────────────────────────────────────────────────┘
         │
         ▼
-  Outbox relay  (separate process; SELECT ... FOR UPDATE SKIP LOCKED)
-        │  XADD aztec.events
+  events.drain_outbox   (Celery task, on the one `worker` process)
+    · kicked by transaction.on_commit; swept by Beat every EVENT_DRAIN_INTERVAL_SECONDS
+    · claims rows with SELECT ... FOR UPDATE SKIP LOCKED, marks them published
+    · asks the registry which handlers subscribe to the topic — the producer never knew
+        │  one events.handle_event(handler_name, event_id) per subscribed handler
         ▼
-  Redis Streams  ──┬── consumer group: priority-recalculator
-                   │      └─> emits project.priority.recalculated
-                   ├── consumer group: risk-evaluator
-                   │      └─> emits project.risk.changed
-                   └── consumer group: sse-fanout
-                          └─> PUBLISH aztec.sse
-                                    │
-                                    ▼
-                          GET /api/stream  (ASGI, async)
-                                    │  text/event-stream
-                                    ▼
-                          Astro island (EventSource) → live state patch
+  Celery broker (Redis)  ──┬── handler: priority-recalculator
+                           │      └─> emits project.priority.recalculated
+                           ├── handler: risk-evaluator
+                           │      └─> emits project.risk.changed
+                           ├── handler: snapshot-builder
+                           │      └─> rebuilds ProjectSnapshot (emits nothing)
+                           └── handler: sse-fanout
+                                  └─> PUBLISH aztec.sse
+                                            │
+                                            ▼
+                                  GET /api/stream  (ASGI, async)
+                                            │  text/event-stream
+                                            ▼
+                                  Astro island (EventSource) → live state patch
 ```
+
+Each `handle_event` task claims `(event_id, handler)` in `ProcessedEvent` and runs the handler in
+the same transaction, so the claim is durable only if the effect is. Retries and backoff are
+Celery's; past `EVENT_MAX_ATTEMPTS` the *outbox row itself* is dead-lettered — `dead_lettered_at`
+and `last_error` are set on the row that already exists, and the admin can re-queue it.
+
+A handler is a function in `apps/<context>/handlers.py` decorated with
+`@register_handler(name=..., topics={...})`. That module name is fixed: app-ready autodiscovers
+exactly `handlers`, and a reactor declared anywhere else is never imported and silently never runs.
 
 Stable event envelope:
 
@@ -306,12 +327,17 @@ Initial topics: `project.created`, `project.updated`, `project.state_changed`,
 
 Rules:
 
-- Consumers are **idempotent**, deduplicating on `event.id` via a `ProcessedEvent` table.
+- Handlers are **idempotent**, deduplicating on `(event.id, handler)` via a `ProcessedEvent` table.
   At-least-once means the same event will arrive twice; the handler must survive that.
-- A failing consumer does not block the others — separate groups.
-- Retries use backoff; after N failures the event lands in `aztec.events.dlq` and shows up in
-  the admin. An event dying silently is worse than a loud error.
-- Application services **never** publish to Redis. They only write to the outbox.
+- A failing handler does not block the others — one delivery task per handler per event, so they
+  retry and fail independently.
+- Retries use backoff (roughly 1s, 2s, 4s, 8s, 16s with jitter); after `EVENT_MAX_ATTEMPTS` the
+  outbox row is dead-lettered and shows up in the admin, where it can be re-queued. An event dying
+  silently is worse than a loud error.
+- Application services **never** publish. They only write to the outbox — they do not call
+  `.delay()` either, because naming a task is naming a consumer.
+- `sse-fanout` is the one handler permitted to hold a Redis client: publishing *is* its effect, so
+  there is no database write for it to be inconsistent with.
 
 ## 7. Layers, and where each thing goes
 
@@ -325,7 +351,8 @@ backend/apps/<context>/
   services/        # use cases. Orchestrate queries + domain + outbox + activity. Transactional.
   api/             # ninja routers + schemas. Translates HTTP ↔ services. Zero logic.
   admin.py         # admin configuration
-  consumers/       # event handlers (only in contexts that consume)
+  handlers.py      # event reactors (only in contexts that react). The name is fixed: app-ready
+                   #   autodiscovers exactly `handlers`, so a reactor elsewhere never runs.
 ```
 
 **Named queries live on the model's `QuerySet`, exposed through its `Manager`.** A query is a
@@ -361,7 +388,7 @@ Dependency rules — enforced, not suggested:
 The command center needs a heavy join: project + score + risk flags + owner load + task
 counts. Resolving that through the ORM on every request does not hold up.
 
-`ProjectSnapshot` is a denormalized read model rebuilt by a consumer whenever any event for
+`ProjectSnapshot` is a denormalized read model rebuilt by the `snapshot-builder` handler whenever any event for
 that project arrives. The read API queries only that table. Write and read sides evolve
 independently, and the operational view loads in a single query.
 
@@ -396,8 +423,8 @@ Rules:
   matched against task titles within the same project, falling back to `raw_label`.
 - The `Team` sheet counters are not imported. They are a projection of the task data and are
   recomputed by the system.
-- After seeding, scores and risk flags are computed by `make recompute` (or the seed target
-  chains it).
+- After seeding, scores and risk flags are computed by `recompute_active_portfolio()`, which
+  `make seed` calls as its last step (§4.2).
 
 ### 10.1 What the source data actually contains
 
@@ -423,7 +450,7 @@ Measured from the spreadsheet (`data/raw/dataset.json` holds the normalized expo
 - `pytest` + `pytest-django`, `factory_boy` factories.
 - The prioritization engine and the risk specifications are tested **without a database** —
   they are pure. That is where coverage should be high.
-- Integration tests for: illegal transitions, seed idempotency, consumer idempotency, and
+- Integration tests for: illegal transitions, seed idempotency, handler idempotency, and
   outbox → event actually delivered.
 - `ruff` (lint + format) and `mypy` in strict mode over `domain/` and `services/`.
 
@@ -432,6 +459,6 @@ Measured from the spreadsheet (`data/raw/dataset.json` holds the normalized expo
 Documented in the README rather than hidden:
 
 - Real authentication and multi-tenancy. Django auth plus an actor header is enough here.
-- External notifications (Slack, email). The bus already exists — it would be one more consumer.
+- External notifications (Slack, email). The bus already exists — it would be one more registered handler.
 - Task drag & drop. Transitions happen through buttons that respect the workflow.
 - Historical metrics / burndown. `ActivityRecord` already stores the raw material for them.

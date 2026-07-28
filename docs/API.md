@@ -133,6 +133,7 @@ Referenced by name throughout §2.
 
 ```
 TaxonomyRef   { code: str, label: str, color: str | null }
+CurrencyRef   { code: str, label: str, color: str | null, minor_units: int }
 StateRef      { code: str, label: str, category: str, color: str | null }
 ActorRef      { alias: str, label: str, role: str | null }
 RiskFlag      { code: str, severity: "LOW"|"MEDIUM"|"HIGH", reason: str }
@@ -337,7 +338,7 @@ owner: str                      # required, accounts.User.code
 start_date: date | null
 target_date: date | null
 business_value: int             # >= 0
-currency: str                   # ISO-4217, default "USD"
+currency: str                   # Currency.code (ISO-4217), default "USD"
 summary: str | null
 next_step: str | null
 ```
@@ -356,6 +357,10 @@ Response `201: ProjectDetailOut`. Emits `ActivityRecord(verb=CREATED)` and topic
  "currency": "USD", "summary": "Automatizacion de la recepcion de contratos.",
  "next_step": "Agendar kickoff con Legal."}
 ```
+
+`currency` is a taxonomy `code` like every other reference: it is resolved against
+`catalog_currency` and an unknown one is a `422` on the `currency` field, never a silently stored
+string. The list a client may send is `GET /api/v1/catalog` (§2.17).
 
 Errors: `422 validation_error` (unknown taxonomy code, negative value, `target_date` before
 `start_date`).
@@ -643,6 +648,144 @@ TeamLoadOut {
 Overload never lowers a project's score. It raises `OWNER_OVERLOADED` on that owner's projects,
 which is a staffing decision, not a ranking one.
 
+### 2.15 `POST /api/v1/projects/{code}/recompute` and `POST /api/v1/recompute`
+
+The manual override of an automatic ranking, and the replacement for `manage.py recompute`. A
+command run from a laptop against the production database has no audit trail, no permission
+boundary and no record that it happened; the same use case over HTTP runs inside the deployment.
+
+Headers: `X-Actor`. Body: none.
+
+Two routes rather than one route with an optional project, because "rescore this" and "rescore
+everything" have different blast radii and the client should have to say which it meant. The
+portfolio route skips archived projects.
+
+Response `200: RecomputeOut`:
+
+```
+RecomputeOut {
+  ran_at: datetime               # the single instant every item was scored for
+  changed: int                   # how many projects actually moved
+  items: [{ project_code: str, value: float, health: str,
+            flags: str[], changed: bool }]
+}
+```
+
+```json
+{"ran_at": "2026-07-28T09:41:12Z", "changed": 1, "items": [
+  {"project_code": "PRJ-01", "value": 70.3, "health": "BLOCKED",
+   "flags": ["BLOCKED", "OVERDUE", "NO_TARGET_DATE"], "changed": true}
+]}
+```
+
+**Emits no event and writes no `ActivityRecord`.** A rebuild is derivation, not a decision, and
+broadcasting `project.priority.recalculated` for twenty-two projects that did not move would tell
+every open dashboard that something happened when nothing did. `changed` is how the caller finds
+out either way — `22 recomputed, 0 changed` is a healthy system confirming itself.
+
+Errors: `404 not_found` (unknown project), `422 validation_error` (missing `X-Actor`, or no
+`PriorityPolicy` is active).
+
+### 2.16 Health — `GET /api/v1/health/{live,ready,pipeline}`
+
+Three routes because an orchestrator asks three different questions, and answering them with one
+endpoint is how a dependency outage becomes an application outage. None requires `X-Actor`: a probe
+runs before anything can present a header, and none of the three reveals business data.
+
+| Route | Checks | Status | Who reads it |
+|---|---|---|---|
+| `/health/live` | **Nothing.** | always `200` | A kubelet liveness probe. Compose defines no healthcheck. |
+| `/health/ready` | PostgreSQL, Redis | `200` / `503` | The load balancer, to drain traffic. |
+| `/health/pipeline` | Outbox, dead letters, Beat | **always `200`** | A human, or a dashboard scraper. |
+
+`/health/live` checks no dependency, ever. If liveness touched Redis, a Redis outage would fail the
+probe, Docker would restart the API, the restart would not fix Redis, and the one process still
+able to serve cached reads would be in a crash loop for the duration of the incident. Liveness is
+about the process; readiness is about the request.
+
+```json
+{"status": "alive"}
+```
+
+`/health/ready` returns the same body shape on both statuses, so one parser covers both, and every
+check runs even after one has failed — "the database is down" and "both are down" call for
+different responses.
+
+```json
+{"ready": false, "checks": [
+  {"name": "database", "ok": true, "detail": "ok"},
+  {"name": "redis", "ok": false, "detail": "Error 111 connecting to redis:6379. Connection refused."}
+]}
+```
+
+`/health/pipeline` is informational and **always 200, including when every number is alarming**. It
+must never gate a container healthcheck: a backlog or a poisoned event is a fact about the workers,
+and restarting the API because a handler is stuck is the exact inversion of what an operator wants
+during an incident. It is also what replaced `XPENDING` when Celery became the transport — the
+outbox is a PostgreSQL table, so this is a query rather than a redis-cli session.
+
+```
+PipelineOut {
+  unpublished: int                            # outbox rows the drain has not dispatched
+  oldest_unpublished_age_seconds: float|null  # null = empty backlog, never 0
+  dead_lettered: int                          # rows past the attempt budget; re-queued from /admin/
+  last_tick_at: datetime | null               # newest clock.ticked row = proof Beat is alive
+  last_tick_age_seconds: float | null
+}
+```
+
+```json
+{"unpublished": 0, "oldest_unpublished_age_seconds": null, "dead_lettered": 0,
+ "last_tick_at": "2026-07-28T09:40:00Z", "last_tick_age_seconds": 72.4}
+```
+
+Read the numbers together: `unpublished` rising with its age means the drain is not running, while
+rising with a low age is a burst being worked through; `last_tick_at` older than
+`TICKER_INTERVAL_SECONDS` means Beat is down, which is otherwise silent — nothing fails, scores
+simply stop ageing. A `null` age means "nothing to measure" and is deliberately not `0`, which
+would read as "perfectly fresh" for exactly the state that is most suspicious.
+
+### 2.17 `GET /api/v1/catalog` — the taxonomies the client renders pickers from
+
+No `X-Actor`: it is a read, and the vocabulary is not privileged. One document rather than six
+endpoints, because a form needs every list before it can draw itself.
+
+Response `200: CatalogOut`:
+
+```
+CatalogOut {
+  engagement_types, project_types, stages, priorities, roles: TaxonomyRef[]
+  currencies: CurrencyRef[]
+}
+CurrencyRef {                    # TaxonomyRef plus one field
+  code: str                      # ISO-4217 alphabetic, upper case
+  label: str
+  color: str | null
+  minor_units: int               # 0..4 — decimal places the amount is written with
+}
+```
+
+```json
+{"priorities": [{"code": "critica", "label": "Critica", "color": "#dc2626"}],
+ "currencies": [{"code": "USD", "label": "Dolar estadounidense", "color": "#16a34a",
+                 "minor_units": 2},
+                {"code": "CLP", "label": "Peso chileno", "color": "#b91c1c",
+                 "minor_units": 0}]}
+```
+
+Only **active** rows are served, in the operator's own `order`. A retired value keeps resolving on
+the projects that already point at it (that is what `is_active` is for) but must not reappear in a
+picker where somebody could choose it again.
+
+`minor_units` is the reason currencies are a taxonomy at all. It is the one field a client cannot
+derive — `28000` is `$280.00` in USD and `$28.000` in CLP — so a frontend formatting with a
+hardcoded 2 is wrong by two orders of magnitude for every zero-decimal currency.
+
+**Workflow states are deliberately absent.** A state code is unique only inside its workflow, and
+the legal moves out of the state a project is actually in are `transitions` on the project detail
+(§2.2). A global list of states would invite the client to guess legality, which is exactly what
+that field exists to prevent.
+
 ## 3. `GET /api/stream` — server-sent events
 
 Unversioned, always-on, served by the ASGI app. One connection per browser tab, owned by
@@ -706,28 +849,31 @@ backoff floor.
 
 ### 3.5 Reconnection
 
-- On reconnect the browser sends `Last-Event-ID` automatically. The endpoint passes it to the
-  fan-out subscription, which replays from **after** that id instead of from the tail.
-- A manual reconnect (the retry control in the disconnected state) builds a new `EventSource`,
-  which does not carry the header — it must pass `?last_event_id=` from the id the store kept.
-- The replay buffer is bounded by the Redis stream retention. If the id is older than the buffer,
-  the server replays what it has and sends one `event: stream.reset` frame with
-  `{"reason": "last_event_id_expired"}`. On that frame the client refetches the affected
-  resources instead of trusting its local state.
+- On reconnect the browser sends `Last-Event-ID` automatically, and a manual reconnect (the retry
+  control in the disconnected state) builds a new `EventSource`, which does not carry the header —
+  so it must pass `?last_event_id=` from the id the store kept.
+- **There is no replay.** The fan-out is Redis pub/sub, which has no history, so an id the server
+  cannot resume from is answered with a single `event: stream.reset` frame carrying
+  `{"reason": "last_event_id_expired"}`. On that frame the client refetches the affected resources
+  instead of trusting its local state. Real replay would mean a durable fan-out channel — a change
+  to the transport contract, not to this endpoint. The escape hatch is deliberate: the outbox is
+  the durable log, and `GET /api/v1/projects` is how a client catches up.
 - Delivery is at-least-once. The same `event.id` will arrive twice; the store deduplicates on it,
   and handlers must be safe to run twice.
 
 ### 3.6 Forwarded topics
 
-The `sse-fanout` consumer group publishes only what the UI reacts to:
+The `sse-fanout` handler publishes only what the UI reacts to:
 
 `project.created`, `project.updated`, `project.state_changed`, `project.priority.recalculated`,
 `project.risk.changed`, `task.created`, `task.state_changed`, `blocker.raised`,
 `blocker.resolved`, `note.added`.
 
-Anything not on this list stays on `aztec.events` and never reaches the browser. Adding a topic to
-the stream means adding it to `ARCHITECTURE.md` §6, to the fan-out allowlist, and to
-`frontend/src/lib/stream/topics.ts`, in the same change.
+Anything not on this list is still dispatched to its handlers and still recorded in the outbox; it
+simply never reaches the browser. `clock.ticked` is the standing example — the tick renders nothing,
+and what it *causes* arrives as its own event. Forwarding a topic means adding it to
+`EVENTS.md` §4/§5, to `SSE_ALLOWLIST_TOPICS`, and to `frontend/src/lib/stream/topics.ts`, in the
+same change.
 
 ### 3.7 Worked example — raw wire bytes
 
@@ -786,8 +932,9 @@ multi-line body would need one `data:` line per fragment and the client would ha
   UI renders unknown codes with their `reason` rather than dropping them.
 - The wording of `reason` strings and of `message`. They are generated text, not identifiers.
 - `metadata` on `ActivityRecord` — free-form JSONB, per-verb, and it evolves.
-- `ProjectSnapshot`, the outbox, the Redis stream `aztec.events`, its consumer groups and
-  `aztec.events.dlq`. None of them are addressable over HTTP; the SSE endpoint is the only
-  window onto the bus.
+- `ProjectSnapshot`, the outbox table, the Celery queues and the handler registry. None of them are
+  addressable over HTTP; the SSE endpoint is the only live window onto the bus, and
+  `GET /api/v1/health/pipeline` is the only aggregate one. The dead-letter re-queue lives in the
+  admin, deliberately: replaying an event is an operator action with a person behind it.
 - Ordering of any list beyond the documented default and the `order_by` allowlist.
 - The Django admin at `/admin/`. It is an operator tool, not an API.

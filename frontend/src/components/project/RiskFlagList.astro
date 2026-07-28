@@ -1,0 +1,82 @@
+---
+import type { RiskFlag } from "../../lib/api/domain";
+
+/**
+ * The project's raised risk flags, one line each: code, then the reason the
+ * specification produced.
+ *
+ * `code` is an open set (docs/API.md §4.2): an unknown code renders with its reason
+ * rather than being dropped. Colour comes from `severity` alone — HIGH and CRITICAL
+ * demand intervention today (No-Go Red); LOW and MEDIUM are attention that can wait
+ * (Caution Amber). The empty state is drawn, not blank (The Ghost Legend Rule).
+ *
+ * The styles are global (`risk-flag-*`): `ProjectHeader` rebuilds this list from
+ * `project.risk.changed` envelopes at runtime, and Astro's scoped styles would not
+ * reach nodes created by `document.createElement`.
+ */
+export interface Props {
+  flags: readonly RiskFlag[];
+}
+
+const { flags } = Astro.props;
+---
+
+{
+  flags.length === 0 ? (
+    <p class="label risk-flags-empty" data-risk-flags>
+      NO RISK FLAGS RAISED
+    </p>
+  ) : (
+    <ul class="risk-flags" data-risk-flags>
+      {flags.map((flag) => (
+        <li
+          class="risk-flag"
+          data-severity={flag.severity}
+          data-flag-code={flag.code}
+        >
+          <span class="label risk-flag-code">{flag.code}</span>
+          <span class="body-text risk-flag-reason">{flag.reason}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+<style is:global>
+  .risk-flags-empty {
+    color: var(--color-legend-dim);
+  }
+
+  .risk-flags {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .risk-flag {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    padding-left: var(--space-2);
+    border-left: 2px solid var(--risk-flag-ink, var(--color-rule));
+  }
+
+  .risk-flag[data-severity="LOW"],
+  .risk-flag[data-severity="MEDIUM"] {
+    --risk-flag-ink: var(--color-caution);
+  }
+
+  .risk-flag[data-severity="HIGH"],
+  .risk-flag[data-severity="CRITICAL"] {
+    --risk-flag-ink: var(--color-nogo);
+  }
+
+  .risk-flag-code {
+    color: var(--risk-flag-ink, var(--color-legend-dim));
+    flex-shrink: 0;
+  }
+
+  .risk-flag-reason {
+    color: var(--color-legend-dim);
+  }
+</style>

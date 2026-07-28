@@ -1,7 +1,7 @@
 # Aztec Ops — project rules
 
-Operational portfolio manager. Django + django-ninja + PostgreSQL + Redis Streams (outbox)
-+ SSE + Astro, all on Docker Compose.
+Operational portfolio manager. Django + django-ninja + PostgreSQL + transactional outbox
+drained onto Celery + SSE + Astro, all on Docker Compose.
 
 **Normative spec: `docs/ARCHITECTURE.md`. Read it before writing code in an area you have not
 touched yet.** If something contradicts that document, fix one of the two — do not ignore it.
@@ -65,11 +65,20 @@ so the lockfile can never drift from `pyproject.toml`. Install the hooks once, b
 3. **Every meaningful change writes an `ActivityRecord`.** State, priority, owner, blocker
    raised or resolved. Append-only. Reprioritizations carry a `correlation_id` so the whole
    decision can be reconstructed.
-4. **Events are published through the outbox, never directly.** The service writes
-   `OutboxEvent` in the same transaction as the change; the relay publishes. A `service` that
-   imports the Redis client is a bug.
-5. **Consumers are idempotent.** Deduplicate on `event.id`. At-least-once: the same event
-   will arrive twice.
+4. **Events go through the outbox, never directly.** The service writes `OutboxEvent` in the same
+   transaction as the change and stops. Celery is the transport: `events.drain_outbox` claims the
+   row and queues one `events.handle_event` per registered handler. A `service` that imports the
+   Redis client is a bug, and so is a `service` that calls `.delay()` — naming a task is naming a
+   consumer, which is what rule 8 forbids. The producer names a **topic**, never a handler.
+5. **Handlers are idempotent, and a handler is a registry entry.** Deduplicate on
+   `(event.id, handler)` via `ProcessedEvent`. At-least-once: the same event will arrive twice.
+   A handler is a function in `apps/<context>/handlers.py` — the module name is fixed, app-ready
+   autodiscovers exactly `handlers`, so one declared elsewhere silently never runs — decorated
+   with `@register_handler(name=..., topics={...})`, taking one `EventEnvelope` and returning
+   `None`. It runs inside the transaction that holds its claim: it must **raise** on failure (that
+   is how the retry, the log line and the dead letter happen) and must never open or commit its
+   own transaction. Time comes from `envelope.occurred_at`, never `timezone.now()`. Past
+   `EVENT_MAX_ATTEMPTS` the outbox row is dead-lettered and re-queuable from the admin.
 6. **Layers.** `domain/` is pure (no Django). `api/` never imports `models`, it calls
    `services/`. See §7 of ARCHITECTURE.
    **Named queries live on the model's `QuerySet`, exposed through its `Manager`** —
@@ -130,7 +139,7 @@ Non-negotiable on both sides:
     `SimpleTestCase` for pure domain logic (it *forbids* database access, so the purity of
     `domain/` is enforced by the test base rather than by discipline); `TestCase` for ordinary
     database tests; `TransactionTestCase` for anything involving the outbox, `on_commit` or the
-    relay — `TestCase` wraps each test in a transaction that never commits, so an outbox test
+    drain — `TestCase` wraps each test in a transaction that never commits, so an outbox test
     written on it passes while proving nothing. Shared read-only fixtures go in
     `setUpTestData`, not `setUp`. Full rules in `docs/standards/BACKEND.md`.
 16. **Guard clauses over nesting, named constants over magic numbers.** Weights live in
@@ -149,15 +158,21 @@ All code, comments, documentation, agents, skills, commit messages and identifie
 ## Commands
 
 ```bash
-make up          # docker compose up: postgres, redis, api, relay, worker, beat, celery-worker, frontend
-                 # worker = Redis Streams consumer groups (run_consumer), the event bus
-                 # celery-worker = executes scheduled Celery tasks, only the clock ticks
-                 # beat = Celery Beat, holds the schedule, executes nothing
-make seed        # loaddata fixtures + recompute scores (idempotent)
+make up          # docker compose up: postgres, redis, api, worker, beat, frontend
+                 # worker = the one Celery worker: drains the outbox, runs every handler and the
+                 #          clock ticks. Celery is the bus (ADR 0010) — there is no relay.
+                 # beat = Celery Beat, holds the schedule (two ticks + the outbox sweep),
+                 #        executes nothing
+make seed        # the only management command: loaddata + sync code sequences + recompute
 make test        # pytest
 make lint        # ruff + mypy
-make relay       # run the outbox relay in the foreground (debugging)
+make outbox      # pending / dispatched / dead-lettered counts — replaces XPENDING
+make logs-worker # follow worker + beat, i.e. the whole event path
 make down        # stop everything
+
+# There is no `make recompute` and no `make relay`. Recompute is the admin action
+# "Recompute priority for selected projects" or POST /api/v1/recompute; a command run from a
+# laptop against a production database is an accident, not an operation.
 ```
 
 ## Conventions

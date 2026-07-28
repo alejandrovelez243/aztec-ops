@@ -1,6 +1,6 @@
 ---
 name: test-engineer
-description: Invoke to write or fix tests. Triggers: a new prioritization signal or risk Specification was added, a factory_boy factory is missing or wrong, an integration test is needed for an illegal transition (TransitionNotAllowed), seed idempotency (make seed twice), consumer idempotency (same event.id twice), or outbox → relay → consumer delivery; also when `make test` fails and the failure is in test code, or when a reviewer asks "where does the coverage for this go?".
+description: Invoke to write or fix tests. Triggers: a new prioritization signal or risk Specification was added, a factory_boy factory is missing or wrong, an integration test is needed for an illegal transition (TransitionNotAllowed), seed idempotency (make seed twice), handler idempotency (same event.id twice), or outbox → drain → handler delivery; also when `make test` fails and the failure is in test code, or when a reviewer asks "where does the coverage for this go?".
 tools: Read, Write, Edit, Grep, Glob, Bash
 ---
 
@@ -44,12 +44,18 @@ functions. The base class is a deliberate choice because it changes what the tes
 | --- | --- | --- |
 | `django.test.SimpleTestCase` | pure domain logic: priority signals, risk Specifications, value objects, policy maths | it *forbids* database access, so the purity of `domain/` is enforced by the test base rather than by discipline. This is where coverage should be high. |
 | `django.test.TestCase` | ordinary database tests: queryset methods, services, API routes, workflow transitions, seed idempotency | each test runs inside a transaction that is rolled back, so it is fast |
-| `django.test.TransactionTestCase` | anything involving the outbox, `transaction.on_commit`, the relay, or a second database connection | real commits, so `on_commit` callbacks fire and another connection can see the row |
+| `django.test.TransactionTestCase` | anything involving the outbox, `transaction.on_commit`, the drain, an event handler, or a second database connection | real commits, so `on_commit` callbacks fire and the drain's claim can see the row |
 
 The `TransactionTestCase` trap matters and is easy to get wrong: `TestCase` wraps each test in a
-transaction that **never commits**, so `on_commit` callbacks never fire and the relay's
-`SELECT ... FOR UPDATE SKIP LOCKED` on another connection cannot see the row. An outbox test
-written on `TestCase` passes while proving nothing.
+transaction that **never commits**, so `on_commit` callbacks never fire — the drain is never
+kicked — and `SELECT ... FOR UPDATE SKIP LOCKED` cannot see the row. An outbox test written on
+`TestCase` passes while proving nothing.
+
+Two helpers exist for this path and are not optional: `EagerCeleryMixin`
+(`apps/events/tests/celery_support.py`) runs queued tasks inline, and `only_handlers(...)`
+(`apps/events/tests/registry_support.py`) narrows the registry. Without the second, a committed
+outbox row kicks the drain inline and the full registry fans the event out to `sse-fanout`, which
+reaches Redis.
 
 One class per behaviour under test, named after the thing and the situation:
 `class DeadlinePressureSignalTests(SimpleTestCase)`, `class IllegalTransitionTests(TestCase)`,
@@ -125,14 +131,18 @@ how a suite ends up with pure tests that quietly hit the database.
      assert no `ActivityRecord` and no `OutboxEvent` were written.
    - `class SeedIdempotencyTests(TestCase)`: run `loaddata` twice, `assertEqual` on row counts and
      a content hash per table, and assert no duplicate `code` exists.
-   - `class ConsumerIdempotencyTests(TestCase)`: hand the same envelope (same `event.id`) to the
-     consumer twice; assert one `ProcessedEvent` row and one effect (one `PriorityScore`, one
-     `ProjectSnapshot` update).
-   - `class OutboxDeliveryTests(TransactionTestCase)` — and only `TransactionTestCase`: write an
-     `OutboxEvent` inside a transaction, run the relay once against a real Redis from Compose, read
-     the consumer group, assert the envelope arrives with its `topic` and `correlation_id` intact.
-     On `TestCase` this test is green and worthless: nothing ever commits, so the relay sees
-     nothing.
+   - `class HandlerIdempotencyTests(TransactionTestCase)`: deliver the same envelope twice through
+     `apply_once(get_handler(NAME), envelope)`; assert one `ProcessedEvent` row for
+     `(event_id, handler)` and one effect (one `PriorityScore`, one `ProjectSnapshot` update), and
+     that the second call returns `False`. Going through `apply_once` rather than calling the
+     function puts the registration name and the claim under test too.
+   - `class OutboxDeliveryTests(TransactionTestCase)` — and only `TransactionTestCase`: commit a
+     service call, assert exactly one `OutboxEvent` with the right topic and version, that the
+     drain marked it `published_at`, and that a `ProcessedEvent` exists for each subscribed
+     handler. On `TestCase` this test is green and worthless: nothing ever commits, so the drain
+     sees nothing.
+   - `class DeadLetterTests(TransactionTestCase)`: a handler that raises past `EVENT_MAX_ATTEMPTS`
+     sets `dead_lettered_at` and `last_error` on the row, and the re-queue path is a real retry.
 5. Run `make test`. If a test fails for a production reason, stop and report — do not widen the
    assertion to make it green.
 
@@ -189,8 +199,9 @@ passing. The single Django import is the test base class itself.
 
 - [ ] Every new test names a behavior and fails for the right reason if the behavior is removed.
 - [ ] The base class matches what the test needs to prove: `SimpleTestCase` for pure domain,
-      `TestCase` for ordinary database work, `TransactionTestCase` for the outbox, `on_commit` and
-      the relay. No outbox test on `TestCase`.
+      `TestCase` for ordinary database work, `TransactionTestCase` for the outbox, `on_commit`,
+      the drain and event handlers. No outbox test on `TestCase`, and every handler test narrows
+      the registry with `only_handlers(...)`.
 - [ ] Every test lives in a class named after the thing and the situation; no module-level
       `def test_...`, no pytest fixtures, no `pytest.mark.django_db`.
 - [ ] Assertions are unittest methods (`assertEqual`, `assertIn`, `assertRaises`), not bare
