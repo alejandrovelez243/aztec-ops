@@ -1,0 +1,24 @@
+# Challenge source material — not ours to redistribute.
+# The committed Django fixtures are the shareable form of this data.
+Dataset — Reto Desarrollador de Soluciones con IA _ Aztec.xlsx
+Enunciado — Reto Desarrollador de Soluciones con IA _ Aztec.md
+data/raw/
+
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.sqlite3
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+node_modules/
+dist/
+.astro/
+
+.impeccable/live/
+.DS_Store
+.impeccable/questions/

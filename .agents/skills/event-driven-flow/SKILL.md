@@ -1,0 +1,180 @@
+---
+name: event-driven-flow
+description: Load when adding, renaming or versioning an event topic, writing an OutboxEvent from a service, implementing or debugging a Redis Streams consumer (priority-recalculator, risk-evaluator, sse-fanout), touching the outbox relay or the DLQ, or when an event is emitted but never reaches the browser.
+---
+
+# Adding an event end to end
+
+The bus is: service writes `OutboxEvent` in the same transaction as the state change → relay
+publishes to the Redis stream `aztec.events` → consumer groups handle it → `sse-fanout`
+`PUBLISH aztec.sse` → `GET /api/stream` → Astro island. See §6 of `docs/ARCHITECTURE.md`.
+
+## Why the outbox exists
+
+Without it a service does `save()` then `redis.xadd()`. The concrete failure: **the
+transaction commits and the publish never happens** — the process is killed, Redis is
+restarting, the network drops between the two calls. The state change is durable, the event is
+gone forever, and the priority score, the risk flags and the read model `ProjectSnapshot` stay
+stale with no way to notice. The reverse also breaks: publish first, then the transaction rolls
+back, and consumers react to a change that never existed.
+
+The outbox removes the dual write. `OutboxEvent` is a row in the same PostgreSQL transaction as
+the aggregate mutation and the `ActivityRecord`: either all three exist or none do. The relay is
+a separate process that reads unpublished rows with `SELECT ... FOR UPDATE SKIP LOCKED` and
+publishes them. If it crashes mid-publish the row is still unpublished and gets republished —
+which is exactly why delivery is at-least-once and consumers must be idempotent.
+
+## Checklist
+
+### 1. Name the topic and document it
+
+`<entity>.<event>` or `<entity>.<aspect>.<event>`, lowercase, dot-separated, past tense.
+Current topics (§6):
+
+```
+project.created            project.updated          project.state_changed
+project.priority.recalculated                       project.risk.changed
+task.created               task.state_changed
+blocker.raised             blocker.resolved         note.added
+```
+
+Add the new topic to that list in §6 of `docs/ARCHITECTURE.md` in the same commit. An
+undocumented topic is invisible to whoever writes the next consumer.
+
+### 2. Define the versioned payload
+
+The envelope is fixed; only `payload` changes per topic.
+
+```json
+{
+  "id": "uuid",
+  "topic": "project.state_changed",
+  "occurred_at": "2026-07-28T10:00:00Z",
+  "actor": "camila",
+  "correlation_id": "uuid",
+  "entity": {"type": "project", "id": "PRJ-01"},
+  "payload": {"from": "execution", "to": "blocked", "reason": "..."},
+  "version": 1
+}
+```
+
+Declare the payload as a typed dataclass in `backend/apps/<context>/domain/events.py` (pure, no Django
+import). `version` starts at 1. Adding an optional field keeps the version; removing or
+retyping a field means `version: 2` and a consumer that handles both until nothing emits 1.
+`entity.id` is the business code (`PRJ-01`), not the database primary key — consumers in other
+contexts must not need a FK into your models.
+
+### 3. Emit from the service, inside the transaction
+
+Only `backend/apps/<context>/services/` writes events, wrapped in `transaction.atomic()`, alongside the
+`ActivityRecord`. A service that imports the Redis client is a bug (CLAUDE.md rule 4).
+
+```python
+# backend/apps/workflow/services/transition.py  (shape, not a literal copy)
+with transaction.atomic():
+    project.workflow_state = transition.to_state
+    project.save(update_fields=["workflow_state"])
+    activity_repo.record(verb="STATE_CHANGED", entity=project, from_value=..., to_value=...,
+                         reason=reason, actor=actor, correlation_id=correlation_id)
+    outbox_repo.append(topic="project.state_changed", entity=("project", project.code),
+                       payload={"from": ..., "to": ..., "reason": reason},
+                       actor=actor, correlation_id=correlation_id, version=1)
+```
+
+Reuse the `correlation_id` of the request so "deprioritize A to prioritize B" stays one movement
+in the timeline.
+
+### 4. Decide which consumer group handles it
+
+One group per reason to react, never one group per topic — a failing group must not block the
+others. Existing groups on `aztec.events`:
+
+- `priority-recalculator` — recomputes `PriorityScore`, emits `project.priority.recalculated`.
+- `risk-evaluator` — re-runs the risk specifications, emits `project.risk.changed`.
+- `sse-fanout` — `PUBLISH aztec.sse` for topics the browser needs.
+
+Plus the read-side rebuild of `ProjectSnapshot` (§8), which reacts to any event carrying
+`entity.type == "project"`. If the new topic changes anything shown in the command center, it
+must reach that rebuild or the UI shows stale joins.
+
+### 5. Implement the idempotent handler
+
+Handlers live in `backend/apps/<context>/consumers/`. Deduplicate on `event.id` with the
+`ProcessedEvent` table, in the same transaction as the effect:
+
+```python
+with transaction.atomic():
+    _, created = ProcessedEvent.objects.get_or_create(
+        event_id=event.id, consumer_group="priority-recalculator"
+    )
+    if not created:
+        return  # already applied; still XACK below
+    recalculate(project_code=event.entity["id"])
+```
+
+The unique key is `(event_id, consumer_group)`: the same event is legitimately processed once
+per group. `XACK` after the transaction commits, and `XACK` on the duplicate path too — an
+unacked duplicate stays pending forever. Let unexpected exceptions propagate: the runner retries
+with backoff and, after N failures, moves the entry to `aztec.events.dlq`, which is visible in
+the admin.
+
+### 6. Decide whether it reaches the browser
+
+If the UI must react live, add the topic to the `sse-fanout` allowlist and to the store the
+Astro islands subscribe to. There is one shared `EventSource`; components subscribe to the
+store, never open their own connection (§9). If nothing in the UI changes, leave the topic out
+of the fanout instead of publishing noise the client discards.
+
+### 7. Add the delivery test
+
+Integration tests required by §11:
+
+- service call → exactly one `OutboxEvent` row with the right topic and `version`; rollback of
+  the transaction leaves zero rows.
+- relay run → the entry appears on `aztec.events` with the envelope intact.
+- handler invoked twice with the same `event.id` → the effect happens once and both calls ack.
+- end to end: outbox → consumer → `ProjectSnapshot` updated / SSE frame emitted.
+
+## Debugging
+
+```bash
+# is the stream receiving anything?
+docker compose exec redis redis-cli XLEN aztec.events
+docker compose exec redis redis-cli XREVRANGE aztec.events + - COUNT 5
+
+# groups, their lag and their consumers
+docker compose exec redis redis-cli XINFO GROUPS aztec.events
+docker compose exec redis redis-cli XPENDING aztec.events risk-evaluator - + 10
+
+# events stuck in the dead letter stream
+docker compose exec redis redis-cli XLEN aztec.events.dlq
+docker compose exec redis redis-cli XRANGE aztec.events.dlq - + COUNT 10
+
+# is it stuck before Redis? unpublished outbox rows
+make relay   # run the relay in the foreground and watch it drain
+```
+
+Read the symptom this way: rows pile up in `OutboxEvent` unpublished → the relay is down.
+`XLEN` grows but `XPENDING` grows with it → a consumer reads and never acks, or it crashes
+before the ack. `XPENDING` flat and the DLQ growing → the handler raises deterministically on
+that payload. Everything empty and the UI still stale → the service never wrote the outbox row.
+
+## Common mistakes
+
+- **Publishing from the service.** `redis` imported anywhere under `services/` is the bug; the
+  service writes `OutboxEvent` only.
+- **Non-idempotent consumers.** Incrementing a counter, appending an `ActivityRecord` or
+  emitting a downstream event without checking `ProcessedEvent` first. At-least-once guarantees
+  the duplicate will arrive.
+- **Forgetting `XACK`** — especially on the duplicate path and after a caught exception. The
+  entry stays pending, gets reclaimed, reprocessed, and the group's lag never drops.
+- **Payload without `version`.** The first consumer change then has to guess the shape from the
+  field set.
+- **Undocumented topics** — not added to the list in §6, so nobody knows the event exists.
+- **Swallowing handler exceptions** (`try/except: pass`, or acking on failure). The event never
+  reaches the DLQ and the failure is invisible. Let it raise; the retry and DLQ path exist for
+  this.
+- Acking before the effect commits, so a crash between the two loses the work silently.
+- Using the primary key in `entity.id` instead of the business code, coupling contexts.
+- Adding a topic to `sse-fanout` without adding it to the frontend store — published, received,
+  ignored.

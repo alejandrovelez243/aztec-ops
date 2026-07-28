@@ -1,0 +1,158 @@
+---
+name: prioritization-engine
+description: Load when working on the ranking in backend/apps/prioritization — adding or changing a priority signal strategy, touching PriorityPolicy weights or policy versions, the PriorityScore breakdown JSONB, PriorityOverride, the risk Specifications (IsBlocked, IsOverdue, HasNoNextStep, HasNoTargetDate, IsStale, OwnerOverloaded) and RiskFlag severity, writing database-free tests for any of them, or answering "why is this project ranked first" from a persisted breakdown.
+---
+
+# Prioritization engine
+
+Normative source: `docs/ARCHITECTURE.md` §4 (engine), §5 (specifications), §7 (layers).
+Score is 0–100, deterministic, versioned, and always accompanied by its reasons. No LLM, no
+randomness, no `datetime.now()` inside a strategy — time enters through `SignalInput.now`.
+
+## The criterion
+
+Weighted sum of six normalized signals, each an independent strategy returning
+`(score_0_1, reason)`. Weights come from the active `PriorityPolicy.weights` JSONB.
+
+| Signal code | Weight | What it measures |
+|---|---|---|
+| `deadline_pressure` | 0.25 | Days until `target_date`. Overdue = 1.0. No date = 0.5 plus `NO_TARGET_DATE`. |
+| `overdue_work` | 0.20 | Overdue tasks / open tasks. |
+| `criticality` | 0.15 | Volume of open tasks whose `priority.code` is critical or high. |
+| `business_value` | 0.15 | Contract value, log-normalized. |
+| `blockage` | 0.15 | Open blockers, weighted by age. |
+| `staleness` | 0.10 | Days without `ActivityRecord`, plus absence of `next_step`. |
+
+Three design points that get misread, and their justification:
+
+- **`business_value` is logarithmic.** A 28k engagement does not deserve 3.5x the operational
+  attention of an 8k one. Linear normalization lets the two or three largest contracts pin the
+  top of the queue permanently and makes every other signal noise. Log compresses the tail so
+  value orders projects without dominating them.
+- **An old blocker raises the score.** `blockage` grows with `age_days` of the oldest open
+  `Blocker`. A blocker that has been open for three weeks is not "waiting", it is rotting: it
+  needs intervention today. Decaying it would hide exactly the projects the command center
+  exists to surface.
+- **Owner saturation does not lower the score.** When the owner's computed load exceeds
+  `weekly_capacity_points`, the project gets the `OWNER_OVERLOADED` flag and keeps its score.
+  Priority belongs to the work, not to who happens to be free. Lowering the score would make a
+  bottleneck invisible precisely when it matters; the flag makes it a staffing decision.
+
+Modifiers multiply the weighted sum, they are never extra addends. Currently
+`engagement_type.weight` only.
+
+## Adding a signal
+
+One class plus one registry entry. Nothing in the evaluator changes.
+
+1. Create `backend/apps/prioritization/domain/signals/<code>.py` implementing the signal interface:
+   `evaluate(self, data: SignalInput) -> SignalResult`, where `SignalResult = tuple[float, str]`.
+   Read an existing strategy first and copy its shape.
+
+```python
+# backend/apps/prioritization/domain/signals/blockage.py
+from ..registry import register
+from ..types import SignalInput, SignalResult
+
+AGE_SATURATION_DAYS = 21
+
+
+@register("blockage")
+class Blockage:
+    """Open blockers, weighted by the age of the oldest one."""
+
+    def evaluate(self, data: SignalInput) -> SignalResult:
+        if not data.open_blockers:
+            return 0.0, "No open blockers."
+        oldest = max(b.age_days(data.now) for b in data.open_blockers)
+        score = min(1.0, oldest / AGE_SATURATION_DAYS)
+        return score, (
+            f"{len(data.open_blockers)} open blocker(s); the oldest has been open "
+            f"for {oldest} day(s) and needs intervention."
+        )
+```
+
+2. Register it under a stable `code` — the decorator is the registry entry. The `code` is the key
+   used in `PriorityPolicy.weights` and in the persisted `breakdown`; it never changes once a
+   score has been written with it.
+3. Add the weight in a **new** `PriorityPolicy` version (fixture or data migration), rebalancing
+   the others so the weights sum to 1.0 before modifiers. Move `is_active` to the new version.
+   Do not edit the active row: existing `PriorityScore` rows keep their `policy_version` and stay
+   reproducible.
+4. Write the pure test in `backend/apps/prioritization/tests/domain/`: no database, no fixtures,
+   table-driven over the boundaries (no blockers, one blocker at day 0, at
+   `AGE_SATURATION_DAYS`, past it), asserting the reason string as well as the number.
+5. Run `pytest backend/apps/prioritization -k <code>` and `make lint` (mypy strict covers `domain/`).
+6. Run `make recompute` so persisted scores reflect the new policy version.
+
+A signal key present in `weights` with no registered strategy — or the reverse — raises at policy
+load. It is never silently defaulted.
+
+## Adding a risk criterion
+
+Same shape, Specification pattern (`docs/ARCHITECTURE.md` §5). Specifications compose with
+`and` / `or` / `not`, so a new condition is a class, a `flag_code`, a severity and a registry
+line. The evaluator is untouched.
+
+```python
+# backend/apps/prioritization/domain/specifications.py
+@register_risk(flag_code="NO_TARGET_DATE", severity=Severity.MEDIUM)
+class HasNoTargetDate(Specification):
+    def is_satisfied_by(self, data: RiskInput) -> bool:
+        return not data.is_archived and data.target_date is None
+```
+
+The evaluator returns a list of `RiskFlag`. Project health is **derived** from the flags at read
+time; there is no editable health field, and the dataset's imported `health` column is a
+cross-check only.
+
+## Manual override
+
+`PriorityOverride(project, position | boost, reason, actor, expires_at)`. `reason` is mandatory
+and non-empty. The override is stored separately and is never written into `PriorityScore.value`:
+the computed score stays visible next to it, so the ranking remains auditable and the override
+remains reversible. It emits an `ActivityRecord` with verb `PRIORITY_CHANGED` and origin
+`MANUAL` (engine-driven recomputations use origin `POLICY` and name the signal that moved), and
+the UI labels the row as an override. A forced position with no recorded reason is
+indistinguishable from a bug three weeks later — that is why the reason is a constraint, not a
+convention.
+
+## Reading a breakdown out loud
+
+`PriorityScore.breakdown` stores, per signal: its `code`, `raw` value, `weight`, `contribution`
+and `reason`. To justify a rank, sort the entries by `contribution` descending and read the top
+two or three, then the modifiers and flags. For example:
+
+> PRJ-07 scores 84 under policy v2. Deadline pressure contributes 25 of that: overdue by 6 days.
+> Blockage contributes 13: one blocker open for 19 days. Overdue work contributes 12: 4 of 7 open
+> tasks are past due. The engagement type modifier (Proyecto, 1.1) lifted the total, and the
+> project carries `OWNER_OVERLOADED` — the score is real, the owner is the constraint.
+
+Never justify a rank from the model fields directly. If the breakdown does not explain the
+number, the breakdown is the bug.
+
+## Common mistakes
+
+- Hardcoding a weight inside a strategy, or reading it from a module constant instead of the
+  active `PriorityPolicy.weights`. The strategy owns normalization, never weighting.
+- Mutating the active `PriorityPolicy` row instead of creating a new version, which silently
+  rewrites the meaning of every previously persisted score.
+- Adding a branch to an existing `if` or to a dispatcher instead of adding a strategy or a
+  specification. Rule 8 in `CLAUDE.md`: if you had to edit an existing conditional, the design
+  is wrong.
+- Returning a score with no reason, or a reason like "high priority" that restates the number.
+  The reason must name the fact (days, counts, dates) that produced it.
+- Comparing against labels — `priority.label == "Critica"`, `state.label == "Bloqueada"`.
+  Compare against `priority.code` and `workflow_state.category`. Labels are Spanish data and
+  are admin-editable.
+- Importing Django or a `Project` model instance into `domain/`. Strategies take a plain
+  dataclass input that already includes `now`.
+- Calling `datetime.now()` inside a strategy, which makes the test non-deterministic and the
+  score non-reproducible.
+- Lowering the score for an overloaded owner, or decaying `blockage` with age. Both hide the
+  situation the ranking exists to expose.
+- Forgetting to recompute after changing data, a policy or a signal, so the API keeps serving
+  stale `PriorityScore` and `ProjectSnapshot` rows. Recomputation is event-driven in normal
+  operation; after a seed or a policy change run `make recompute` explicitly.
+- Writing an override into `PriorityScore.value` "so the sorting is simpler". It destroys the
+  audit trail and the UI can no longer label it as an override.

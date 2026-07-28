@@ -1,0 +1,188 @@
+---
+name: aztec-local-dev
+description: Operating Aztec Ops locally — docker compose up/down, migrations, make seed with Django fixtures, tests and lint, Django admin, running the outbox relay in the foreground, inspecting the aztec.events stream and the DLQ, resetting the database. Load it when a command fails, when the relay does not publish, when a consumer group has stuck pending entries, when SSE never reaches the browser, or when loaddata breaks.
+---
+
+# Operating Aztec Ops locally
+
+Six services in `docker-compose.yml`: `postgres` (16), `redis` (7), `api` (Django/ASGI on 8000),
+`relay` (outbox relay), `worker` (consumer groups: priority-recalculator, risk-evaluator,
+sse-fanout), `web` (Astro 5 on 4321). Python deps are managed with `uv`.
+
+## Command table
+
+| Command | What it does |
+|---|---|
+| `make up` | `docker compose up -d` for postgres, redis, api, relay, worker, web |
+| `make down` | `docker compose down` (keeps volumes) |
+| `make logs` | `docker compose logs -f api relay worker` |
+| `make migrate` | `docker compose exec api python manage.py migrate` |
+| `make seed` | `loaddata catalog workflows portfolio work activity` + `make recompute` |
+| `make recompute` | recompute `PriorityScore`, risk flags and `ProjectSnapshot` |
+| `make test` | `docker compose exec api pytest` |
+| `make lint` | `ruff check . && ruff format --check . && mypy` |
+| `make relay` | runs the relay in the foreground with `--verbosity 2` (debugging) |
+| `make shell` | `docker compose exec api python manage.py shell` |
+| `make reset` | drops volumes, migrates, seeds from scratch |
+
+Always run management commands inside the `api` container so they see the compose network
+(`postgres:5432`, `redis:6379`), not localhost.
+
+## Bring-up from a clean checkout
+
+```bash
+cd /Users/alejandrovelezp/aztec-challenge
+cp .env.example .env
+make up
+docker compose exec api python manage.py migrate
+make seed
+docker compose exec api python manage.py createsuperuser
+```
+
+Admin: http://localhost:8000/admin/ — taxonomies (`catalog`), workflows and transitions
+(`workflow`), `OutboxEvent`, `ProcessedEvent` and the DLQ view live there.
+API docs: http://localhost:8000/api/docs. Frontend: http://localhost:4321.
+
+Health check before debugging anything else:
+
+```bash
+docker compose ps
+docker compose exec postgres pg_isready -U aztec
+docker compose exec redis redis-cli PING
+curl -s localhost:8000/api/health
+```
+
+## Running the relay in the foreground
+
+The relay is the only process allowed to `XADD`. To watch it while you trigger a transition:
+
+```bash
+docker compose stop relay
+make relay        # or: docker compose run --rm relay python manage.py run_outbox_relay --verbosity 2
+```
+
+In another shell, cause an event and watch it drain:
+
+```bash
+curl -s -X POST localhost:8000/api/projects/PRJ-01/transition \
+  -H 'Content-Type: application/json' -H 'X-Actor: camila' \
+  -d '{"to_state": "blocked", "reason": "waiting for client access"}'
+```
+
+## Inspecting the stream and the DLQ
+
+```bash
+docker compose exec redis redis-cli XINFO STREAM aztec.events
+docker compose exec redis redis-cli XLEN aztec.events
+docker compose exec redis redis-cli XRANGE aztec.events - + COUNT 5
+docker compose exec redis redis-cli XINFO GROUPS aztec.events
+docker compose exec redis redis-cli XPENDING aztec.events sse-fanout
+docker compose exec redis redis-cli XLEN aztec.events.dlq
+docker compose exec redis redis-cli XRANGE aztec.events.dlq - + COUNT 10
+docker compose exec redis redis-cli SUBSCRIBE aztec.sse     # fan-out channel
+```
+
+Undelivered outbox rows (the relay is behind or dead):
+
+```bash
+docker compose exec api python manage.py shell -c \
+  "from apps.bus.models import OutboxEvent; print(OutboxEvent.objects.filter(published_at__isnull=True).count())"
+```
+
+## Resetting the database
+
+```bash
+make down
+docker compose down -v            # drops the postgres and redis volumes
+make up
+docker compose exec api python manage.py migrate
+make seed
+```
+
+Redis only, keeping the database (clears stream, groups and dedup state):
+
+```bash
+docker compose exec redis redis-cli DEL aztec.events aztec.events.dlq
+docker compose exec api python manage.py shell -c \
+  "from apps.bus.models import ProcessedEvent; ProcessedEvent.objects.all().delete()"
+```
+
+Deleting `aztec.events` destroys the consumer groups too. The worker recreates them with
+`XGROUP CREATE ... MKSTREAM` on start; restart it: `docker compose restart worker`.
+
+## Usual failures
+
+**Relay not publishing.** Check in order: `OutboxEvent` rows with `published_at IS NULL`
+(if zero, the service never wrote to the outbox — that is a service bug, not a relay bug);
+`docker compose logs relay`; `redis-cli PING` from the `api` container. A service that imports
+the Redis client bypasses the outbox and the relay will never see the event — that is rule 4 of
+CLAUDE.md and it is a bug, not a shortcut.
+
+**Consumer stuck with pending entries.** `XPENDING aztec.events <group>` shows entries that were
+read and never acked, usually because the handler crashed. Inspect and reclaim:
+
+```bash
+docker compose exec redis redis-cli XPENDING aztec.events risk-evaluator - + 10
+docker compose exec redis redis-cli XAUTOCLAIM aztec.events risk-evaluator worker-1 60000 0
+docker compose exec redis redis-cli XACK aztec.events risk-evaluator <entry-id>
+```
+
+Do not ack blindly to make the number go down — read the worker traceback first. Reprocessing is
+safe: consumers deduplicate on `event.id` via `ProcessedEvent`.
+
+**SSE never reaching the browser.** Test the endpoint outside the browser first:
+
+```bash
+curl -N -H 'Accept: text/event-stream' localhost:8000/api/stream
+```
+
+If curl streams and the browser does not, it is CORS (`CORS_ALLOWED_ORIGINS` must include
+`http://localhost:4321`; `EventSource` sends no custom headers, so do not require `X-Actor` on
+that route). If curl itself hangs with no output, it is buffering: the endpoint must run on ASGI
+(uvicorn, not `runserver` behind WSGI), send an initial comment line and periodic heartbeats, and
+any proxy in front needs `proxy_buffering off` plus `X-Accel-Buffering: no` on the response.
+If events arrive once and then stop, the browser opened several `EventSource` connections —
+there is exactly one shared connection behind the store (§9 of ARCHITECTURE).
+
+**Conflicting migrations.** Two migrations with the same parent produce
+`Conflicting migrations detected; multiple leaf nodes`. Do not delete someone's migration:
+
+```bash
+docker compose exec api python manage.py makemigrations --merge
+docker compose exec api python manage.py showmigrations workflow
+```
+
+Before writing a new one, `makemigrations --check --dry-run` tells you whether the model change
+is already covered.
+
+**loaddata failing on a foreign key.** Fixture load order matters: `catalog` and `workflows` carry
+the rows every other fixture points at. Load them in the documented order
+(`catalog workflows portfolio work activity`), never a single glob. `DeserializationError:
+Problem installing fixture ... matching query does not exist` means a fixture references a pk that
+its own dependency fixture does not define — fix the fixture, do not loosen the FK.
+
+**loaddata duplicating rows.** Fixtures must use explicit stable primary keys. A fixture with
+`"pk": null` inserts a new row on every run, so `make seed` twice gives you doubled projects.
+Check with:
+
+```bash
+grep -c '"pk": null' backend/apps/*/fixtures/*.json
+```
+
+Idempotency is a tested property: `make test -k seed_idempotency`.
+
+## Common mistakes
+
+- Running `python manage.py ...` on the host instead of `docker compose exec api ...`, then
+  debugging a connection refused to `postgres:5432`.
+- Killing pending entries with `XACK` or `XGROUP DESTROY` before reading the worker traceback,
+  which hides a consumer bug that will come back on the next event.
+- Running `make relay` while the `relay` container is still up: two publishers compete for the
+  same outbox rows. `docker compose stop relay` first.
+- Using `runserver` to test `/api/stream`. It buffers; the stream looks broken when the code is
+  fine.
+- `docker compose down -v` when only Redis needed clearing — you lose the seeded database for no
+  reason.
+- Editing fixture rows by hand to fix a data problem. Fixtures are regenerated by
+  `backend/scripts/xlsx_to_fixtures.py`; a hand edit is overwritten on the next regeneration.
+- Adding a workflow state through a migration instead of the admin. States are data (rule 1).

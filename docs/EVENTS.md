@@ -1,0 +1,610 @@
+# Events — Aztec Ops
+
+> Canonical catalog. A topic exists when it is registered **here**. `docs/ARCHITECTURE.md` §6
+> keeps the narrative of the flow and points to this file for the schemas.
+> If a payload in the code and a payload in this file disagree, one of them gets fixed.
+
+The path is: an application service writes `OutboxEvent` in the same transaction as the state
+change and the `ActivityRecord` → the relay claims unpublished rows with
+`SELECT ... FOR UPDATE SKIP LOCKED` and `XADD`s them to the Redis stream `aztec.events` →
+consumer groups read with `XREADGROUP` → `sse-fanout` does `PUBLISH aztec.sse` →
+`GET /api/stream` writes `text/event-stream` → the shared `EventSource` store in the Astro
+islands. Services never import the Redis client (`CLAUDE.md` rule 4).
+
+## 1. Envelope
+
+The envelope is fixed for every topic. New information goes inside `payload`, never at the top
+level.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `id` | string, UUIDv4 | yes | Event identity. The deduplication key for every consumer, the `id:` field of the SSE frame, and the value the browser replays through `Last-Event-ID`. Generated when the `OutboxEvent` row is written, never by the relay. |
+| `topic` | string | yes | One of the topics in §4. Immutable once released. |
+| `occurred_at` | string, ISO-8601 UTC with `Z` | yes | When the change committed, not when the relay published. Consumers use it to discard a stale application of an out-of-order redelivery. |
+| `actor` | string | yes | Who caused the change: the actor identifier from the request (`daniel.rojas`), or the literal `system` when the prioritization or risk engine caused it. Never null — an unattributed change is a bug. |
+| `correlation_id` | string, UUIDv4 | yes | Chains every event produced by one decision, including the events a consumer emits in reaction. It is what turns "deprioritize A in order to prioritize B" into a single movement in the timeline. Defaults to the request id. |
+| `entity` | object | yes | `{"type": "...", "id": "..."}`. `type` ∈ `project \| task \| blocker \| note`. `id` is the **business code** (`PRJ-01`, `PRJ-01-T02`), never a database primary key — a consumer in another context must never need a FK into the emitting context. |
+| `payload` | object | yes | Topic-specific, versioned. Schemas in §4. |
+| `version` | integer ≥ 1 | yes | Schema version **of this topic's payload**, not a global bus version. Starts at 1 and is tracked per topic. |
+
+Wire formats:
+
+- Outbox row: `OutboxEvent(id, topic, entity_type, entity_id, payload JSONB, actor,
+  correlation_id, version, occurred_at, published_at)`. The envelope is reassembled by the relay.
+- Redis stream entry: a single field `data` holding the envelope as JSON. The stream entry id is
+  Redis's own and is unrelated to `event.id`.
+- SSE frame: `id: <event.id>`, `event: <topic>`, `data: <envelope JSON>`. That is why
+  `es.addEventListener(topic, ...)` works client-side and why reconnecting with
+  `Last-Event-ID` resumes at the right place.
+
+## 2. Payload versioning
+
+`version` starts at 1 per topic. Change it only for a breaking change.
+
+**Not breaking — keep the version:**
+
+- Adding an optional field.
+- Adding a new value to a set of taxonomy or workflow `code`s. States and priorities are
+  database rows (`CLAUDE.md` rule 1), so a consumer that cannot survive an unknown `code` is
+  already wrong. Match on `category` where behaviour depends on the kind of state.
+- Widening a numeric range, or making a required field's value more precise.
+
+**Breaking — bump the version:**
+
+- Removing or renaming a field.
+- Changing a field's type, or its unit, or its meaning under the same name.
+- Making an optional field required, or a nullable field non-nullable.
+- Changing what `entity.type` / `entity.id` refer to for that topic.
+
+Procedure for a breaking change:
+
+1. Emit `version: 2` from the service and update this file, keeping the version 1 schema
+   documented until it is retired.
+2. Consumers handle both versions before the emitter changes — deploy order is consumers first.
+3. Version 1 can be deleted only when no unpublished `OutboxEvent`, no pending stream entry and
+   no `aztec.events.dlq` entry carries it. Check the DLQ; a replayed dead letter is a version 1
+   event arriving after you thought version 1 was gone.
+
+The envelope itself is not versioned per topic. Changing the envelope is a change to every
+consumer at once and is out of scope for a normal feature.
+
+## 3. Topic naming
+
+```
+<entity>.<event>              project.created, task.state_changed, blocker.raised
+<entity>.<aspect>.<event>     project.priority.recalculated, project.risk.changed
+```
+
+- Lowercase, dot-separated, `snake_case` inside a segment, at most three segments.
+- Entity singular. Event in past tense: the topic reports something that already committed, so
+  `project.updated`, never `project.update` or `update_project`.
+- The `<aspect>` segment exists for facts derived by a consumer rather than by a user action —
+  `priority`, `risk`. It keeps the derived topics visually separate from the write-side ones.
+- A topic name is immutable once released. Renaming means introducing the new topic, emitting
+  both for one release, migrating consumers, then removing the old one.
+- Never encode an identifier or a state in the topic (`project.PRJ-01.updated`,
+  `project.blocked` are both wrong). That belongs in `entity` and `payload`.
+
+## 4. Topic catalog
+
+Codes used below are workflow state `code`s, not labels: project states `discovery`,
+`execution`, `paused`, `blocked`, `done`, `cancelled`; task states `todo`, `in_progress`,
+`in_review`, `blocked`, `done`. Labels are Spanish operator-editable data (`Por hacer`,
+`Bloqueada`) and never appear in a payload.
+
+`SSE` below means the topic is on the `sse-fanout` allowlist and reaches the browser.
+
+---
+
+### `project.created`
+
+**Emitted by** `backend/apps/portfolio/services/project.py` when a project is created through
+`POST /api/projects` or by the seed path. Version 1.
+
+| Field | Type | Required |
+|---|---|---|
+| `name` | string | yes |
+| `client_alias` | string | yes |
+| `engagement_type` | string (`EngagementType.code`) | yes |
+| `project_type` | string (`ProjectType.code`) | yes |
+| `stage` | string (`Stage.code`) | yes |
+| `state` | string (initial `WorkflowState.code`) | yes |
+| `owner_alias` | string | yes |
+| `target_date` | string `YYYY-MM-DD` \| null | yes (nullable — null is the `NO_TARGET_DATE` signal, not missing data) |
+| `business_value` | number | no |
+| `currency` | string ISO-4217 | no |
+
+**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes — the
+command center gains a row.
+
+```json
+{
+  "id": "6f1b6a2c-6c3e-4f7a-9c1f-2f0f1a5f77b1",
+  "topic": "project.created",
+  "occurred_at": "2026-07-28T08:12:04Z",
+  "actor": "daniel.rojas",
+  "correlation_id": "6f1b6a2c-6c3e-4f7a-9c1f-2f0f1a5f77b1",
+  "entity": {"type": "project", "id": "PRJ-01"},
+  "payload": {
+    "name": "Global Contract Management",
+    "client_alias": "Atlas Foods",
+    "engagement_type": "proyecto",
+    "project_type": "automatizacion",
+    "stage": "ejecucion",
+    "state": "execution",
+    "owner_alias": "Daniel Rojas",
+    "target_date": null,
+    "business_value": 28000,
+    "currency": "USD"
+  },
+  "version": 1
+}
+```
+
+---
+
+### `project.updated`
+
+**Emitted by** `backend/apps/portfolio/services/project.py` on any field update that is not a workflow
+transition. `workflow_state` can never appear in `changes` — state moves only through
+`project.state_changed` (`CLAUDE.md` rule 2). Version 1.
+
+| Field | Type | Required |
+|---|---|---|
+| `changes` | object mapping field name → `{"from": any, "to": any}` | yes, non-empty |
+
+**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes.
+
+```json
+{
+  "id": "b0a3c9f5-9e2d-4f21-8a5b-1c4d7e9a0f33",
+  "topic": "project.updated",
+  "occurred_at": "2026-07-28T08:20:41Z",
+  "actor": "daniel.rojas",
+  "correlation_id": "b0a3c9f5-9e2d-4f21-8a5b-1c4d7e9a0f33",
+  "entity": {"type": "project", "id": "PRJ-01"},
+  "payload": {
+    "changes": {
+      "next_step": {"from": null, "to": "Unblock legal review with Atlas Foods"},
+      "target_date": {"from": null, "to": "2026-08-14"}
+    }
+  },
+  "version": 1
+}
+```
+
+---
+
+### `project.state_changed`
+
+**Emitted by** `backend/apps/workflow/services/transition.py`, only after the transition service has
+matched an active `WorkflowTransition` and satisfied its guard, `requires_reason` and
+`requires_fields`. An illegal move raises `TransitionNotAllowed` and emits nothing. Version 1.
+
+| Field | Type | Required |
+|---|---|---|
+| `from` | string (`WorkflowState.code`) | yes |
+| `to` | string (`WorkflowState.code`) | yes |
+| `from_category` | string (`BACKLOG \| IN_PROGRESS \| BLOCKED \| DONE \| CANCELLED`) | yes |
+| `to_category` | same set | yes |
+| `transition` | string (`WorkflowTransition` code) | yes |
+| `reason` | string \| null | yes (non-null when the transition sets `requires_reason`) |
+
+Consumers branch on `to_category`, never on `to` — that is what lets an operator add a state
+from the admin without a deploy.
+
+**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes.
+
+```json
+{
+  "id": "1e7c4b90-2a55-4c0e-b0d2-8f4b1c66a201",
+  "topic": "project.state_changed",
+  "occurred_at": "2026-07-28T09:05:12Z",
+  "actor": "daniel.rojas",
+  "correlation_id": "1e7c4b90-2a55-4c0e-b0d2-8f4b1c66a201",
+  "entity": {"type": "project", "id": "PRJ-01"},
+  "payload": {
+    "from": "execution",
+    "to": "blocked",
+    "from_category": "IN_PROGRESS",
+    "to_category": "BLOCKED",
+    "transition": "execution__blocked",
+    "reason": "Atlas Foods legal has not returned the signed annex"
+  },
+  "version": 1
+}
+```
+
+---
+
+### `project.priority.recalculated`
+
+**Emitted by** the `priority-recalculator` consumer group, not by an API route, and only when
+the value or the breakdown actually changed — a recompute that lands on the same number emits
+nothing. `actor` is `system`; `correlation_id` is inherited from the event that triggered the
+recompute, so the timeline shows the state change and the reranking as one decision. Version 1.
+
+| Field | Type | Required |
+|---|---|---|
+| `value` | number 0–100 | yes |
+| `previous_value` | number 0–100 \| null | yes (null on first computation) |
+| `policy_version` | integer | yes |
+| `origin` | string (`POLICY \| MANUAL`) | yes |
+| `breakdown` | array of `{code, raw, weight, contribution, reason}` | yes |
+| `modifiers` | object mapping modifier code → number | no |
+| `flags` | array of string flag codes | no |
+
+`code` values in `breakdown` are the registered signal codes: `deadline_pressure`,
+`overdue_work`, `criticality`, `business_value`, `blockage`, `staleness`.
+
+**Consumed by** `snapshot-builder`. **Not** consumed by `priority-recalculator` or
+`risk-evaluator` — a group never consumes what it emits, which is what keeps the bus acyclic.
+**SSE**: yes — the queue reorders live and the breakdown is what the UI shows next to the number.
+
+```json
+{
+  "id": "9d21f4aa-77b1-4a2e-93cf-0c7b6d5e4411",
+  "topic": "project.priority.recalculated",
+  "occurred_at": "2026-07-28T09:05:13Z",
+  "actor": "system",
+  "correlation_id": "1e7c4b90-2a55-4c0e-b0d2-8f4b1c66a201",
+  "entity": {"type": "project", "id": "PRJ-01"},
+  "payload": {
+    "value": 87.4,
+    "previous_value": 71.2,
+    "policy_version": 2,
+    "origin": "POLICY",
+    "breakdown": [
+      {"code": "deadline_pressure", "raw": 0.5, "weight": 0.25, "contribution": 12.5,
+       "reason": "No target date; treated as medium pressure and flagged"},
+      {"code": "overdue_work", "raw": 0.5, "weight": 0.20, "contribution": 10.0,
+       "reason": "2 of 4 open tasks are past due"},
+      {"code": "criticality", "raw": 0.75, "weight": 0.15, "contribution": 11.25,
+       "reason": "1 critical and 2 high open tasks"},
+      {"code": "business_value", "raw": 0.82, "weight": 0.15, "contribution": 12.3,
+       "reason": "28000 USD, log-normalized against the portfolio"},
+      {"code": "blockage", "raw": 1.0, "weight": 0.15, "contribution": 15.0,
+       "reason": "1 blocker open, raised 0 days ago, plus 1 blocked task"},
+      {"code": "staleness", "raw": 0.6, "weight": 0.10, "contribution": 6.0,
+       "reason": "No next step recorded"}
+    ],
+    "modifiers": {"engagement_type": 1.1},
+    "flags": ["NO_TARGET_DATE", "OWNER_OVERLOADED"]
+  },
+  "version": 1
+}
+```
+
+---
+
+### `project.risk.changed`
+
+**Emitted by** the `risk-evaluator` consumer group when the set of `RiskFlag`s for a project
+differs from the persisted one, or when the derived health changes. Nothing is emitted when the
+evaluation is identical. `actor` is `system`. Version 1.
+
+| Field | Type | Required |
+|---|---|---|
+| `flags` | array of `{code, severity, reason}` | yes (may be empty — an empty array is the "risk cleared" event) |
+| `added` | array of string flag codes | yes |
+| `removed` | array of string flag codes | yes |
+| `health` | string (`SANO \| EN_RIESGO \| BLOQUEADO`) | yes — derived, never operator-set |
+| `previous_health` | string \| null | yes |
+
+Flag codes come from the risk registry: `BLOCKED`, `OVERDUE`, `NO_NEXT_STEP`, `NO_TARGET_DATE`,
+`STALE`, `OWNER_OVERLOADED`. Severity ∈ `LOW | MEDIUM | HIGH`.
+
+**Consumed by** `snapshot-builder`. **SSE**: yes — the risk panels and the health indicator patch
+from it.
+
+```json
+{
+  "id": "4c8e2f16-5ba9-4d77-8f10-9a3e2b7c5d02",
+  "topic": "project.risk.changed",
+  "occurred_at": "2026-07-28T09:05:13Z",
+  "actor": "system",
+  "correlation_id": "1e7c4b90-2a55-4c0e-b0d2-8f4b1c66a201",
+  "entity": {"type": "project", "id": "PRJ-01"},
+  "payload": {
+    "flags": [
+      {"code": "BLOCKED", "severity": "HIGH",
+       "reason": "Project state category is BLOCKED and 1 task is blocked"},
+      {"code": "OVERDUE", "severity": "HIGH", "reason": "2 open tasks past their due date"},
+      {"code": "NO_TARGET_DATE", "severity": "MEDIUM", "reason": "Active project with no target date"},
+      {"code": "NO_NEXT_STEP", "severity": "MEDIUM",
+       "reason": "No next step and no task in an IN_PROGRESS state"}
+    ],
+    "added": ["BLOCKED", "NO_NEXT_STEP"],
+    "removed": [],
+    "health": "BLOQUEADO",
+    "previous_health": "EN_RIESGO"
+  },
+  "version": 1
+}
+```
+
+---
+
+### `task.created`
+
+**Emitted by** `backend/apps/work/services/task.py`. `entity` is the task; `payload.project_code` is
+what lets a consumer aggregate without a FK into `backend/apps/work`. Version 1.
+
+| Field | Type | Required |
+|---|---|---|
+| `project_code` | string | yes |
+| `title` | string | yes |
+| `priority` | string (`Priority.code`) | yes |
+| `state` | string (initial `WorkflowState.code`) | yes |
+| `assignee_alias` | string \| null | yes |
+| `due_date` | string `YYYY-MM-DD` \| null | yes |
+| `depends_on` | array of `{task_code \| null, raw_label}` | no (unresolved dependencies keep only `raw_label`) |
+
+**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes — task
+counts and owner load are on screen.
+
+```json
+{
+  "id": "a51d0e33-4c2b-49a8-8e6a-77f0d1c9b420",
+  "topic": "task.created",
+  "occurred_at": "2026-07-28T09:31:00Z",
+  "actor": "daniel.rojas",
+  "correlation_id": "a51d0e33-4c2b-49a8-8e6a-77f0d1c9b420",
+  "entity": {"type": "task", "id": "PRJ-01-T02"},
+  "payload": {
+    "project_code": "PRJ-01",
+    "title": "Resolve priority issue in pilot or production - Global Contract Management",
+    "priority": "critica",
+    "state": "todo",
+    "assignee_alias": "Daniel Rojas",
+    "due_date": "2026-07-10",
+    "depends_on": [
+      {"task_code": "PRJ-01-T04", "raw_label": "Functional validation and release checklist"}
+    ]
+  },
+  "version": 1
+}
+```
+
+---
+
+### `task.state_changed`
+
+**Emitted by** `backend/apps/workflow/services/transition.py` for a task aggregate, under the same
+transition validation as a project. Version 1.
+
+| Field | Type | Required |
+|---|---|---|
+| `project_code` | string | yes |
+| `from` | string (`WorkflowState.code`) | yes |
+| `to` | string (`WorkflowState.code`) | yes |
+| `from_category` | string category | yes |
+| `to_category` | string category | yes |
+| `transition` | string | yes |
+| `reason` | string \| null | yes |
+| `last_progress` | string \| null | no |
+
+**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes — a
+task entering `BLOCKED` can change the whole project's health, which is visible on the queue.
+
+```json
+{
+  "id": "c7d94b02-1f6e-4a3d-9b8c-5e2a7f3d1108",
+  "topic": "task.state_changed",
+  "occurred_at": "2026-07-28T09:47:22Z",
+  "actor": "camila.torres",
+  "correlation_id": "c7d94b02-1f6e-4a3d-9b8c-5e2a7f3d1108",
+  "entity": {"type": "task", "id": "PRJ-01-T02"},
+  "payload": {
+    "project_code": "PRJ-01",
+    "from": "todo",
+    "to": "in_progress",
+    "from_category": "BACKLOG",
+    "to_category": "IN_PROGRESS",
+    "transition": "todo__in_progress",
+    "reason": null,
+    "last_progress": "Reproduced the issue on the pilot tenant"
+  },
+  "version": 1
+}
+```
+
+---
+
+### `blocker.raised`
+
+**Emitted by** `backend/apps/work/services/blocker.py`. A blocker is a first-class row attached to a
+project or a task, never a substring in a notes field. `entity` is the blocker; the payload
+names what it blocks. Version 1.
+
+| Field | Type | Required |
+|---|---|---|
+| `project_code` | string | yes (for a task blocker, the task's project) |
+| `task_code` | string \| null | yes (null when the blocker is attached to the project) |
+| `kind` | string (`EXTERNAL_DEPENDENCY \| ACCESS \| DECISION \| TECHNICAL`) | yes |
+| `description` | string | yes |
+| `owner_alias` | string \| null | yes — who has to move it |
+| `raised_at` | string ISO-8601 | yes |
+
+**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes — the
+open-blockers panel is the second question the command center answers.
+
+```json
+{
+  "id": "e2b6f0d7-3a41-4c85-9d2f-6b1e8c4a7d55",
+  "topic": "blocker.raised",
+  "occurred_at": "2026-07-28T09:06:02Z",
+  "actor": "daniel.rojas",
+  "correlation_id": "1e7c4b90-2a55-4c0e-b0d2-8f4b1c66a201",
+  "entity": {"type": "blocker", "id": "BLK-0142"},
+  "payload": {
+    "project_code": "PRJ-01",
+    "task_code": "PRJ-01-T03",
+    "kind": "EXTERNAL_DEPENDENCY",
+    "description": "Waiting on client response, credentials, external API or business definition.",
+    "owner_alias": "Daniel Rojas",
+    "raised_at": "2026-07-28T09:06:02Z"
+  },
+  "version": 1
+}
+```
+
+---
+
+### `blocker.resolved`
+
+**Emitted by** `backend/apps/work/services/blocker.py` when `resolved_at` is set. Resolving an already
+resolved blocker is a no-op and emits nothing. Version 1.
+
+| Field | Type | Required |
+|---|---|---|
+| `project_code` | string | yes |
+| `task_code` | string \| null | yes |
+| `kind` | string | yes |
+| `resolution` | string | yes — how it was unblocked, mandatory |
+| `resolved_at` | string ISO-8601 | yes |
+| `open_for_days` | integer | yes — age at resolution; the blockage signal reads it |
+
+**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes.
+
+```json
+{
+  "id": "07f3a8c1-9b24-4de6-a0f7-2c5d9e1b3a86",
+  "topic": "blocker.resolved",
+  "occurred_at": "2026-07-30T14:22:10Z",
+  "actor": "camila.torres",
+  "correlation_id": "07f3a8c1-9b24-4de6-a0f7-2c5d9e1b3a86",
+  "entity": {"type": "blocker", "id": "BLK-0142"},
+  "payload": {
+    "project_code": "PRJ-01",
+    "task_code": "PRJ-01-T03",
+    "kind": "EXTERNAL_DEPENDENCY",
+    "resolution": "Atlas Foods returned the signed annex; sandbox credentials received",
+    "resolved_at": "2026-07-30T14:22:10Z",
+    "open_for_days": 2
+  },
+  "version": 1
+}
+```
+
+---
+
+### `note.added`
+
+**Emitted by** `backend/apps/work/services/note.py`. A note is activity, so it resets the staleness
+signal — which is why the engine groups consume it even though a note changes no field.
+Version 1.
+
+| Field | Type | Required |
+|---|---|---|
+| `project_code` | string | yes |
+| `task_code` | string \| null | yes |
+| `body` | string | yes |
+| `author_alias` | string | yes |
+
+**Consumed by** `priority-recalculator`, `risk-evaluator`, `snapshot-builder`. **SSE**: yes — the
+detail timeline appends live.
+
+```json
+{
+  "id": "5a9c1e70-8d3f-42b6-9c14-4e7b0a2f6d19",
+  "topic": "note.added",
+  "occurred_at": "2026-07-28T10:14:35Z",
+  "actor": "camila.torres",
+  "correlation_id": "5a9c1e70-8d3f-42b6-9c14-4e7b0a2f6d19",
+  "entity": {"type": "note", "id": "NOTE-0391"},
+  "payload": {
+    "project_code": "PRJ-01",
+    "task_code": "PRJ-01-T02",
+    "body": "Escalated to the Atlas Foods legal contact; answer expected Thursday.",
+    "author_alias": "Camila Torres"
+  },
+  "version": 1
+}
+```
+
+## 5. Consumer groups
+
+All four read the single stream `aztec.events` with `XREADGROUP`. One group per reason to react:
+a group that fails does not stop the others, and no group is ever shared across concerns.
+
+| Group | Subscribes to | What it does | Emits | Idempotency key |
+|---|---|---|---|---|
+| `priority-recalculator` | `project.created`, `project.updated`, `project.state_changed`, `task.created`, `task.state_changed`, `blocker.raised`, `blocker.resolved`, `note.added` | Recomputes `PriorityScore` for the affected project under the active `PriorityPolicy`, persisting `value`, `policy_version` and `breakdown` | `project.priority.recalculated`, only when value or breakdown changed | `(event.id, "priority-recalculator")` |
+| `risk-evaluator` | same set as above | Re-runs the risk specifications and rewrites the project's `RiskFlag` set; derives health from the flags | `project.risk.changed`, only when the flag set or health changed | `(event.id, "risk-evaluator")` |
+| `snapshot-builder` | every topic (§8 read model) | Rebuilds the `ProjectSnapshot` row for the project named by `entity.id` or `payload.project_code`: score, flags, owner load, task counts | nothing | `(event.id, "snapshot-builder")` |
+| `sse-fanout` | every topic on the allowlist | `PUBLISH aztec.sse` with the envelope unchanged, for `GET /api/stream` to frame | nothing | `(event.id, "sse-fanout")` |
+
+Notes:
+
+- The idempotency key is a `ProcessedEvent` row with a unique constraint on
+  `(event_id, consumer_group)`. The same event is legitimately processed once **per group**.
+- `priority-recalculator` and `risk-evaluator` do not consume the topics they emit. Derived
+  topics feed only `snapshot-builder` and `sse-fanout`, which emit nothing — the graph has no
+  cycle by construction.
+- Every topic is on the `sse-fanout` allowlist today, because all ten change something a view
+  renders. The allowlist still exists and defaults to off: a topic that only triggers internal
+  recomputation must not be forwarded, and a topic added to the fanout without being added to
+  `frontend/src/lib/stream/topics.ts` is published, received and silently discarded.
+- Adding a group means adding a row here. A group that is not in this table is not deployed.
+
+## 6. Delivery guarantees
+
+**At-least-once, never at-most-once.** The outbox row and the state change share one
+transaction, so an event is never lost; the relay may crash after `XADD` and before marking the
+row published, so an event may be delivered twice. Every handler must produce the same result
+when run twice with the same `event.id`.
+
+**Deduplication.** The handler opens a transaction, inserts
+`ProcessedEvent(event_id, consumer_group)`, and does its work in that same transaction. A
+duplicate hits the unique constraint, the handler returns without reprocessing, and the entry is
+still `XACK`ed — an unacked duplicate stays pending forever. Because the insert shares the
+handler's transaction, a failed attempt leaves no `ProcessedEvent` row, so a retry is a real
+retry and not a silent skip.
+
+**Ack after commit.** `XACK` runs only after the transaction commits, including on the duplicate
+path and after a failure has been routed to the DLQ. Ack-then-process loses work on a crash.
+
+**Retry with backoff.** An unexpected exception propagates out of the handler. The runner retries
+the entry with exponential backoff and jitter (roughly 1s, 2s, 4s, 8s, 16s) up to 5 attempts.
+Nothing is swallowed: every attempt logs `topic`, `event.id`, `consumer_group` and the exception.
+A `try/except: pass` anywhere in a handler is a bug.
+
+**Dead letter.** After the retry budget the runner `XADD`s to `aztec.events.dlq` — the original
+envelope plus `error`, `attempts`, `consumer_group` and the original stream entry id — then acks
+the entry on `aztec.events` so the group's lag drains. Dead letters are visible in the Django
+admin. Replay is an admin action that re-publishes the same envelope with the same `event.id`
+onto `aztec.events`; groups that already applied it dedup on `ProcessedEvent`, the group that
+failed applies it for the first time. An event dying silently is worse than a loud error.
+
+**Ordering.** Redis Streams preserves order within `aztec.events`, and the relay claims outbox
+rows in insertion order. That is not a causal ordering guarantee across groups: `sse-fanout` can
+reach the browser before `snapshot-builder` has rebuilt the read model. Islands therefore patch
+from the event payload and tolerate a `ProjectSnapshot` that is one event behind on a refetch.
+Handlers that care compare `occurred_at` against the state they hold rather than assuming they
+are seeing the newest fact.
+
+## 7. Checklist — adding a topic
+
+1. Name it under §3 and add a full entry to §4 in the same change: emitter, payload table with
+   types and required flags, consumer groups, SSE, example payload using real dataset values.
+   An undocumented topic does not exist — refuse to publish one.
+2. Add the line to the topic list in `docs/ARCHITECTURE.md` §6 and point it here.
+3. Declare the payload as a typed dataclass in `backend/apps/<context>/domain/events.py` — pure, no
+   Django import. `version` starts at 1.
+4. Emit it from `backend/apps/<context>/services/`, inside the same `transaction.atomic()` as the
+   aggregate mutation and the `ActivityRecord`, reusing the request's `correlation_id`. If a
+   module under `services/` imports `redis`, stop and fix that instead.
+5. Put the business code in `entity.id`, and `project_code` in the payload for any non-project
+   entity, so no consumer needs a FK into another context.
+6. Decide which groups consume it and add it to their subscription column in §5. Confirm it
+   reaches `snapshot-builder` if it changes anything the command center renders.
+7. Decide whether it reaches the browser. If yes, add it to the `sse-fanout` allowlist **and** to
+   `frontend/src/lib/stream/topics.ts`, and subscribe an island to it. If no, leave it out rather than
+   publishing noise the client discards.
+8. Write the tests required by `docs/ARCHITECTURE.md` §11: the service call writes exactly one
+   `OutboxEvent` with the right topic and version; a rolled-back transaction writes zero; the
+   relay puts the envelope on the stream intact; the handler run twice with the same `event.id`
+   produces one effect and acks both times.
+9. `make test` and `make lint`. Use `make relay` in the foreground to watch delivery when the
+   event does not arrive.

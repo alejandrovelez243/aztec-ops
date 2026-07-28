@@ -1,0 +1,38 @@
+[project]
+name = "aztec-ops"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.6.1",
+    "ruff>=0.16.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["."]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "C4",       # comprehensions
+    "DJ",       # flake8-django
+    "SIM",      # simplify
+    "TC",       # type-checking blocks
+    "RUF",
+]
+ignore = ["E501"]  # line length is enforced by the formatter, not the linter
+
+[tool.ruff.lint.per-file-ignores]
+"*/migrations/*" = ["E501", "RUF012"]
+"*/tests/*" = ["S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["apps", "config"]
