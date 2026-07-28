@@ -70,6 +70,21 @@ Not in scope, hand back instead:
 13. Every consumer handler carries a Google-style docstring naming its consumer group, the topics
     it consumes, its idempotency key (`(event_id, consumer_group)`) and what happens on the DLQ
     path. "Handles the event" is not a docstring (`BACKEND.md` §2).
+14. Tests are Django `TestCase` classes grouped by behaviour, and on this path the base class is
+    `django.test.TransactionTestCase` — outbox writes, `transaction.on_commit`, the relay
+    claiming rows on another connection, and consumer idempotency all need real commits.
+    `TestCase` wraps each test in a transaction that never commits, so `on_commit` never fires
+    and the relay's `SELECT ... FOR UPDATE SKIP LOCKED` on a second connection cannot see the
+    row: **an outbox test written on `TestCase` is a false pass** — it proves nothing and must be
+    rewritten, not kept for speed. `TestCase` is right for the ordinary database work around the
+    path (the DLQ admin route, a repository query); `SimpleTestCase` for the envelope and payload
+    models, where it forbids database access and so enforces the purity of `domain/events.py`.
+    No module-level `def test_...`, no `pytest.mark.django_db`, no pytest fixtures — the base
+    class is the declaration. Note that `setUpTestData` does not exist on `TransactionTestCase`,
+    which truncates between tests: build shared rows with factories in `setUp` there, and keep
+    `setUpTestData` for the `TestCase` classes. Assertions use the unittest methods
+    (`self.assertEqual`, `self.assertNumQueries`), and table-driven cases use
+    `with self.subTest(...)` rather than duplicated methods (CLAUDE.md rule 15).
 
 ## Envelope
 
@@ -123,8 +138,10 @@ the event has been pushed to `aztec.events.dlq` and may be acked.
 3. For a new topic: document it in §6 first, then publish it, then decide which groups consume it.
 4. For a new consumer: create it under `backend/apps/<context>/consumers/`, register its group, and give
    it its own `ProcessedEvent` scope (dedup key is `(event_id, group)`).
-5. Add the test that matches the change — consumer idempotency (same event twice, one effect) and
-   outbox-to-delivery for anything new on the path (`docs/ARCHITECTURE.md` §11).
+5. Add the test that matches the change, as a `TransactionTestCase` class named after the
+   behaviour — `class ConsumerIdempotencyTests(TransactionTestCase)` for the same event twice
+   with one effect, `class OutboxDeliveryTests(TransactionTestCase)` for outbox-to-delivery on
+   anything new on the path (`docs/ARCHITECTURE.md` §11).
 6. Run `make test` and `make lint`. Use `make relay` in the foreground when debugging delivery.
 
 ## Definition of done
@@ -145,6 +162,10 @@ the event has been pushed to `aztec.events.dlq` and may be acked.
 - [ ] Each consumer touched has a docstring stating group, topics, idempotency key and DLQ
       behaviour.
 - [ ] Idempotency test present and passing; `make test` and `make lint` clean.
+- [ ] Every test touching the outbox, the relay, `on_commit` or a consumer subclasses
+      `TransactionTestCase`. `grep -rn "class .*(TestCase)" ` over the tests for this path returns
+      nothing that asserts on outbox rows or stream entries — that would be a false pass. No
+      `pytest.mark.django_db` and no module-level `def test_...` anywhere on the path.
 
 ## Returns
 

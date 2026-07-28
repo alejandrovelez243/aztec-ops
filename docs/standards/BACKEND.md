@@ -117,8 +117,8 @@ No bare `Any` without an adjacent comment giving the reason (third-party stub ga
 
 Google style. Mandatory on every public module, class, service function, signal strategy,
 specification, repository function and consumer handler. Not required on private helpers whose name
-and signature already say everything, on `Meta` classes, on Django `__str__`, or on test functions
-(the test name is the sentence).
+and signature already say everything, on `Meta` classes, on Django `__str__`, or on test classes and
+test methods (the class name and the method name are the sentence).
 
 A docstring earns its place by stating what the signature cannot: the invariant it upholds, the
 failure mode, and the reason the code is shaped this way.
@@ -461,38 +461,108 @@ One public function per service module, named after the use case: `services/tran
 
 ## 7. Tests
 
-Domain logic is tested without a database. Signals and specifications take a `SignalInput` /
-`ProjectRiskInput` model, so a test constructs one and asserts — no fixtures, no
-`pytest.mark.django_db`, milliseconds per case. That is where coverage should be high
-(`ARCHITECTURE` §11).
+Tests are Django `TestCase` classes, one class per behaviour under test. There are no loose
+module-level test functions. The runner stays pytest via `pytest-django` (`make test`), which
+collects Django `TestCase` classes natively — but the base class, not a decorator, declares what a
+test may touch.
 
-One behaviour per test, named after the behaviour, not after the function:
+### The three base classes
+
+| Base | For | What it gives you |
+|---|---|---|
+| `django.test.SimpleTestCase` | pure domain logic: priority signals, risk `Specification`s, value objects, policy maths | Forbids database access. The purity of `domain/` is enforced by the base class instead of by discipline. Coverage should be high here (`ARCHITECTURE` §11). |
+| `django.test.TestCase` | repositories, services, API routes, workflow transitions, seed idempotency | Each test runs inside a transaction that is rolled back, so it is fast. |
+| `django.test.TransactionTestCase` | the outbox, `transaction.on_commit`, the relay, anything using a second database connection | Real commits and real truncation between tests. |
+
+The third row is the one people get wrong, so state it plainly: `TestCase` wraps each test in a
+transaction that **never commits**. `on_commit` callbacks therefore never fire, and the relay's
+`SELECT ... FOR UPDATE SKIP LOCKED` running on another connection cannot see a row that no
+connection has committed. An outbox test written on `TestCase` passes while proving nothing. That is
+the entire reason `TransactionTestCase` exists in this codebase; it is slower, and it is not
+optional for those tests.
+
+### Shape of a test class
+
+Named after the thing and the situation: `DeadlinePressureSignalTests(SimpleTestCase)`,
+`IllegalTransitionTests(TestCase)`, `OutboxDeliveryTests(TransactionTestCase)`. Methods keep the
+`test_` prefix and are named after the behaviour, not after the method under test. Shared read-only
+setup goes in `setUpTestData` — created once per class and rolled back, which is the Django-specific
+optimisation and the reason to prefer it — and `setUp` is only for per-test mutable state.
+factory_boy factories still supply data; they are called from `setUpTestData`. Assertions use the
+unittest methods (`self.assertEqual`, `self.assertIn`, `self.assertRaises`, and Django's own
+`self.assertNumQueries`), not bare `assert`. Table-driven cases use subtests rather than duplicated
+methods.
+
+Do not introduce pytest fixtures or `pytest.mark.django_db`. The base class already says what
+database access a test gets, and two mechanisms for one decision is how a suite ends up with "pure"
+tests that quietly hit the database.
+
+Domain logic needs no database at all. Signals and specifications take a `SignalInput` /
+`ProjectRiskInput` model, so a test constructs one and asserts — no fixtures, milliseconds per case:
 
 ```python
-# WRONG
+# WRONG — a module-level function, and django_db on logic that never touches a table:
+# it opens a database connection for nothing and lets a signal start querying unnoticed.
+# Two behaviours in one test, so the first failing assert hides the second.
 @pytest.mark.django_db
 def test_deadline_pressure():
     assert DeadlinePressure().evaluate(make_input(target_date=None)).score == 0.5
     assert DeadlinePressure().evaluate(make_input(target_date=YESTERDAY)).score == 1.0
 
-# RIGHT
-def test_missing_target_date_scores_half_and_names_the_gap() -> None:
-    result = DeadlinePressure().evaluate(signal_input(target_date=None))
-    assert result.score == 0.5
-    assert "no target date" in result.reason.lower()
+# RIGHT — SimpleTestCase forbids the database, so the signal's purity is proved, not assumed
+class DeadlinePressureSignalTests(SimpleTestCase):
+    @classmethod
+    def setUpTestData(cls) -> None:
+        cls.signal = DeadlinePressure()
 
+    def test_missing_target_date_scores_half_and_names_the_gap(self) -> None:
+        result = self.signal.evaluate(signal_input(target_date=None))
+        self.assertEqual(result.score, 0.5)
+        self.assertIn("no target date", result.reason.lower())
 
-def test_overdue_target_date_saturates_the_signal() -> None:
-    result = DeadlinePressure().evaluate(signal_input(target_date=date(2026, 7, 22), now=NOW))
-    assert result.score == 1.0
+    def test_overdue_target_date_saturates_the_signal(self) -> None:
+        result = self.signal.evaluate(signal_input(target_date=date(2026, 7, 22), now=NOW))
+        self.assertEqual(result.score, 1.0)
+```
+
+Subtests over duplicated methods when the same behaviour is checked across a range of inputs, so one
+failure names the input that broke it:
+
+```python
+    def test_score_rises_as_the_target_date_approaches(self) -> None:
+        for days, expected in ((30, 0.2), (14, 0.5), (3, 0.9)):
+            with self.subTest(days=days):
+                result = self.signal.evaluate(signal_input(target_date=NOW.date() + timedelta(days=days), now=NOW))
+                self.assertEqual(result.score, expected)
 ```
 
 Assert the `reason` string as well as the number: the reason is what the UI shows to justify a rank,
 so an untested reason is an untested feature. Time enters as `data.now`; a test that calls
 `datetime.now()` is a test that fails on a Tuesday.
 
-The database is for what actually needs it: illegal transitions, seed idempotency, consumer
-idempotency, outbox delivery.
+The database is for what actually needs it: illegal transitions and seed idempotency on `TestCase`;
+outbox delivery, relay claiming and consumer idempotency on `TransactionTestCase`.
+
+```python
+class IllegalTransitionTests(TestCase):
+    @classmethod
+    def setUpTestData(cls) -> None:
+        cls.project = ProjectFactory(workflow_state__code="BLOCKED")
+
+    def test_transition_without_a_declared_edge_is_rejected(self) -> None:
+        with self.assertRaises(TransitionNotAllowed):
+            transition_project(self.project.code, "DONE", actor="system", reason="")
+```
+
+```python
+class OutboxDeliveryTests(TransactionTestCase):
+    def test_relay_publishes_a_committed_outbox_row(self) -> None:
+        # On TestCase this would pass without publishing anything: the row is never committed,
+        # so the relay's other connection could not see it.
+        transition_project("PRJ-01", "IN_PROGRESS", actor="system", reason="")
+        published = relay.drain_once()
+        self.assertEqual([event.topic for event in published], ["project.state_changed"])
+```
 
 ## 8. The mechanical gate
 
@@ -512,8 +582,8 @@ idempotency, outbox delivery.
 | `ERA` | Commented-out code. |
 | `PTH`, `DTZ` | `pathlib` over `os.path`; timezone-aware datetimes only. |
 
-Per-file ignores: `D`, `ANN` relaxed under `*/migrations/*`; `D103` under `*/tests/*` (the test name
-is the docstring); `FBT` allowed in `models.py` for `BooleanField` defaults.
+Per-file ignores: `D`, `ANN` relaxed under `*/migrations/*`; `D101` and `D102` under `*/tests/*` (the
+class and method names are the docstring); `FBT` allowed in `models.py` for `BooleanField` defaults.
 
 mypy: `strict = true` globally, with `disallow_untyped_defs`, `disallow_any_explicit` and
 `warn_return_any` kept on for `apps.*.domain.*` and `apps.*.services.*`, the `django-stubs` plugin
@@ -537,5 +607,7 @@ states the invariant instead of paraphrasing the signature; whether a `cast()` i
 surrounding code; whether a service does one use case; whether a new signal was added as a class
 plus a registry line rather than an `if`; whether a specification stayed pure; whether a schema is
 per-use-case; whether a comment explains why; whether a magic number should have been a
-`PriorityPolicy` weight; and whether the test names describe behaviour. A pull request that passes
+`PriorityPolicy` weight; whether the test names describe behaviour; and whether a test picked the
+right base class — in particular whether anything touching the outbox, `on_commit` or the relay is
+on `TransactionTestCase`, since on `TestCase` it passes without proving anything. A pull request that passes
 `make lint` has cleared the floor, not the bar.

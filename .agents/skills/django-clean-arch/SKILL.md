@@ -100,9 +100,86 @@ Example: "resolve a blocker on a project". Files touched, in this order.
 9. Consumers: `ProjectSnapshot` rebuild and risk re-evaluation already subscribe to every
    `project.*` / `blocker.*` topic, so a correctly published event needs no consumer edit. If
    the topic is genuinely new, register it in the consumer's topic set.
-10. Tests: a pure test for the domain error condition (no DB), an integration test that the
-    service writes exactly one `ActivityRecord` and one `OutboxEvent` in the same transaction,
-    and an API test for the 409 on an already-resolved blocker.
+10. Tests: one `TestCase` class per behaviour, and the base class is chosen per layer being
+    touched (CLAUDE.md rule 15).
+    - `domain/errors.py`, `domain/events.py` → `SimpleTestCase`. It forbids database access, so
+      the purity of `domain/` is proved by the test base, not by discipline.
+    - `repositories.py`, `services/`, `api/routers.py` → `TestCase`. Each test runs inside a
+      transaction that is rolled back, which is why it is fast.
+    - the `OutboxEvent` actually reaching the relay, or anything relying on `on_commit` →
+      `TransactionTestCase`. On `TestCase` the transaction never commits, so the assertion
+      passes while proving nothing.
+
+```python
+# backend/apps/work/tests/test_resolve_blocker.py
+from django.test import SimpleTestCase, TestCase
+
+from apps.activity.models import ActivityRecord
+from apps.events.models import OutboxEvent
+from apps.work.domain.errors import BlockerAlreadyResolved
+from apps.work.services.resolve_blocker import resolve_blocker
+from apps.work.tests.factories import BlockerFactory
+
+
+class BlockerAlreadyResolvedErrorTests(SimpleTestCase):
+    """The typed error carries the blocker it refers to. No database involved."""
+
+    def test_error_message_names_the_blocker(self) -> None:
+        error = BlockerAlreadyResolved(42)
+        self.assertIn("42", str(error))
+
+
+class ResolveBlockerAuditTrailTests(TestCase):
+    """Resolving writes exactly one ActivityRecord and one OutboxEvent, in one transaction."""
+
+    @classmethod
+    def setUpTestData(cls) -> None:
+        cls.blocker = BlockerFactory(resolved_at=None)
+
+    def test_resolving_writes_one_activity_record_and_one_outbox_event(self) -> None:
+        resolve_blocker(
+            blocker_id=self.blocker.id,
+            actor="camila",
+            reason="client granted access",
+            correlation_id="c-1",
+        )
+
+        self.assertEqual(ActivityRecord.objects.filter(verb="BLOCKER_RESOLVED").count(), 1)
+        self.assertEqual(OutboxEvent.objects.filter(topic="blocker.resolved").count(), 1)
+
+    def test_resolving_twice_raises_and_writes_nothing_the_second_time(self) -> None:
+        resolve_blocker(
+            blocker_id=self.blocker.id,
+            actor="camila",
+            reason="client granted access",
+            correlation_id="c-1",
+        )
+        with self.assertRaises(BlockerAlreadyResolved):
+            resolve_blocker(
+                blocker_id=self.blocker.id,
+                actor="camila",
+                reason="again",
+                correlation_id="c-2",
+            )
+        self.assertEqual(OutboxEvent.objects.filter(topic="blocker.resolved").count(), 1)
+
+
+class ResolveBlockerApiTests(TestCase):
+    """The route maps the domain error to 409 through the central handler."""
+
+    @classmethod
+    def setUpTestData(cls) -> None:
+        cls.blocker = BlockerFactory(resolved_at="2026-01-01T00:00:00Z")
+
+    def test_resolving_an_already_resolved_blocker_returns_409(self) -> None:
+        response = self.client.post(
+            f"/api/blockers/{self.blocker.id}/resolve",
+            data={"reason": "again"},
+            content_type="application/json",
+            headers={"x-actor": "camila"},
+        )
+        self.assertEqual(response.status_code, 409)
+```
 11. `backend/apps/work/admin.py` — expose the new field if the operation must edit it.
 
 ## The transactional application-service pattern
@@ -191,9 +268,10 @@ rule is encoded in a `filter()`. That last one is a business rule that must live
 place.
 
 We do not define abstract base classes or `Protocol` interfaces for repositories. Services import
-`apps.<context>.repositories` as a module; tests use a real database with `factory_boy`. Pure
-logic that deserves DB-free testing lives in `domain/`, and that is where the isolation comes
-from — not from a mock repository.
+`apps.<context>.repositories` as a module; their tests are `TestCase` classes on a real database,
+with `factory_boy` called from `setUpTestData`. Pure logic that deserves DB-free testing lives in
+`domain/` and is tested on `SimpleTestCase`, which refuses database access outright — that is
+where the isolation comes from, not from a mock repository.
 
 ## Common mistakes
 
@@ -206,8 +284,8 @@ from — not from a mock repository.
   Use `ninja.Schema` with plain fields; if you need the shape of a model, describe it explicitly.
 - **`domain/` importing Django.** `from django.utils import timezone` inside a specification, or a
   strategy that receives a `Project` model and calls `project.tasks.filter(...)`. Pass an already
-  materialized Pydantic model / plain values in; the domain must run under `pytest` with no
-  database.
+  materialized Pydantic model / plain values in; the domain must run under `SimpleTestCase`, which
+  raises on any database access.
 - **Django signals as an event bus.** `post_save` on `Project` that publishes or recalculates.
   Signals fire outside the use case's intent, run inside someone else's transaction, and are
   invisible in the outbox. Every event is written explicitly by the service.
@@ -239,6 +317,15 @@ from — not from a mock repository.
 - **A `Protocol` or ABC for a repository with one implementation.** Services import
   `apps.<context>.repositories` as a module. The interface is the method set; extract an abstraction
   when the second implementation exists, not before (PATTERNS §11).
+- **An outbox or `on_commit` test written on `TestCase`.** The wrapping transaction never commits,
+  so the callback never fires and the relay's `SELECT ... FOR UPDATE SKIP LOCKED` on a second
+  connection cannot see the row. The test is green and proves nothing. Use `TransactionTestCase`.
+- **A domain test written on `TestCase`.** It hides the fact that the specification or the signal
+  reached the database. `SimpleTestCase` fails the moment `domain/` touches the ORM, which is the
+  point of putting the code there.
+- **A loose `def test_...` at module level, or `pytest.mark.django_db`.** Two mechanisms deciding
+  the same thing. The base class already states what database access the test gets (CLAUDE.md
+  rule 15); `pytest` only runs the classes.
 - **A docstring that paraphrases the signature.** Public service functions, repository functions,
   specifications, signal strategies and consumer handlers need Google-style docstrings stating the
   invariant, the failure mode and the `Raises:` list — not "Transitions a project. Args: project_code:

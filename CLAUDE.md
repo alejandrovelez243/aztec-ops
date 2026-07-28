@@ -108,7 +108,15 @@ Non-negotiable on both sides:
     on repository and outbox interfaces, not on Redis or a concrete query. Frontend: components
     receive data and emit intent, never fetch; transition buttons and risk flags render from what
     the API returns, so a new workflow state needs zero frontend changes.
-15. **Guard clauses over nesting, named constants over magic numbers.** Weights live in
+15. **Tests are Django `TestCase` classes, grouped by behaviour under test.** No loose module-level
+    test functions. Pick the base class deliberately, because it changes what the test can prove:
+    `SimpleTestCase` for pure domain logic (it *forbids* database access, so the purity of
+    `domain/` is enforced by the test base rather than by discipline); `TestCase` for ordinary
+    database tests; `TransactionTestCase` for anything involving the outbox, `on_commit` or the
+    relay — `TestCase` wraps each test in a transaction that never commits, so an outbox test
+    written on it passes while proving nothing. Shared read-only fixtures go in
+    `setUpTestData`, not `setUp`. Full rules in `docs/standards/BACKEND.md`.
+16. **Guard clauses over nesting, named constants over magic numbers.** Weights live in
     `PriorityPolicy`, colors and spacing in the design tokens — never inline in a function or a
     template.
 

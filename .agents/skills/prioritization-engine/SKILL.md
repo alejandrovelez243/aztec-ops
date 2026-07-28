@@ -79,9 +79,36 @@ class Blockage:
    the others so the weights sum to 1.0 before modifiers. Move `is_active` to the new version.
    Do not edit the active row: existing `PriorityScore` rows keep their `policy_version` and stay
    reproducible.
-4. Write the pure test in `backend/apps/prioritization/tests/domain/`: no database, no fixtures,
-   table-driven over the boundaries (no blockers, one blocker at day 0, at
-   `AGE_SATURATION_DAYS`, past it), asserting the reason string as well as the number.
+4. Write the pure test in `backend/apps/prioritization/tests/domain/` as a
+   `django.test.SimpleTestCase` class named after the signal and the situation. `SimpleTestCase`
+   forbids database access, so it is the base class that turns "the engine is pure" into a
+   mechanically enforced fact: a strategy that grows an ORM call fails the test instead of passing
+   it. Table-driven over the boundaries (no blockers, one blocker at day 0, at
+   `AGE_SATURATION_DAYS`, past it) with `subTest`, asserting the reason string as well as the
+   number, with unittest assertions.
+
+```python
+# backend/apps/prioritization/tests/domain/test_blockage.py
+from django.test import SimpleTestCase
+
+from apps.prioritization.domain.signals.blockage import AGE_SATURATION_DAYS, Blockage
+
+
+class BlockageAgeSaturationTests(SimpleTestCase):
+    signal = Blockage()
+
+    def test_no_open_blockers_scores_zero(self) -> None:
+        score, reason = self.signal.evaluate(make_input(open_blockers=[]))
+        self.assertEqual(score, 0.0)
+        self.assertIn("No open blockers", reason)
+
+    def test_oldest_blocker_saturates_the_signal(self) -> None:
+        for days, expected in ((0, 0.0), (AGE_SATURATION_DAYS, 1.0), (AGE_SATURATION_DAYS + 7, 1.0)):
+            with self.subTest(days=days):
+                score, reason = self.signal.evaluate(make_input(blocker_age_days=days))
+                self.assertEqual(score, expected)
+                self.assertIn(str(days), reason)
+```
 5. Run `pytest backend/apps/prioritization -k <code>` and `make lint` (mypy strict covers `domain/`).
 6. Run `make recompute` so persisted scores reflect the new policy version.
 
@@ -157,9 +184,16 @@ Registry, §5 Specification, §9 Value Object). The three rules that bite hardes
 
 Docstrings on every strategy and specification state the fact measured and the boundary values
 (`BACKEND.md` §2): "Overdue returns 1.0; a null `target_date` returns 0.5 and raises
-`NO_TARGET_DATE`." Tests in `tests/domain/` carry no `pytest.mark.django_db` and no factory, are
-named after the behaviour, and assert the `reason` / `detail` string as well as the number
-(`BACKEND.md` §7).
+`NO_TARGET_DATE`." Tests in `tests/domain/` are `SimpleTestCase` classes, one per behaviour under
+test, with no factory and no database: the base class refuses database access, so purity is proved
+by the suite rather than asserted in review, and coverage here should be high. Methods keep the
+`test_` prefix, are named after the behaviour rather than the method under test, use the unittest
+assertions (`self.assertEqual`, `self.assertIn`, `self.assertRaises`) and `subTest` for
+table-driven cases, and assert the `reason` / `detail` string as well as the number
+(`BACKEND.md` §7, `CLAUDE.md` rule 15). The database-backed tests of this app — recompute,
+consumer idempotency, policy load — are `TestCase` classes; anything that goes through the outbox
+or `on_commit` is a `TransactionTestCase`, because `TestCase` never commits and such a test would
+pass while proving nothing.
 
 ## Common mistakes
 
@@ -198,9 +232,19 @@ named after the behaviour, and assert the `reason` / `detail` string as well as 
 - A docstring on a strategy that paraphrases the signature ("Evaluates the signal.") instead of
   naming the measured fact and its boundary values (`BACKEND.md` §2). Ruff `D` passes; review does
   not.
-- Marking a domain test `@pytest.mark.django_db` or reaching for a factory to build a
-  `SignalInput`. The database belongs to integration tests: recompute, consumer idempotency,
-  policy load (`BACKEND.md` §7, `PATTERNS_BACKEND.md` §10).
+- Writing a domain test as a loose module-level `def test_...`, or on `TestCase` instead of
+  `SimpleTestCase`, or reaching for a factory to build a `SignalInput`. `TestCase` grants the
+  database, so it lets an impure strategy pass; `SimpleTestCase` is what makes the purity of
+  `domain/` a fact the suite proves. The database belongs to the integration tests: recompute,
+  consumer idempotency, policy load (`BACKEND.md` §7, `PATTERNS_BACKEND.md` §10).
+- Reintroducing `pytest.mark.django_db` or a pytest fixture anywhere in this app. The base class
+  already declares what database access a test gets; a second mechanism for the same decision is
+  how a pure test quietly starts hitting the database (`CLAUDE.md` rule 15).
+- Testing the outbox emission of a recomputation on `TestCase`. It wraps the test in a transaction
+  that never commits, so `on_commit` never fires and the relay's `SELECT ... FOR UPDATE SKIP
+  LOCKED` on another connection cannot see the row — use `TransactionTestCase`.
+- Bare `assert` in a test instead of `self.assertEqual` / `self.assertIn` / `self.assertRaises`,
+  or duplicating a method per boundary value instead of one `subTest` loop.
 - Introducing a `BaseSignalEvaluator` ABC or a second `Protocol` layer over the registry. The
   registry plus the existing protocol is the abstraction; anything above it is the premature
   abstraction banned in `PATTERNS_BACKEND.md` §11.

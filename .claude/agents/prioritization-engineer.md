@@ -47,7 +47,16 @@ flag list) and stop there.
 8. `PriorityOverride` requires a non-empty `reason`. It is stored as an override, never written
    into `PriorityScore.value`. The persisted computed score stays visible next to it.
 9. Health is derived from the flags at read time. There is no editable health field.
-10. Unit tests for this app run with no database and no fixtures.
+10. Unit tests for this app are `django.test.SimpleTestCase` classes, grouped by behaviour under
+    test — no database, no fixtures, no loose module-level `def test_...`. `SimpleTestCase` forbids
+    database access, so the purity of `domain/` is enforced by the test base instead of by
+    discipline: a strategy or specification that grows an ORM call fails its own test. Assertions
+    are the unittest methods (`self.assertEqual`, `self.assertIn`, `self.assertRaises`), boundary
+    tables use `subTest`, and neither `pytest.mark.django_db` nor a pytest fixture appears
+    anywhere. The database-backed tests this agent may touch — recompute, policy load, consumer
+    idempotency — are `TestCase`; anything that goes through the outbox or `on_commit` is
+    `TransactionTestCase`, since `TestCase` never commits and would pass while proving nothing
+    (`CLAUDE.md` rule 15).
 11. Every numeric literal inside a strategy or specification is either a module-level
     `Final` constant with a name that says what it measures (`HORIZON_DAYS`, `STALE_AFTER_DAYS`,
     `BLOCKER_AGE_SATURATION_DAYS`) or a `PriorityPolicy` weight. A bare `0.25`, `40` or `14` in an
@@ -78,8 +87,12 @@ flag list) and stop there.
 3. For a new risk criterion: add the specification class in
    `backend/apps/prioritization/domain/specifications.py` (or the risk module), give it a `flag_code` and
    a severity, register it, and leave the evaluator untouched.
-4. Write the database-free test alongside: table-driven, covering the boundaries (overdue, exactly
-   at the deadline, missing date, empty task list) and asserting the reason text, not only the number.
+4. Write the database-free test alongside, as a `SimpleTestCase` class named after the thing and
+   the situation (`class DeadlinePressureSignalTests(SimpleTestCase)`): one class per behaviour
+   under test, methods named after the behaviour, `subTest` for the boundary table (overdue,
+   exactly at the deadline, beyond the horizon, missing date, empty task list), unittest
+   assertions, and the reason text asserted, not only the number. The base class is the point:
+   `SimpleTestCase` refuses database access, so it proves the strategy is pure.
 5. Run `make lint` and `pytest backend/apps/prioritization` (or the narrowest `-k` selector).
 6. If the change alters the `breakdown` shape, state it explicitly on return so the API and UI
    owners can follow.
@@ -121,13 +134,43 @@ class DeadlinePressure(BaseModel):
 
 The registry entry is the decorator. Nothing else in the engine changes.
 
+### Example test
+
+```python
+# backend/apps/prioritization/tests/domain/test_deadline_pressure.py
+from django.test import SimpleTestCase
+
+from apps.prioritization.domain.signals.deadline_pressure import HORIZON_DAYS, DeadlinePressure
+
+
+class DeadlinePressureSignalTests(SimpleTestCase):
+    signal = DeadlinePressure()
+
+    def test_missing_target_date_scores_the_neutral_midpoint(self) -> None:
+        score, reason = self.signal.evaluate(make_input(target_date=None))
+        self.assertEqual(score, 0.5)
+        self.assertIn("NO_TARGET_DATE", reason)
+
+    def test_days_left_move_the_score_across_the_horizon(self) -> None:
+        for days_left, expected in ((-6, 1.0), (0, 1.0), (HORIZON_DAYS, 0.0), (HORIZON_DAYS + 10, 0.0)):
+            with self.subTest(days_left=days_left):
+                score, reason = self.signal.evaluate(make_input(days_left=days_left))
+                self.assertEqual(score, expected)
+                self.assertNotEqual(reason, "")
+```
+
+`SimpleTestCase` and no factory: if this strategy ever reaches for the ORM, the test errors.
+
 ## Definition of done
 
 - [ ] The new signal or specification is one class plus one registry entry; no existing branch edited.
 - [ ] No Django import anywhere under `domain/`; strategies take a Pydantic input model including `now`.
 - [ ] Every returned score is clamped to `[0, 1]` and carries a non-empty English reason.
 - [ ] Weights live in a `PriorityPolicy` version, sum to 1.0, and older scores keep their version.
-- [ ] Boundary tests pass with no database; reason strings are asserted.
+- [ ] Boundary tests are `SimpleTestCase` classes that pass with no database; reason strings are
+      asserted with unittest assertions and the boundary table uses `subTest`.
+- [ ] No module-level `def test_...`, no `pytest.mark.django_db`, no pytest fixture and no bare
+      `assert` in the touched test files; any outbox or `on_commit` test is a `TransactionTestCase`.
 - [ ] `make lint` clean, including mypy strict over `domain/`.
 - [ ] Overrides remain distinguishable from computed scores in the persisted data.
 - [ ] `grep -nE '[^a-z_][0-9]+\.?[0-9]*' ` over the touched strategy or specification shows no numeric

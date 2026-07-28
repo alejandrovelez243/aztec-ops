@@ -274,9 +274,79 @@ ones above it. Owning skill: `.agents/skills/django-clean-arch/`. Worked example
 9. **`backend/apps/<context>/admin.py`** — expose the new field only if the operation must edit it.
 10. **Consumers** — the `ProjectSnapshot` rebuild and the risk evaluator already subscribe to the
     `project.*` and `blocker.*` families. Edit a consumer only if the topic is genuinely new.
-11. **Tests** — a database-free test for the domain error condition; an integration test proving
-    exactly one `ActivityRecord` and one `OutboxEvent` are written and that a rollback leaves
-    zero of both; an API test for the error status code.
+11. **Tests** — one `TestCase` class per behaviour under test, and the base class is picked per
+    layer you touched, because it changes what the test can prove (CLAUDE.md rule 15):
+
+    | Layer touched in this walkthrough | Base class | What it proves |
+    |---|---|---|
+    | step 1–2, `domain/errors.py`, `domain/events.py` | `django.test.SimpleTestCase` | The error condition and the payload model hold with no database. `SimpleTestCase` forbids database access, so the purity of `domain/` is enforced by the base class. |
+    | step 4–5, `repositories.py` and `services/` | `django.test.TestCase` | Exactly one `ActivityRecord` and one `OutboxEvent` written, zero of both after a rollback. Each test is wrapped in a transaction and rolled back. |
+    | step 7–8, `api/` | `django.test.TestCase` | The route returns the error status code and the output schema. |
+    | step 6 and 10, the outbox actually reaching the relay or a consumer | `django.test.TransactionTestCase` | Real commits, so `on_commit` fires and the relay's `SELECT ... FOR UPDATE SKIP LOCKED` on a second connection sees the row. On `TestCase` the transaction never commits and this test passes while proving nothing. |
+
+    ```python
+    # backend/apps/work/tests/test_resolve_blocker.py
+    from django.test import SimpleTestCase, TestCase
+
+    from apps.activity.models import ActivityRecord
+    from apps.events.models import OutboxEvent
+    from apps.work.domain.errors import BlockerAlreadyResolved
+    from apps.work.services.resolve_blocker import resolve_blocker
+    from apps.work.tests.factories import BlockerFactory
+
+
+    class BlockerAlreadyResolvedErrorTests(SimpleTestCase):
+        def test_error_names_the_blocker_it_refers_to(self) -> None:
+            self.assertIn("42", str(BlockerAlreadyResolved(42)))
+
+
+    class ResolveBlockerAuditTrailTests(TestCase):
+        @classmethod
+        def setUpTestData(cls) -> None:
+            cls.blocker = BlockerFactory(resolved_at=None)
+
+        def test_resolving_writes_one_activity_record_and_one_outbox_event(self) -> None:
+            resolve_blocker(
+                blocker_id=self.blocker.id,
+                actor="camila",
+                reason="client granted access",
+                correlation_id="c-1",
+            )
+            self.assertEqual(ActivityRecord.objects.filter(verb="BLOCKER_RESOLVED").count(), 1)
+            self.assertEqual(OutboxEvent.objects.filter(topic="blocker.resolved").count(), 1)
+
+        def test_a_failed_resolution_leaves_no_activity_and_no_outbox_row(self) -> None:
+            with self.assertRaises(BlockerAlreadyResolved):
+                resolve_blocker(
+                    blocker_id=BlockerFactory(resolved_at="2026-01-01T00:00:00Z").id,
+                    actor="camila",
+                    reason="again",
+                    correlation_id="c-2",
+                )
+            self.assertEqual(OutboxEvent.objects.count(), 0)
+
+
+    class ResolveBlockerApiTests(TestCase):
+        @classmethod
+        def setUpTestData(cls) -> None:
+            cls.blocker = BlockerFactory(resolved_at="2026-01-01T00:00:00Z")
+
+        def test_resolving_an_already_resolved_blocker_returns_409(self) -> None:
+            response = self.client.post(
+                f"/api/blockers/{self.blocker.id}/resolve",
+                data={"reason": "again"},
+                content_type="application/json",
+                headers={"x-actor": "camila"},
+            )
+            self.assertEqual(response.status_code, 409)
+    ```
+
+    Shared read-only setup goes in `setUpTestData` — created once per class and rolled back —
+    not in `setUp`. Assertions are the `unittest` methods (`assertEqual`, `assertIn`,
+    `assertRaises`, plus Django's `assertNumQueries`), never a bare `assert`. `factory_boy`
+    supplies the data and is called from `setUpTestData`. Do not write a module-level
+    `def test_...` and do not reach for `pytest.mark.django_db`: the base class already states
+    what database access the test gets.
 12. **Docs** — if the change altered the model, the topic list or an invariant, update
     `docs/ARCHITECTURE.md` in the same commit.
 
@@ -304,8 +374,50 @@ A new state is data. It must not require a deploy. Owning skill: `.agents/skills
 5. Confirm nothing branched on a state `code` or a label:
    `rg -n 'label ==|\.code == "' backend/apps/` should return nothing about states. If it does, that
    code is the bug, not the new state.
-6. Add an integration test that an illegal transition into the new state raises
-   `TransitionNotAllowed`, and a legal one succeeds and writes its `ActivityRecord`.
+6. Add the transition tests as one `django.test.TestCase` class per behaviour — the transition
+   service reads `WorkflowTransition` from the database, so `SimpleTestCase` cannot be used here:
+
+   ```python
+   from django.test import TestCase
+
+   from apps.activity.models import ActivityRecord
+   from apps.workflow.domain.errors import TransitionNotAllowed
+   from apps.workflow.services.transition import transition_project
+   from apps.portfolio.tests.factories import ProjectFactory
+
+
+   class IllegalTransitionTests(TestCase):
+       @classmethod
+       def setUpTestData(cls) -> None:
+           cls.project = ProjectFactory(workflow_state__code="backlog")
+
+       def test_a_state_with_no_transition_row_is_refused(self) -> None:
+           with self.assertRaises(TransitionNotAllowed):
+               transition_project(
+                   project_code=self.project.code,
+                   to_state="done",
+                   actor="camila",
+                   reason=None,
+                   correlation_id="c-1",
+               )
+
+
+   class LegalTransitionTests(TestCase):
+       @classmethod
+       def setUpTestData(cls) -> None:
+           cls.project = ProjectFactory(workflow_state__code="backlog")
+
+       def test_a_legal_transition_writes_its_activity_record(self) -> None:
+           transition_project(
+               project_code=self.project.code,
+               to_state="in_progress",
+               actor="camila",
+               reason=None,
+               correlation_id="c-1",
+           )
+           record = ActivityRecord.objects.get(entity_id=self.project.id, verb="STATE_CHANGED")
+           self.assertEqual(record.to_value, "in_progress")
+   ```
 
 ## 9. How to add a prioritization signal
 
@@ -321,10 +433,34 @@ One class plus one registry entry. The evaluator is never edited. Owning skill:
 3. Create a **new** `PriorityPolicy` version carrying the weight, rebalancing the others to sum
    to 1.0 before modifiers, and move `is_active` to it. Never mutate the active row: existing
    `PriorityScore` rows keep their `policy_version` and must stay reproducible.
-4. Write the database-free test in `backend/apps/prioritization/tests/domain/`, table-driven over the
-   boundaries, asserting the reason string as well as the number.
-5. Run `pytest backend/apps/prioritization -k <code>`, `make lint`, then `make recompute` so persisted
-   scores reflect the new policy version.
+4. Write the database-free test in `backend/apps/prioritization/tests/domain/` as a
+   `django.test.SimpleTestCase` class named after the signal and the situation. It forbids
+   database access, so it also proves the strategy stayed pure. Table-driven cases use
+   `subTest`, and the reason string is asserted as well as the number:
+
+   ```python
+   from django.test import SimpleTestCase
+
+   from apps.prioritization.domain.signals.deadline_pressure import DeadlinePressureSignal
+
+
+   class DeadlinePressureSignalTests(SimpleTestCase):
+       def setUp(self) -> None:
+           self.signal = DeadlinePressureSignal()
+
+       def test_overdue_target_date_saturates_the_signal(self) -> None:
+           result = self.signal.evaluate(make_input(days_to_target=-3))
+           self.assertEqual(result.score, 1.0)
+           self.assertIn("overdue", result.reason)
+
+       def test_score_rises_as_the_target_date_approaches(self) -> None:
+           for days, expected in ((30, 0.0), (14, 0.5), (0, 1.0)):
+               with self.subTest(days=days):
+                   self.assertEqual(self.signal.evaluate(make_input(days_to_target=days)).score, expected)
+   ```
+
+5. Run `uv run --project backend pytest apps/prioritization -k <SignalClass>Tests`, `make lint`,
+   then `make recompute` so persisted scores reflect the new policy version.
 
 A risk criterion follows the same shape: one `Specification` subclass, a `flag_code`, a severity,
 one `@register_risk` line. If you are editing an existing `if`, stop — the design is wrong.
@@ -350,9 +486,36 @@ Owning skill: `.agents/skills/event-driven-flow/`.
 6. Decide whether the browser needs it. If yes, add the topic to the `sse-fanout` allowlist *and*
    to the shared store the Astro islands subscribe to. If nothing in the UI changes, leave it out
    rather than publishing noise the client discards.
-7. Add the delivery tests: one `OutboxEvent` row per service call and zero after a rollback; the
-   relay puts the envelope on `aztec.events` intact; the handler run twice with the same
-   `event.id` produces one effect and two acks.
+7. Add the delivery tests, split by what each one needs to prove. "One `OutboxEvent` row per
+   service call and zero after a rollback" is an ordinary database assertion and belongs on
+   `django.test.TestCase`. Everything downstream of the commit — the relay putting the envelope
+   on `aztec.events` intact, the handler run twice with the same `event.id` producing one effect
+   and two acks — goes on `django.test.TransactionTestCase`, because the relay reads the row on a
+   second connection with `SELECT ... FOR UPDATE SKIP LOCKED` and `TestCase` never commits it:
+
+   ```python
+   from django.test import TransactionTestCase
+
+   from apps.events.models import OutboxEvent
+   from apps.events.relay import drain_outbox
+
+
+   class OutboxDeliveryTests(TransactionTestCase):
+       def setUp(self) -> None:
+           self.stream = FakeStream()
+
+       def test_the_relay_publishes_the_envelope_intact(self) -> None:
+           OutboxEvent.objects.create(topic="blocker.resolved", payload={"blocker_id": 1})
+           drain_outbox(stream=self.stream)
+           self.assertEqual(len(self.stream.entries), 1)
+           self.assertEqual(self.stream.entries[0]["topic"], "blocker.resolved")
+
+       def test_the_same_event_delivered_twice_produces_one_effect(self) -> None:
+           event = OutboxEvent.objects.create(topic="blocker.resolved", payload={"blocker_id": 1})
+           handle(event_id=str(event.id), payload=event.payload)
+           handle(event_id=str(event.id), payload=event.payload)
+           self.assertEqual(RiskFlag.objects.count(), 1)
+   ```
 
 ## 11. Who to hand a task to
 
@@ -367,7 +530,7 @@ conversation. Each one hands work back rather than crossing into another's files
 | `prioritization-engineer` | A signal strategy, `PriorityPolicy` weights or version, the `breakdown`, `PriorityOverride`, a risk specification's severity, derived health. "Why is this project ranked first?" |
 | `astro-frontend-engineer` | Anything under `frontend/`: pages, islands, the shared `EventSource` store, the typed API client, loading/empty/error/disconnected states. "The frontend does not update." |
 | `seed-data-engineer` | Fixtures under `backend/apps/*/fixtures/`, `backend/scripts/xlsx_to_fixtures.py`, the `make seed` target. "loaddata fails", "seed is not idempotent", "the spreadsheet changed." |
-| `test-engineer` | New coverage, `factory_boy` factories, the four integration tests (illegal transition, seed idempotency, consumer idempotency, outbox delivery), or a `make test` failure that lives in test code. |
+| `test-engineer` | New coverage, `factory_boy` factories, the four integration tests (illegal transition and seed idempotency on `TestCase`; consumer idempotency and outbox delivery on `TransactionTestCase`), the choice of test base class, or a `make test` failure that lives in test code. |
 | `devops-engineer` | Dockerfiles, Compose services, healthchecks, startup ordering, `.env.example`, `Makefile` targets, the README bring-up section, SSE not streaming through the server. |
 
 If a task spans two of them, split it at the handoff the agents already define — for example
@@ -377,8 +540,11 @@ If a task spans two of them, split it at the handoff the agents already define �
 
 A change is done when all of these hold. Not four out of five.
 
-- [ ] `make test` passes. New pure logic (signals, specifications) has database-free tests; new
-      transitions, consumers and services have the integration test that proves the invariant.
+- [ ] `make test` passes, and every new test is a `TestCase` class grouped by behaviour with the
+      right base: `SimpleTestCase` for new pure logic (signals, specifications, value objects,
+      policy maths), `TestCase` for repositories, services, routes, transitions and seed
+      idempotency, `TransactionTestCase` for anything touching the outbox, `on_commit` or the
+      relay. No module-level `def test_...`, no `pytest.mark.django_db`, no bare `assert`.
 - [ ] `make lint` passes: ruff check, ruff format, mypy strict over `domain/` and `services/`.
 - [ ] Pre-commit ran on every commit, including `uv lock --check`. No `--no-verify` anywhere in
       the branch.

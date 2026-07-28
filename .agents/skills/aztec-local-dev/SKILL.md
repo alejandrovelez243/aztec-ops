@@ -19,7 +19,7 @@ sse-fanout), `web` (Astro 5 on 4321). Python deps are managed with `uv`.
 | `make migrate` | `docker compose exec api python manage.py migrate` |
 | `make seed` | `loaddata catalog workflows portfolio work activity` + `make recompute` |
 | `make recompute` | recompute `PriorityScore`, risk flags and `ProjectSnapshot` |
-| `make test` | `docker compose exec api pytest` |
+| `make test` | `docker compose exec api pytest` — the runner is pytest via pytest-django, collecting Django `TestCase` classes natively |
 | `make lint` | `ruff check . && ruff format --check . && mypy` |
 | `make relay` | runs the relay in the foreground with `--verbosity 2` (debugging) |
 | `make shell` | `docker compose exec api python manage.py shell` |
@@ -169,7 +169,56 @@ Check with:
 grep -c '"pk": null' backend/apps/*/fixtures/*.json
 ```
 
-Idempotency is a tested property: `make test -k seed_idempotency`.
+Idempotency is a tested property:
+`uv run --project backend pytest apps/portfolio -k SeedIdempotencyTests`.
+
+## Running tests
+
+`make test` runs the whole suite in the `api` container. The runner is `pytest` through
+`pytest-django`, and the suite is Django `TestCase` classes grouped by behaviour (CLAUDE.md
+rule 15) — pytest collects them natively, so selection is by class and method name, not by
+function name.
+
+```bash
+make test                                                    # whole suite, in the container
+
+uv run --project backend pytest                              # whole suite, on the host
+uv run --project backend pytest apps/prioritization          # one app
+uv run --project backend pytest apps/prioritization -k DeadlinePressureSignalTests
+uv run --project backend pytest apps/prioritization -k "DeadlinePressureSignalTests and saturates"
+```
+
+`-k` matches substrings of the test id, which for a `TestCase` includes the class name — so a
+class name is the natural unit to select. To run exactly one method, address it by path instead:
+
+```bash
+uv run --project backend pytest \
+  apps/prioritization/tests/domain/test_deadline_pressure.py::DeadlinePressureSignalTests
+uv run --project backend pytest \
+  apps/prioritization/tests/domain/test_deadline_pressure.py::DeadlinePressureSignalTests::test_overdue_target_date_saturates_the_signal
+```
+
+The same flags work inside the container: `docker compose exec api pytest apps/work -k
+OutboxDeliveryTests`. Run it there whenever the test needs `postgres:5432` or `redis:6379`.
+
+Useful while iterating:
+
+```bash
+uv run --project backend pytest -x                # stop at the first failure
+uv run --project backend pytest --lf              # rerun only what failed last time
+uv run --project backend pytest -q --no-header    # quiet output
+```
+
+Three things to know when a run looks wrong:
+
+- A `SimpleTestCase` that suddenly errors with a database access message is not a runner problem.
+  That base class forbids database access on purpose; the code under test reached the ORM and
+  `domain/` is no longer pure.
+- A `TransactionTestCase` truncates tables instead of rolling back and does not reuse
+  `setUpTestData` caching, so it is slower and it wipes rows other classes seeded. That is the
+  price of real commits; keep those classes limited to outbox, `on_commit` and relay behaviour.
+- Subtests report as one test id. `-k` selects the whole method, not an individual
+  `with self.subTest(days=...)` case; read the failure output to see which parameter failed.
 
 ## The standards gate is part of the loop
 
@@ -214,6 +263,12 @@ git commit                                                     # hooks run; no -
 - Adding a workflow state through a migration instead of the admin. States are data (rule 1).
 - Committing with `--no-verify` because a hook was slow or noisy, then discovering `uv.lock` no
   longer matches `pyproject.toml` when the next `make up` rebuilds the image.
+- Debugging "the relay never publishes in the test" when the test is a `TestCase`. It wraps every
+  test in a transaction that never commits, so `on_commit` does not fire and the relay's second
+  connection cannot see the outbox row. Move the class to `TransactionTestCase`.
+- Trying to select a single test with `-k test_something` after copying a module-level
+  `def test_...` from another project. There are none here; tests are `TestCase` classes, so
+  select by class name or by `path::Class::method`.
 - Running `make test` and calling it done. `make test` is not `make lint`; ruff format, the `ANN`/`D`
   rules and mypy fail independently of the test suite.
 - Silencing a `mypy` error in `domain/` or `services/` with a bare `# type: ignore` or an explicit

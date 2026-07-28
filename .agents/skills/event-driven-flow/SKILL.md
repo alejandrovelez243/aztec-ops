@@ -154,13 +154,99 @@ of the fanout instead of publishing noise the client discards.
 
 ### 7. Add the delivery test
 
-Integration tests required by §11:
+Integration tests required by §11, and on this path the base class is the whole point
+(CLAUDE.md rule 15). **Everything on the event path is `TransactionTestCase`.** `TestCase` wraps
+each test in a transaction that never commits: `transaction.on_commit` callbacks never fire, and
+the relay's `SELECT ... FOR UPDATE SKIP LOCKED` runs on a second connection that cannot see rows
+your test transaction has not committed. An outbox, relay or consumer test written on `TestCase`
+passes while proving nothing — it is a false pass, not a slow test you optimised.
+
+What to cover, one class per behaviour:
 
 - service call → exactly one `OutboxEvent` row with the right topic and `version`; rollback of
   the transaction leaves zero rows.
 - relay run → the entry appears on `aztec.events` with the envelope intact.
 - handler invoked twice with the same `event.id` → the effect happens once and both calls ack.
 - end to end: outbox → consumer → `ProjectSnapshot` updated / SSE frame emitted.
+
+```python
+# backend/apps/workflow/tests/test_outbox.py  (shape, not a literal copy)
+from django.test import TransactionTestCase
+
+
+class OutboxWriteTests(TransactionTestCase):
+    """The service writes exactly one row, in the state change's transaction."""
+
+    def setUp(self) -> None:
+        self.execution = WorkflowStateFactory(code="execution")
+        self.blocked = WorkflowStateFactory(code="blocked")
+
+    def test_transition_writes_one_outbox_row(self) -> None:
+        project = ProjectFactory(workflow_state=self.execution)
+
+        transition_service.execute(code=project.code, to_state="blocked", actor="camila")
+
+        events = list(OutboxEvent.objects.filter(entity_id=project.code))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0].topic, "project.state_changed")
+        self.assertEqual(events[0].version, 1)
+
+    def test_rollback_leaves_no_outbox_row(self) -> None:
+        project = ProjectFactory(workflow_state=self.execution)
+
+        with self.assertRaises(IllegalTransition):
+            transition_service.execute(code=project.code, to_state="closed", actor="camila")
+
+        self.assertEqual(OutboxEvent.objects.count(), 0)
+
+
+class RelayDeliveryTests(TransactionTestCase):
+    """The relay claims committed rows on its own connection and publishes them intact."""
+
+    def test_published_entry_carries_the_envelope(self) -> None:
+        event = OutboxEventFactory(topic="project.state_changed", entity_id="PRJ-01")
+
+        relay.drain_once()
+
+        entries = redis.xrange("aztec.events", count=10)
+        self.assertEqual(len(entries), 1)
+        envelope = decode_envelope(entries[0][1])
+        self.assertEqual(envelope.id, event.id)
+        self.assertEqual(envelope.topic, "project.state_changed")
+        self.assertEqual(envelope.entity["id"], "PRJ-01")
+        event.refresh_from_db()
+        self.assertIsNotNone(event.published_at)
+
+
+class ConsumerIdempotencyTests(TransactionTestCase):
+    """The same event.id applies its effect once per consumer group, and acks both times."""
+
+    def test_duplicate_event_applies_the_effect_once(self) -> None:
+        envelope = envelope_for("project.state_changed", entity_id="PRJ-01")
+
+        for delivery in ("first", "second"):
+            with self.subTest(delivery=delivery):
+                handle(envelope)
+
+        self.assertEqual(
+            ProcessedEvent.objects.filter(
+                event_id=envelope.id, consumer_group="priority-recalculator"
+            ).count(),
+            1,
+        )
+        self.assertEqual(PriorityScore.objects.filter(project__code="PRJ-01").count(), 1)
+```
+
+One caveat when writing these: `setUpTestData` is a `TestCase` optimisation and does not exist
+on `TransactionTestCase`, which truncates the tables between tests. Build the shared rows with
+factories in `setUp` here, and keep `setUpTestData` for the ordinary database tests around this
+path — the API route that lists the DLQ, the repository behind `ProcessedEvent` — which are
+plain `TestCase`. Anything purely about the envelope or the payload models (validation, version
+bump, topic naming) is `SimpleTestCase`: no database, so the purity of `domain/events.py` is
+enforced by the base class.
+
+Assertions are the unittest methods, never bare `assert`. Do not reach for
+`pytest.mark.django_db` — the base class already declares what database access the test gets.
 
 ## Debugging
 
@@ -211,6 +297,12 @@ that payload. Everything empty and the UI still stale → the service never wrot
 - **`except Exception` outside the consumer boundary** — in a service, a repository, the relay's
   claim query. And at the boundary, a catch-all that skips one of log, DLQ, `XACK`: each omission
   loses the failure, the evidence or the slot (BACKEND §5).
+- **An outbox test written on `TestCase`.** It is a false pass. The test transaction never
+  commits, so `on_commit` never fires and the relay's `FOR UPDATE SKIP LOCKED` on a second
+  connection sees nothing; the assertions pass on rows that no other process could ever have
+  read. Outbox writes, the relay, consumer idempotency and SSE fanout are `TransactionTestCase`
+  (CLAUDE.md rule 15). Likewise `pytest.mark.django_db` or a module-level `def test_...` on this
+  path — the base class is the declaration of what the test may touch.
 - **Handler docstring that paraphrases the signature.** No topic named, no `(event_id,
   consumer_group)` key stated, no duplicate-path behaviour. `ruff D` passes on it and a reviewer
   still cannot tell whether the handler is idempotent (BACKEND §2).
