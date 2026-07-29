@@ -2,7 +2,14 @@
 
 ## Status
 
-Accepted — 2026-07-28.
+Accepted — 2026-07-28. Amended — 2026-07-29.
+
+**Amendment.** The decision below is unchanged in substance — workflows and taxonomies are data,
+never enums — but "admin-editable" was too narrow for workflows and is now wrong. The graphs, their
+states, their transitions and their bindings are authored **from the product**, on `/workflows`, by
+an ops lead (`ARCHITECTURE` §4.3, `API.md` §2.19); the Django admin stays as a second door. The
+reason is this ADR's own premise: a lifecycle that only somebody holding an admin account can
+reshape is configurable by engineering, not by the operation. Taxonomies remain admin-edited.
 
 ## Context
 

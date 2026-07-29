@@ -5,12 +5,13 @@ to HTTP once, centrally (`TransitionNotAllowed` → 409, the rest → 422), so n
 its own `try/except`. Each carries the identifiers a message needs, because a caller that has to
 parse `str(exc)` to render a form error is a caller that will get it wrong.
 
-The file has two halves and they answer two different questions. The first half is **obedience**:
-a record proposed a move and the graph refused it. The second half is **authoring**: an operator
-proposed a change to the graph itself and the context refused *that*. They are deliberately not
-shared — a rejection of a move that reused a rejection of an edit would make one 409 mean two
-things — and nothing in the authoring half is ever raised by
-:func:`~apps.workflow.services.transition.validate_transition`.
+The file has three halves and they answer three different questions. The first is **obedience**:
+a record proposed a move and the graph refused it. The second is **authoring**: an operator
+proposed a change to the graph itself and the context refused *that*. The third is
+**reassignment**: an operator proposed that a record follow a different graph altogether, and the
+target graph could not take it. They are deliberately not shared — a rejection of a move that reused
+a rejection of an edit would make one 409 mean two things — and nothing outside the first half is
+ever raised by :func:`~apps.workflow.services.transition.validate_transition`.
 """
 
 
@@ -261,6 +262,88 @@ class EngagementTypeNotFound(DomainError):
     def __init__(self, engagement_type_code: str) -> None:
         super().__init__(f"No engagement type exists with code {engagement_type_code!r}.")
         self.engagement_type_code = engagement_type_code
+
+
+# --- Reassignment: a record was asked to follow another lifecycle ------------------------------
+
+
+class WorkflowKindMismatch(DomainError):
+    """A record was pointed at a graph that governs the other kind of aggregate.
+
+    ``applies_to`` is what makes a graph a *project* lifecycle or a *task* lifecycle, and a project
+    sitting on a task graph's node would be offered task moves and counted in a task board. The
+    check is here rather than at the database, which cannot express it: the column lives on
+    ``Workflow`` and the record only points at one of its states.
+
+    Attributes:
+        workflow_code: The graph that was named.
+        applies_to: What that graph actually governs.
+        expected: What the record needed it to govern.
+    """
+
+    def __init__(self, workflow_code: str, applies_to: str, expected: str) -> None:
+        super().__init__(f"Workflow {workflow_code!r} governs {applies_to}, not {expected}.")
+        self.workflow_code = workflow_code
+        self.applies_to = applies_to
+        self.expected = expected
+
+
+class WorkflowRetired(DomainError):
+    """A record was asked to move into a graph an operator has taken out of service.
+
+    Retirement means "stop offering this lifecycle to new work" (``update_workflow``), and moving a
+    record into it is new work by any reading. Records already inside a retired graph stay there and
+    keep obeying it — that is the whole reason the row survives — so this refuses arrivals, never
+    residents.
+    """
+
+    def __init__(self, workflow_code: str) -> None:
+        super().__init__(f"Workflow {workflow_code!r} is retired and takes no more records.")
+        self.workflow_code = workflow_code
+
+
+class IncompatibleWorkflowState(DomainError):
+    """The target lifecycle has no active state matching the one the record is standing on.
+
+    The failure mode of reassignment, and the reason reassignment is refusable at all. A record's
+    legal moves are the edges leaving the node it occupies; move the record to a graph that does not
+    contain that node and it is parked outside its own lifecycle — no column to be drawn in, no move
+    to make, and a ``workflow`` column claiming a graph the ``workflow_state`` column contradicts.
+    That aggregate is corrupt, and no answer is better than refusing to create it.
+
+    ``available`` travels with the rejection for the same reason
+    :class:`~apps.workflow.domain.errors.TransitionNotAllowed` carries ``allowed``: an operator told
+    only "incompatible" has to go and read the other graph, while one told which states the target
+    does contain can see immediately whether to add the missing column to the target or to move the
+    record first.
+
+    Attributes:
+        entity_id: The record's business code — ``PRJ-01``, ``PRJ-01-T02``.
+        state_code: The state it is standing on, which the target does not contain.
+        workflow_code: The graph it would have moved into. Named ``workflow_code`` so the shared
+            authoring details renderer can address it like every other refusal about a graph.
+        from_workflow_code: The graph it is on now.
+        available: The active state codes of the target, in the operator's own order.
+    """
+
+    def __init__(
+        self,
+        entity_id: str,
+        state_code: str,
+        *,
+        workflow_code: str,
+        from_workflow_code: str,
+        available: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(
+            f"{entity_id} sits on state {state_code!r}, which workflow {workflow_code!r} "
+            f"does not contain."
+        )
+        self.entity_id = entity_id
+        self.state_code = state_code
+        self.workflow_code = workflow_code
+        self.from_workflow_code = from_workflow_code
+        self.available = available
 
 
 class ValueOutsideVocabulary(DomainError):

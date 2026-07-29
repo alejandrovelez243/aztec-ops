@@ -117,3 +117,29 @@ class TransitionCheck(BaseModel):
         key change and reads the same in `docs/EVENTS.md` §4 as it does in the payload.
         """
         return f"{self.from_state_code}__{self.to_state_code}"
+
+
+class ReassignmentCheck(BaseModel):
+    """What the reassignment service validated, and the state the caller may now land the record on.
+
+    The counterpart of :class:`TransitionCheck`, returned for the same reason and with the same
+    division of labour: the workflow context knows graphs and states and knows nothing about which
+    aggregate is moving, so it validates and reports while the owning context performs the write,
+    the ``ActivityRecord`` and the ``OutboxEvent`` in its own transaction. Everything here is a
+    plain value — ``landing_state_id`` is all a caller needs for the assignment — so no ORM instance
+    escapes the context that loaded it.
+
+    ``state_code`` appears once rather than as a from/to pair, and that is the invariant rather than
+    an omission: a reassignment never changes which state the record is *on*, only which graph owns
+    that state. Changing the state is what the transition service is for (CLAUDE.md rule 2).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    entity_id: str
+    from_workflow_code: str
+    from_workflow_name: str
+    to_workflow_code: str
+    to_workflow_name: str
+    state_code: str
+    landing_state_id: int

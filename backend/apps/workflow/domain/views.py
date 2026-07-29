@@ -1,6 +1,6 @@
 """What the workflow context publishes to a read surface: the shape of a graph, and its legal moves.
 
-Four projections answering two different questions, and the split between the questions is the
+Five projections answering three different questions, and the split between the questions is the
 point.
 
 :class:`TransitionOption` answers **"what may this aggregate do next"**. It is the load-bearing
@@ -20,11 +20,16 @@ project or task detail. Publishing the graph therefore takes nothing away from t
 and adds nothing to the client's authority: a client that acts on an edge alone still meets the
 same typed 409.
 
+:class:`WorkflowRef` answers a third one: **"which lifecycle is this record following, and did
+somebody choose it"**. It is neither configuration nor permission but an attribution — it names the
+graph whose columns and arrows govern one record, and whether that graph was assigned to the record
+or inherited from its engagement type's binding.
+
 Pure Pydantic over the shared kernel — no Django — so a router, a consumer or a test can build one
 without a database.
 """
 
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict
 
@@ -120,6 +125,68 @@ class WorkflowEdgeView(BaseModel):
     label: str
     requires_reason: bool = False
     requires_fields: tuple[str, ...] = ()
+
+
+#: How a record came to follow the lifecycle it follows. ``DIRECT`` means an ops lead assigned this
+#: graph to this record; ``INHERITED`` means nobody did, and the graph is the one the binding ladder
+#: handed it. A closed pair of codes rather than a boolean, because it is rendered as a badge and a
+#: client comparing against a code is the rule everywhere else on the wire (CLAUDE.md rule 1).
+WorkflowSource = Literal["DIRECT", "INHERITED"]
+
+
+class WorkflowRef(BaseModel):
+    """The lifecycle one record follows, and whether somebody chose it for that record.
+
+    Served on the project and the task detail because those two facts answer different questions and
+    a client needs both. ``code``/``name`` say *which graph governs this record right now* — its
+    columns and its arrows are the ones this record obeys. ``source`` says *why*, and that is what
+    decides whether the UI offers "volver al flujo heredado": a record that inherited its lifecycle
+    has nothing to revert.
+
+    The identity here is always the graph that owns the state the record is standing on, never the
+    binding re-evaluated at read time. The two can legitimately disagree — an ops lead rebinds an
+    engagement type after a record was created, and the record keeps sitting on the graph it was
+    placed in, whose edges are still the ones ``validate_transition`` reads. Reporting the binding's
+    current answer would name a graph whose buttons the record will never be offered.
+
+    Attributes:
+        code: ``Workflow.code`` of the governing graph — the slug ``GET /api/v1/workflows``
+            publishes it under, so a client can look up its columns without a second request.
+        name: The operator's display name for it. Rendered; never compared against.
+        source: ``DIRECT`` | ``INHERITED``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+    name: str
+    source: WorkflowSource
+
+    @classmethod
+    def direct(cls, *, code: str, name: str) -> Self:
+        """The graph an ops lead assigned to this record.
+
+        Args:
+            code: ``Workflow.code``.
+            name: ``Workflow.name``.
+
+        Returns:
+            The reference, marked ``DIRECT``.
+        """
+        return cls(code=code, name=name, source="DIRECT")
+
+    @classmethod
+    def inherited(cls, *, code: str, name: str) -> Self:
+        """The graph this record was given by the binding ladder, nobody having chosen one for it.
+
+        Args:
+            code: ``Workflow.code``.
+            name: ``Workflow.name``.
+
+        Returns:
+            The reference, marked ``INHERITED``.
+        """
+        return cls(code=code, name=name, source="INHERITED")
 
 
 class WorkflowNodeView(BaseModel):

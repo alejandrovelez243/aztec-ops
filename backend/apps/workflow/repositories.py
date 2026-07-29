@@ -42,9 +42,12 @@ def records_on_states(state_ids: Sequence[int]) -> dict[int, StateOccupancy]:
     result rather than mapped to a zero: the caller reads it with ``.get(pk)`` and treats a miss as
     empty, which is the same answer without paying to write it down.
 
-    Archived projects are counted. They still point at the state — ``PROTECT``ed exactly so — and
-    retiring the node under them would leave rows referring to a column that no longer exists;
-    "archived" means out of the board's way, not out of the graph.
+    Archived projects **and removed tasks** are counted. They still point at the state —
+    ``PROTECT``ed exactly so — and retiring the node under them would leave rows referring to a
+    column that no longer exists; "archived" means out of the board's way, not out of the graph.
+    This is the one read of ``work.Task`` in the product that is deliberately not scoped by
+    ``active()`` for that reason (ADR 0012): the question here is about referential integrity, not
+    about the operation's attention, and a soft delete changes the second and not the first.
 
     Args:
         state_ids: ``WorkflowState`` primary keys to count. Empty returns ``{}`` without querying.
