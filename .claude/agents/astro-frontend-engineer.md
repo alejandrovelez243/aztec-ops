@@ -114,7 +114,8 @@ function setStatus(s: Status) { statusSubscribers.forEach((fn) => fn(s)); }
 function connect() {
   if (source) return;
   setStatus("connecting");
-  source = new EventSource("/api/stream");
+  // EventSource cannot send Authorization; the aztec_access cookie authenticates the stream
+  source = new EventSource("/api/stream", { withCredentials: true });
   source.onopen = () => { attempt = 0; setStatus("open"); };
   source.onmessage = (msg) => {
     const event = JSON.parse(msg.data) as Envelope;

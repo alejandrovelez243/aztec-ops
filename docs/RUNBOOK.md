@@ -50,6 +50,39 @@ drain rather than kill. Never point a liveness probe at `/api/v1/health/pipeline
 Entry points: app http://localhost:4321 · API docs http://localhost:8000/api/docs · admin
 http://localhost:8000/admin/ · outbox http://localhost:8000/admin/events/outboxevent/.
 
+## Scheduled tasks in the admin
+
+Two surfaces, and they answer different questions.
+
+`/admin/django_celery_beat/periodictask/` — **when** things run. Nothing seeds this: Celery Beat's
+`DatabaseScheduler` syncs `CELERY_BEAT_SCHEDULE` from `config/settings.py` into these rows every
+time Beat starts, so a fresh deployment gets its entries with no fixture and no manual step. Beat
+also installs `celery.backend_cleanup` itself, which is what enforces `CELERY_RESULT_EXPIRES`.
+
+The trap: an entry defined in settings is owned by settings. Editing its interval here works until
+Beat next restarts, and then the sync overwrites it. An entry an operator should own has to be
+created in the admin only and must never appear in `CELERY_BEAT_SCHEDULE`.
+
+`/admin/django_celery_results/taskresult/` — **what happened**. One row per run, with status,
+worker, runtime, and the return value. Results are stored in PostgreSQL rather than Redis so the
+history survives a broker restart and is queryable.
+
+Every task returns a sentence rather than a bare value, because that return value is what this
+page renders. A healthy tick looks like this:
+
+```
+events.emit_interval_tick   SUCCESS   Interval tick emitted as 385b878d-… for 2026-07-29T02:10:14+00:00.
+events.drain_outbox         SUCCESS   Dispatched 1 event(s); 0 still pending.
+events.handle_event         SUCCESS   priority-recalculator: applied for clock.ticked system.
+events.drain_outbox         SUCCESS   Nothing to dispatch; the outbox is drained.
+```
+
+That is the whole event path readable in four lines: the clock fired, the drain picked the event
+up, a handler applied it, and the backlog is empty. A `drain_outbox` that keeps reporting a rising
+pending count means the worker is behind; a `handle_event` in `FAILURE` carries its traceback in
+the same row.
+
+
 ## 2. Command table
 
 | Command | What it runs |

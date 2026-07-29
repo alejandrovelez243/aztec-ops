@@ -24,6 +24,7 @@
  * island keeps patching rows that are no longer in the DOM — and the refcount never reaches
  * zero, so the connection stays open for a page that no longer displays anything from it.
  */
+import { ensureFreshAccess } from "../api/client";
 import { nextDelay } from "./backoff";
 import { TOPICS, type Topic } from "./topics";
 
@@ -201,7 +202,21 @@ export function getLastEventId(): string | null {
 
 function openConnection(): void {
   setStatus("connecting");
-  const next = new EventSource(streamUrl());
+  // An EventSource cannot carry an Authorization header; it authenticates with
+  // the HttpOnly access cookie (config.auth), which the refresh response
+  // re-sets. Renew first, best-effort, so the stream does not open with a
+  // cookie that dies mid-connection — then connect regardless: a failed
+  // refresh surfaces as the stream's own 401/close and the normal retry path.
+  void ensureFreshAccess()
+    .catch(() => null)
+    .finally(() => {
+      openEventSource();
+    });
+}
+
+function openEventSource(): void {
+  if (source !== null || reconnectTimer !== null) return;
+  const next = new EventSource(streamUrl(), { withCredentials: true });
   source = next;
   next.onopen = () => {
     attempt = 0;

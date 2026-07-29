@@ -301,8 +301,9 @@ interface that names the entity is usually asking for too much.
 **DIP — depend on the client and the store.** Components import `apiClient` from
 `frontend/src/lib/api/client.ts` and `subscribe` from `frontend/src/lib/stream/store.ts`. A raw
 `fetch(` or `new EventSource(` anywhere outside those two modules is a review rejection: it
-bypasses the actor header, the typed error envelope (`code`, never `message`), and the shared
-connection.
+bypasses the `Authorization: Bearer` header and its silent refresh — for the stream, the
+`withCredentials` cookie authentication — the typed error envelope (`code`, never `message`), and
+the shared connection.
 
 ## 6. State and data flow
 

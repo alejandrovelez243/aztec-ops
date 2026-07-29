@@ -31,6 +31,7 @@ import type {
   BlockerResolveIn,
   CredentialsIn,
   NoteIn,
+  RefreshIn,
   NoteView,
   OverrideResult,
   PriorityOverrideIn,
@@ -166,60 +167,126 @@ async function request<T>(
   options: RequestOptions,
 ): Promise<Result<T>> {
   const url = `${BASE_URL}${path}${options.query ? toQueryString(options.query) : ""}`;
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    "X-Actor": actor,
-  };
-  if (options.body !== undefined) headers["Content-Type"] = "application/json";
 
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: options.method,
-      headers,
-      ...(options.body !== undefined
-        ? { body: JSON.stringify(options.body) }
-        : {}),
-    });
-  } catch (cause: unknown) {
-    return { ok: false, error: errorFromNetwork(cause) };
-  }
-
-  const text = await response.text();
-  let parsed: unknown = null;
-  let isJson = true;
-  if (text.length > 0) {
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      isJson = false;
+  for (let attempt = 0; ; attempt += 1) {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (options.body !== undefined) headers["Content-Type"] = "application/json";
+    if (options.skipAuth !== true) {
+      const access = await ensureFreshAccess();
+      if (access !== null) headers["Authorization"] = `Bearer ${access}`;
     }
-  }
 
-  if (!response.ok) {
-    return {
-      ok: false,
-      error: errorFromResponse(response.status, isJson ? parsed : null),
-    };
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: options.method,
+        headers,
+        // The token-obtain and refresh responses set the HttpOnly access
+        // cookie the EventSource authenticates with; the API is a different
+        // origin in development, so the cookie only sticks when every request
+        // is credentialed.
+        credentials: "include",
+        ...(options.body !== undefined
+          ? { body: JSON.stringify(options.body) }
+          : {}),
+      });
+    } catch (cause: unknown) {
+      return { ok: false, error: errorFromNetwork(cause) };
+    }
+
+    // One retry behind a forced refresh: the freshness check and the server's
+    // clock can disagree by the width of a request, so a 401 on a token we
+    // believed fresh means "refresh and present again", exactly once.
+    if (
+      response.status === 401 &&
+      options.skipAuth !== true &&
+      attempt === 0
+    ) {
+      const session = loadSession();
+      if (session !== null) {
+        saveSession({ ...session, expiresAt: 0 });
+        continue;
+      }
+    }
+
+    const text = await response.text();
+    let parsed: unknown = null;
+    let isJson = true;
+    if (text.length > 0) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        isJson = false;
+      }
+    }
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: errorFromResponse(response.status, isJson ? parsed : null),
+      };
+    }
+    if (!isJson) {
+      return {
+        ok: false,
+        error: {
+          kind: "unknown",
+          code: "unknown_error",
+          backendCode: null,
+          message: `HTTP ${response.status} returned a non-JSON body.`,
+          details: {},
+        },
+      };
+    }
+    return { ok: true, data: parsed as T };
   }
-  if (!isJson) {
-    return {
-      ok: false,
-      error: {
-        kind: "unknown",
-        code: "unknown_error",
-        backendCode: null,
-        message: `HTTP ${response.status} returned a non-JSON body.`,
-        details: {},
-      },
-    };
-  }
-  return { ok: true, data: parsed as T };
 }
 
 /** Encodes one path parameter; codes are business identifiers like `PRJ-01-T02`. */
 function segment(value: string): string {
   return encodeURIComponent(value);
+}
+
+// --- Authentication -----------------------------------------------------------
+
+/**
+ * Exchanges credentials for a token pair (`POST /api/v1/auth/token`).
+ *
+ * `skipAuth` because obtaining a token cannot require one. The response also
+ * sets the HttpOnly access cookie the `EventSource` authenticates with; a 401
+ * here is `invalid_credentials` — one answer for unknown user, wrong password
+ * and inactive account, so the login form cannot enumerate accounts.
+ */
+export async function postToken(body: CredentialsIn): Promise<Result<TokenPair>> {
+  return request<TokenPair>("/api/v1/auth/token", {
+    method: "POST",
+    body,
+    skipAuth: true,
+  });
+}
+
+/**
+ * Renews an access token (`POST /api/v1/auth/token/refresh`) and re-sets the
+ * access cookie. Reachable precisely when the access token has expired; the
+ * refresh token in the body is the credential.
+ */
+export async function postRefreshToken(
+  body: RefreshIn,
+): Promise<Result<AccessGrant>> {
+  return request<AccessGrant>("/api/v1/auth/token/refresh", {
+    method: "POST",
+    body,
+    skipAuth: true,
+  });
+}
+
+/**
+ * Clears the access cookie (`POST /api/v1/auth/logout`). Idempotent — a retry
+ * after a dropped response gets the same 204 — and the caller is expected to
+ * drop its stored pair regardless of this call's outcome.
+ */
+export async function postLogout(): Promise<Result<null>> {
+  return request<null>("/api/v1/auth/logout", { method: "POST" });
 }
 
 /**

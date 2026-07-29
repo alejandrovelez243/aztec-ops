@@ -137,6 +137,12 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     # Required by the GIN index on ProjectSnapshot's risk-flag array (DATA_MODEL §8).
     "django.contrib.postgres",
+    # Scheduled-task visibility. django_celery_results puts every run in the admin with its
+    # status, runtime and return value; django_celery_beat puts the schedule itself in the
+    # admin, so "when does this run" and "did it run, and what did it say" are both answerable
+    # without reading a log.
+    "django_celery_results",
+    "django_celery_beat",
     # The Astro dev server and the API are different origins, so the browser preflights every
     # mutating request. Without this the frontend cannot call the API at all in development.
     "corsheaders",
@@ -291,7 +297,33 @@ EVENT_SSE_CHANNEL = "aztec.sse"
 # broker and nothing else.
 
 CELERY_BROKER_URL = settings.redis_url
-CELERY_RESULT_BACKEND = settings.redis_url
+# Results land in PostgreSQL, not Redis. Redis results are ephemeral and invisible; a row in
+# django_celery_results is durable, queryable and rendered in the admin — which is the whole
+# point of being able to audit what the schedule actually did.
+CELERY_RESULT_BACKEND = "django-db"
+
+#: Without this, TaskResult stores the return value and almost nothing else — no task name, no
+#: arguments, no worker. Those are exactly the columns that make the admin list readable.
+CELERY_RESULT_EXTENDED = True
+
+#: Record the STARTED state, so a task that is running right now is distinguishable from one that
+#: never began. Without it a hung task looks identical to a task that was never queued.
+CELERY_TASK_TRACK_STARTED = True
+
+#: Results are kept for a week and then removed by celery.backend_cleanup, which Beat schedules on
+#: its own. Unbounded history is how a task-results table becomes the largest one in the database.
+CELERY_RESULT_EXPIRES = 60 * 60 * 24 * 7
+
+#: The schedule lives in the database and is editable from the admin. No seed and no fixture is
+#: needed: DatabaseScheduler syncs CELERY_BEAT_SCHEDULE below into PeriodicTask rows every time
+#: Beat starts, so a fresh deployment gets its entries without anyone creating them by hand.
+#:
+#: The trap that follows from that, and it is worth knowing before someone loses an edit: an entry
+#: defined below is OWNED by this file. Editing its interval in the admin works until Beat next
+#: restarts, and then the sync overwrites it. An entry that an operator should own must be created
+#: in the admin only and must never appear here. Beat also installs celery.backend_cleanup by
+#: itself, which is what enforces CELERY_RESULT_EXPIRES.
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_ACCEPT_CONTENT = ["json"]

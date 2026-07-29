@@ -1,108 +1,638 @@
 ---
+/**
+ * DIRECTION CONTRACT — "El Muro" (approved 2026-07-28)
+ *
+ * THESIS: The operations wall in software — work is physical cards a hand
+ * moves. Refuses both the dark console matrix (retired) and the indigo
+ * template dashboard.
+ * OWN-WORLD: Warm paper ground, white cards with layered soft shadows and
+ * hairline edges, 16px radius; one Cobalto voice; rojo/ámbar/verde/cielo/
+ * piedra as washes; Schibsted Grotesk + Spline Sans Mono figures.
+ * STORY: Sign in → land on today's zones → open the queue → move work; every
+ * action answers; colleagues' moves visibly travel.
+ * FIRST VIEWPORT: Persistent collapsible sidebar, 64px topbar (back +
+ * breadcrumbs + live badge), content on paper.
+ * FORM: User-pinned mix of their references (beats the roll; no seed key).
+ * Comp C governs Resumen, comp B governs Prioridades.
+ */
+import { ClientRouter } from "astro:transitions";
+
 import "../styles/tokens.css";
 import "../styles/base.css";
+import Icon from "../components/ui/Icon.astro";
+import type { IconName } from "../components/ui/Icon.astro";
 import ConnectionBadge from "../islands/ConnectionBadge.astro";
+import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
 
-/**
- * Application shell: a one-row top plate (brand, board switcher, mission clock,
- * connection badge) above the page slot. There is no sidebar — navigation lives
- * entirely on this plate (DESIGN.md, Layout).
- */
+/** One breadcrumb; the last one renders as the current page (no link). */
+export interface Crumb {
+  label: string;
+  href?: string;
+}
+
+/** Keys of the sidebar destinations; `active` highlights one. */
+export type NavKey =
+  | "resumen"
+  | "prioridades"
+  | "proyectos"
+  | "tablero"
+  | "equipo"
+  | "actividad";
+
 export interface Props {
   /** Document title, rendered as `<title>{title} — Aztec Ops</title>`. */
   title: string;
+  /** Which sidebar destination this page belongs to. */
+  active?: NavKey;
+  /** Wayfinding trail; omit on the root page. */
+  crumbs?: Crumb[];
 }
 
-const { title } = Astro.props;
+const { title, active, crumbs = [] } = Astro.props;
 
-/** Server-rendered UTC fix for the mission clock; the inline script ticks it forward each second. */
-const missionTime = `${new Date().toISOString().replace("T", " ").slice(0, 19)} UTC`;
+const NAV: ReadonlyArray<{ key: NavKey; label: string; href: string; icon: IconName }> = [
+  { key: "resumen", label: "Resumen", href: "/", icon: "home" },
+  { key: "prioridades", label: "Prioridades", href: "/prioridades", icon: "flag" },
+  { key: "proyectos", label: "Proyectos", href: "/proyectos", icon: "folder" },
+  { key: "tablero", label: "Tablero", href: "/tablero", icon: "board" },
+  { key: "equipo", label: "Equipo", href: "/equipo", icon: "users" },
+  { key: "actividad", label: "Actividad", href: "/actividad", icon: "pulse" },
+];
+
+/** Where the back button goes when the tab has no history: the parent crumb. */
+const backFallback =
+  crumbs.length > 1 ? (crumbs[crumbs.length - 2]?.href ?? "/") : "/";
+
+const LOGIN_PATH = "/login";
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <title>{title} — Aztec Ops</title>
-  </head>
-  <body>
-    <header class="topbar">
-      <a class="brand" href="/">
-        <img class="brand-mark" src="/brand/logo.svg" alt="" />
-        <span class="headline">AZTEC OPS</span>
-      </a>
-      <nav class="boards" aria-label="Boards">
-        <a class="label board-link" href="/">COMMAND CENTER</a>
-      </nav>
-      <span class="figure clock" id="mission-clock">{missionTime}</span>
-      <ConnectionBadge />
-    </header>
-    <script is:inline>
-      // Ticks the server-rendered mission clock once per second, in UTC. Kept
-      // inline (no imports): it touches no store and no API, only the clock span.
-      const missionClock = document.getElementById("mission-clock");
-      if (missionClock !== null) {
-        setInterval(() => {
-          missionClock.textContent = `${new Date().toISOString().replace("T", " ").slice(0, 19)} UTC`;
-        }, 1000);
+    <script is:inline define:vars={{ key: SESSION_STORAGE_KEY, login: LOGIN_PATH }}>
+      // Route guard, before paint: without a stored session, app pages bounce
+      // to the login screen carrying where the visitor was headed.
+      try {
+        if (window.localStorage.getItem(key) === null) {
+          window.location.replace(
+            `${login}?next=${encodeURIComponent(window.location.pathname + window.location.search)}`,
+          );
+        }
+      } catch {
+        /* storage disabled: the API's 401s will answer instead */
+      }
+      // Sidebar state, before paint, so the rail never flashes open.
+      try {
+        document.documentElement.dataset.sidebar =
+          window.localStorage.getItem("aztec.ui.sidebar") === "rail" ? "rail" : "open";
+      } catch {
+        document.documentElement.dataset.sidebar = "open";
       }
     </script>
-    <main>
-      <slot />
-    </main>
-    <script>
-      // The single SSE connection for the whole page is opened here, exactly once
-      // (docs/standards/FRONTEND.md §6). Islands subscribe to the shared store;
-      // none of them may call connect() or construct an EventSource.
-      import { connect } from "../lib/stream/store";
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>{title} — Aztec Ops</title>
+    <ClientRouter />
+  </head>
+  <body>
+    <a class="visually-hidden skip-link" href="#contenido">Saltar al contenido</a>
+    <div class="shell">
+      <aside class="sidebar" id="sidebar" transition:persist="sidebar">
+        <div class="sidebar-top">
+          <a class="brand" href="/" aria-label="Aztec Ops, ir al resumen">
+            <span class="brand-mark" aria-hidden="true">
+              <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+                <rect x="3" y="8.5" width="15" height="11" rx="3" fill="var(--cobalto-papel)"></rect>
+                <rect x="6" y="5.5" width="15" height="11" rx="3" fill="var(--cobalto)" opacity="0.35"></rect>
+                <rect x="9" y="2.5" width="15" height="11" rx="3" fill="var(--cobalto)"></rect>
+              </svg>
+            </span>
+            <span class="brand-name">Aztec Ops</span>
+          </a>
+          <button
+            class="btn btn-ghost btn-icon collapse-btn"
+            type="button"
+            data-action="toggle-sidebar"
+            aria-label="Plegar o desplegar el menú"
+          >
+            <Icon name="panel" />
+          </button>
+        </div>
 
+        <nav class="nav" aria-label="Secciones">
+          <ul>
+            {
+              NAV.map((item) => (
+                <li>
+                  <a
+                    class="nav-item"
+                    href={item.href}
+                    title={item.label}
+                    aria-current={item.key === active ? "page" : undefined}
+                  >
+                    <Icon name={item.icon} />
+                    <span class="nav-label">{item.label}</span>
+                  </a>
+                </li>
+              ))
+            }
+          </ul>
+        </nav>
+
+        <div class="sidebar-foot">
+          <div class="operator" data-operator hidden>
+            <span class="avatar" data-operator-avatar></span>
+            <span class="operator-text">
+              <span class="title operator-name" data-operator-name></span>
+              <span class="small operator-role" data-operator-role></span>
+            </span>
+            <button
+              class="btn btn-ghost btn-icon"
+              type="button"
+              data-action="logout"
+              aria-label="Cerrar sesión"
+            >
+              <Icon name="logout" />
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      <div class="scrim" data-action="close-drawer" aria-hidden="true"></div>
+
+      <div class="main-col">
+        <header class="topbar">
+          <button
+            class="btn btn-ghost btn-icon menu-btn"
+            type="button"
+            data-action="open-drawer"
+            aria-label="Abrir el menú"
+          >
+            <Icon name="menu" />
+          </button>
+          <button
+            class="btn btn-ghost btn-icon"
+            type="button"
+            data-action="back"
+            data-back-fallback={backFallback}
+            aria-label="Volver"
+          >
+            <Icon name="back" />
+          </button>
+          {
+            crumbs.length > 0 && (
+              <nav class="crumbs" aria-label="Ruta">
+                <ol>
+                  {crumbs.map((crumb, index) => (
+                    <li>
+                      {index < crumbs.length - 1 && crumb.href !== undefined ? (
+                        <a href={crumb.href}>{crumb.label}</a>
+                      ) : (
+                        <span aria-current="page">{crumb.label}</span>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+              </nav>
+            )
+          }
+          <div class="topbar-right">
+            <ConnectionBadge />
+          </div>
+        </header>
+        <main id="contenido" class="content">
+          <slot />
+        </main>
+      </div>
+    </div>
+
+    <div
+      id="toast-region"
+      class="toast-region"
+      aria-live="polite"
+      transition:persist="toasts"
+    >
+    </div>
+
+    <script>
+      // Shell behaviour: one delegated click handler (survives view-transition
+      // swaps without rebinding), the SSE connection (opened exactly once here,
+      // FRONTEND.md §6), the session-expired listener, and per-navigation init.
+      import { SESSION_EXPIRED_EVENT } from "../lib/api/client";
+      import {
+        avatarHue,
+        getOperator,
+        guardAppPage,
+        initials,
+        signOut,
+      } from "../lib/auth/session";
+      import { connect } from "../lib/stream/store";
+      import { toast } from "../lib/toast";
+
+      const SIDEBAR_PREF_KEY = "aztec.ui.sidebar";
+
+      function setDrawer(open: boolean): void {
+        if (open) {
+          document.documentElement.dataset.drawer = "open";
+        } else {
+          delete document.documentElement.dataset.drawer;
+        }
+      }
+
+      function toggleSidebar(): void {
+        const next =
+          document.documentElement.dataset.sidebar === "rail" ? "open" : "rail";
+        document.documentElement.dataset.sidebar = next;
+        try {
+          window.localStorage.setItem(SIDEBAR_PREF_KEY, next);
+        } catch {
+          /* preference simply not persisted */
+        }
+      }
+
+      function goBack(control: HTMLElement): void {
+        const fallback = control.dataset.backFallback ?? "/";
+        if (window.history.length > 1) {
+          window.history.back();
+        } else {
+          window.location.assign(fallback);
+        }
+      }
+
+      function fillOperatorCard(): void {
+        const operator = getOperator();
+        const card = document.querySelector<HTMLElement>("[data-operator]");
+        if (card === null || operator === null) return;
+        card.hidden = false;
+        const avatar = card.querySelector<HTMLElement>("[data-operator-avatar]");
+        if (avatar !== null) {
+          avatar.textContent = initials(operator.label);
+          avatar.style.setProperty("--avatar-h", String(avatarHue(operator.alias)));
+        }
+        const name = card.querySelector<HTMLElement>("[data-operator-name]");
+        if (name !== null) name.textContent = operator.label;
+        const role = card.querySelector<HTMLElement>("[data-operator-role]");
+        if (role !== null) role.textContent = operator.role ?? "";
+      }
+
+      document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const control = target.closest<HTMLElement>("[data-action]");
+        if (control === null) return;
+        switch (control.dataset.action) {
+          case "toggle-sidebar":
+            toggleSidebar();
+            break;
+          case "open-drawer":
+            setDrawer(true);
+            break;
+          case "close-drawer":
+            setDrawer(false);
+            break;
+          case "back":
+            goBack(control);
+            break;
+          case "logout":
+            void signOut();
+            break;
+          default:
+            break;
+        }
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") setDrawer(false);
+      });
+
+      window.addEventListener(SESSION_EXPIRED_EVENT, () => {
+        toast({
+          kind: "error",
+          title: "Tu sesión expiró",
+          detail: "Vuelve a iniciar sesión para continuar.",
+        });
+        window.setTimeout(() => {
+          window.location.assign("/login");
+        }, 1200);
+      });
+
+      document.addEventListener("astro:page-load", () => {
+        if (!guardAppPage()) return;
+        setDrawer(false);
+        fillOperatorCard();
+      });
+
+      // The single SSE connection for the whole tab (idempotent; islands only
+      // subscribe). Opened here so the stream is warm before islands hydrate.
       connect();
     </script>
+
+    <style>
+      .shell {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        min-height: 100dvh;
+      }
+
+      .skip-link:focus-visible {
+        position: fixed;
+        inset: var(--space-2) auto auto var(--space-2);
+        width: auto;
+        height: auto;
+        margin: 0;
+        padding: var(--space-2) var(--space-3);
+        clip: auto;
+        clip-path: none;
+        background: var(--carta);
+        border-radius: var(--radius-control);
+        box-shadow: var(--shadow-raised);
+        z-index: var(--z-toast);
+      }
+
+      /* --- Sidebar --- */
+
+      .sidebar {
+        position: sticky;
+        top: 0;
+        align-self: start;
+        height: 100dvh;
+        width: var(--size-sidebar);
+        display: flex;
+        flex-direction: column;
+        background: var(--carta);
+        border-right: var(--border-width) solid var(--hairline);
+        padding: var(--space-4) var(--space-3);
+        transition: width var(--motion-panel-duration) var(--motion-panel-ease);
+        z-index: var(--z-sidebar);
+        overflow: hidden;
+      }
+
+      .sidebar-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-2);
+        padding-inline: var(--space-2);
+        margin-bottom: var(--space-5);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        text-decoration: none;
+        min-width: 0;
+      }
+
+      .brand-name {
+        font-size: var(--text-title-size);
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        white-space: nowrap;
+      }
+
+      .nav ul {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-1);
+      }
+
+      .nav-item {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        padding: 10px var(--space-3);
+        border-radius: var(--radius-control);
+        color: var(--tinta-media);
+        text-decoration: none;
+        font-size: var(--text-title-size);
+        font-weight: 500;
+        white-space: nowrap;
+        transition:
+          background-color var(--motion-micro-duration) var(--motion-micro-ease),
+          color var(--motion-micro-duration) var(--motion-micro-ease);
+      }
+
+      .nav-item:hover {
+        background: var(--pozo);
+        color: var(--tinta);
+      }
+
+      .nav-item[aria-current="page"] {
+        background: var(--cobalto-papel);
+        color: var(--cobalto);
+        font-weight: 600;
+      }
+
+      .sidebar-foot {
+        margin-top: auto;
+        border-top: var(--border-width) solid var(--hairline);
+        padding-top: var(--space-3);
+      }
+
+      .operator {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        padding-inline: var(--space-2);
+        min-width: 0;
+      }
+
+      .operator-text {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+
+      .operator-name,
+      .operator-role {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /* --- Rail (collapsed) --- */
+
+      :global(html[data-sidebar="rail"]) .sidebar {
+        width: var(--size-rail);
+      }
+
+      :global(html[data-sidebar="rail"]) .brand-name,
+      :global(html[data-sidebar="rail"]) .nav-label,
+      :global(html[data-sidebar="rail"]) .operator-text {
+        display: none;
+      }
+
+      :global(html[data-sidebar="rail"]) .sidebar-top {
+        flex-direction: column;
+        gap: var(--space-3);
+      }
+
+      :global(html[data-sidebar="rail"]) .nav-item,
+      :global(html[data-sidebar="rail"]) .operator {
+        justify-content: center;
+        padding-inline: 0;
+      }
+
+      :global(html[data-sidebar="rail"]) .operator :global(.btn-icon) {
+        display: none;
+      }
+
+      /* --- Topbar --- */
+
+      .main-col {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        height: var(--size-topbar);
+        padding-inline: var(--space-4);
+        background: var(--papel);
+        border-bottom: var(--border-width) solid var(--hairline);
+        z-index: calc(var(--z-sidebar) - 1);
+      }
+
+      .menu-btn {
+        display: none;
+      }
+
+      .crumbs ol {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        flex-wrap: nowrap;
+        overflow: hidden;
+      }
+
+      .crumbs li {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        white-space: nowrap;
+        color: var(--tinta-media);
+        font-size: var(--text-small-size);
+      }
+
+      .crumbs li + li::before {
+        content: "/";
+        color: var(--tinta-suave);
+      }
+
+      .crumbs a {
+        text-decoration: none;
+        border-radius: var(--radius-chip);
+        transition: color var(--motion-micro-duration) var(--motion-micro-ease);
+      }
+
+      .crumbs a:hover {
+        color: var(--cobalto);
+      }
+
+      .crumbs [aria-current="page"] {
+        color: var(--tinta);
+        font-weight: 600;
+      }
+
+      .topbar-right {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+      }
+
+      .content {
+        width: 100%;
+        max-width: var(--content-max);
+        margin-inline: auto;
+        padding: var(--space-5) var(--space-6) var(--space-8);
+      }
+
+      /* --- Drawer (< 1024px) --- */
+
+      .scrim {
+        display: none;
+        position: fixed;
+        inset: 0;
+        background: var(--scrim);
+        z-index: var(--z-scrim);
+      }
+
+      @media (max-width: 1023px) {
+        .shell {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          position: fixed;
+          inset-block: 0;
+          left: 0;
+          width: var(--size-sidebar);
+          transform: translateX(-100%);
+          transition: transform var(--motion-panel-duration) var(--motion-panel-ease);
+          box-shadow: none;
+          z-index: var(--z-drawer);
+        }
+
+        :global(html[data-sidebar="rail"]) .sidebar {
+          width: var(--size-sidebar);
+        }
+
+        :global(html[data-sidebar="rail"]) .brand-name,
+        :global(html[data-sidebar="rail"]) .nav-label {
+          display: initial;
+        }
+
+        :global(html[data-sidebar="rail"]) .operator-text {
+          display: flex;
+        }
+
+        :global(html[data-sidebar="rail"]) .sidebar-top {
+          flex-direction: row;
+        }
+
+        :global(html[data-sidebar="rail"]) .nav-item,
+        :global(html[data-sidebar="rail"]) .operator {
+          justify-content: flex-start;
+          padding-inline: var(--space-3);
+        }
+
+        :global(html[data-sidebar="rail"]) .operator {
+          padding-inline: var(--space-2);
+        }
+
+        :global(html[data-sidebar="rail"]) .operator :global(.btn-icon) {
+          display: inline-flex;
+        }
+
+        :global(html[data-drawer="open"]) .sidebar {
+          transform: translateX(0);
+          box-shadow: var(--shadow-lifted);
+        }
+
+        :global(html[data-drawer="open"]) .scrim {
+          display: block;
+        }
+
+        .collapse-btn {
+          display: none;
+        }
+
+        .menu-btn {
+          display: inline-flex;
+        }
+
+        .content {
+          padding: var(--space-4) var(--space-4) var(--space-7);
+        }
+      }
+    </style>
   </body>
 </html>
-
-<style>
-  .topbar {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
-    padding: var(--space-2) var(--space-4);
-    background: var(--color-plate);
-    border-bottom: 1px solid var(--color-rule);
-  }
-
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    color: var(--color-legend);
-    text-decoration: none;
-  }
-
-  .brand-mark {
-    display: block;
-    width: auto;
-    height: var(--space-4);
-  }
-
-  .board-link {
-    color: var(--color-legend-dim);
-    text-decoration: none;
-  }
-
-  .board-link:hover {
-    color: var(--color-legend);
-  }
-
-  .board-link:focus-visible {
-    outline: 1px solid var(--color-legend);
-    outline-offset: var(--space-1);
-  }
-
-  .clock {
-    margin-left: auto;
-    color: var(--color-legend);
-  }
-</style>

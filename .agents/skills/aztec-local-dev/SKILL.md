@@ -47,8 +47,9 @@ credentials, run `make up` again. For a one-off migration without a restart:
 `docker compose exec api python manage.py migrate`.
 
 There is deliberately **no recompute target and no relay**. Recompute is the
-"Recompute priority for selected projects" admin action or `POST /api/v1/recompute`; a command that
-only works from a checkout is not an operation.
+"Recompute priority for selected projects" admin action or `POST /api/v1/recompute` (an ops-lead
+capability — anyone else gets 403 `ops_lead_required`); a command that only works from a checkout
+is not an operation.
 
 Always run management commands inside the `api` container so they see the compose network
 (`postgres:5432`, `redis:6379`), not localhost.
@@ -106,8 +107,14 @@ docker compose exec api celery -A config call events.emit_interval_tick
 In another shell, cause an event and watch it go:
 
 ```bash
+# every route except the token routes and the health probes needs a bearer token —
+# sign in as a seeded member first (password = SEED_USER_PASSWORD from .env)
+TOKEN=$(curl -s -X POST localhost:8000/api/v1/auth/token \
+  -H 'Content-Type: application/json' \
+  -d '{"username": "camila", "password": "'"$SEED_USER_PASSWORD"'"}' | jq -r .access)
+
 curl -s -X POST localhost:8000/api/v1/projects/PRJ-01/transition \
-  -H 'Content-Type: application/json' -H 'X-Actor: camila' \
+  -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
   -d '{"to_state": "blocked", "reason": "waiting for client access"}'
 
 make logs s="worker beat"
@@ -216,15 +223,20 @@ set, nothing copied, nothing deleted. Read it in the admin, fix the handler, the
 **"Re-queue selected dead-lettered events"**. Handlers that already applied it dedup; the one that
 failed applies it for the first time. Never clear the flag to make a number go down.
 
-**SSE never reaching the browser.** Test the endpoint outside the browser first:
+**SSE never reaching the browser.** Test the endpoint outside the browser first, with a bearer
+token minted as in "Driving the bus by hand":
 
 ```bash
-curl -N -H 'Accept: text/event-stream' localhost:8000/api/stream
+curl -N -H 'Accept: text/event-stream' -H "Authorization: Bearer $TOKEN" \
+  localhost:8000/api/stream
 ```
 
-If curl streams and the browser does not, it is CORS (`CORS_ALLOWED_ORIGINS` must include
-`http://localhost:4321`; `EventSource` sends no custom headers, so do not require `X-Actor` on
-that route). If curl itself hangs with no output, it is buffering: the endpoint must run on ASGI
+A 401 here is authentication, not the stream: the route takes the bearer header, or — because
+`EventSource` sends no custom headers — the `aztec_access` cookie that signing in sets, which the
+browser only attaches when the client opens the stream with `withCredentials: true`. If curl
+streams and the browser does not, it is CORS or that cookie: `CORS_ALLOWED_ORIGINS` must include
+`http://localhost:4321`, and CORS must run with credentials. If curl itself hangs with no output,
+it is buffering: the endpoint must run on ASGI
 (uvicorn, not `runserver` behind WSGI), send an initial comment line and periodic heartbeats, and
 any proxy in front needs `proxy_buffering off` plus `X-Accel-Buffering: no` on the response.
 If events arrive once and then stop, the browser opened several `EventSource` connections —

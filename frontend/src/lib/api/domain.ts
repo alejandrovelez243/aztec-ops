@@ -125,3 +125,17 @@ export type TaskQuery = QueryOf<"apps_work_api_routers_get_project_tasks">;
 export type TeamLoadQuery = QueryOf<"apps_portfolio_api_routers_get_team_load">;
 export type TimelineQuery =
   QueryOf<"apps_activity_api_routers_get_project_activity">;
+
+// --- Authentication ----------------------------------------------------------
+
+/** Sign-in response: the pair plus who the caller is; `is_ops_lead` gates the override UI. */
+export type TokenPair = Schemas["TokenPair"];
+
+/** Refresh response: a new access token for the same person; the client keeps its refresh. */
+export type AccessGrant = Schemas["AccessGrant"];
+
+/** Body of `POST /auth/token`. */
+export type CredentialsIn = Schemas["CredentialsIn"];
+
+/** Body of `POST /auth/token/refresh`; the refresh token is the credential. */
+export type RefreshIn = Schemas["RefreshIn"];

@@ -111,8 +111,10 @@ class BlockageAgeSaturationTests(SimpleTestCase):
 ```
 5. Run `pytest backend/apps/prioritization -k <code>` and `make lint` (mypy strict covers `domain/`).
 6. Recompute so persisted scores reflect the new policy version: the
-   "Recompute priority for selected projects" admin action, or `POST /api/v1/recompute`. There is
-   deliberately no Makefile target for it — a command run from a checkout is not an operation.
+   "Recompute priority for selected projects" admin action, or `POST /api/v1/recompute` (an
+   ops-lead capability — the route declares `auth=ops_lead` and answers 403 `ops_lead_required`
+   to anyone else). There is deliberately no Makefile target for it — a command run from a
+   checkout is not an operation.
 
 A signal key present in `weights` with no registered strategy — or the reverse — raises at policy
 load. It is never silently defaulted.
@@ -148,7 +150,9 @@ remains reversible. It emits an `ActivityRecord` with verb `PRIORITY_CHANGED` an
 `MANUAL` (engine-driven recomputations use origin `POLICY` and name the signal that moved), and
 the UI labels the row as an override. A forced position with no recorded reason is
 indistinguishable from a bug three weeks later — that is why the reason is a constraint, not a
-convention.
+convention. Writing one is the same ops-lead capability that guards the portfolio recompute: the
+route declares `auth=ops_lead`, anyone else gets 403 `ops_lead_required`, and the frontend renders
+the control from the `is_ops_lead` the sign-in response reports, never by decoding the token.
 
 ## Reading a breakdown out loud
 

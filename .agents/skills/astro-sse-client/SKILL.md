@@ -5,8 +5,9 @@ description: Load when working in frontend/ — Astro pages, islands, hydration 
 
 # Astro frontend and the SSE client
 
-Frontend for Aztec Ops. Two views only (ARCHITECTURE §9): `/` command center and
-`/projects/{code}` detail. Server render everything; hydrate only the live regions.
+Frontend for Aztec Ops. Two product views (ARCHITECTURE §9): `/` command center and
+`/projects/{code}` detail — plus `/login`, the credentials form the route guard redirects
+signed-out visitors to. Server render everything; hydrate only the live regions.
 
 ## Layout
 
@@ -49,7 +50,9 @@ mount to populate themselves — that duplicates the request and causes a flash.
 ## The single EventSource
 
 One connection per browser tab, owned by `frontend/src/lib/stream/store.ts`. Islands import the
-store and subscribe; they never construct an `EventSource`.
+store and subscribe; they never construct an `EventSource`. The store opens every connection with
+`withCredentials: true`: `EventSource` cannot send an `Authorization` header, so the stream is
+authenticated by the HttpOnly `aztec_access` cookie that signing in sets.
 
 Shape of the module:
 
@@ -86,7 +89,8 @@ a new object does not carry the previous `Last-Event-ID`.
 ## Typed API client
 
 Every HTTP call goes through `frontend/src/lib/api/client.ts`, from page frontmatter and from
-islands alike. It owns the base URL, the actor header, JSON parsing, and the mapping of the
+islands alike. It owns the base URL, the `Authorization: Bearer <access>` header and its silent
+single-flight refresh, JSON parsing, and the mapping of the
 backend's typed domain errors (`TransitionNotAllowed` and friends) into a discriminated
 `ApiError` the caller can branch on. A bare `fetch('/api/...')` inside a component is a bug —
 the error contract and the types are lost.
@@ -158,8 +162,8 @@ Before a PR: `npx astro check`, `npx eslint .`, `npx prettier --check .`, and
   the same stream N times. Subscribe to the store.
 - Calling `connect()` from each island instead of once from the layout, producing several
   connections during hydration.
-- `fetch()` inside a component, bypassing `lib/api/client.ts`: no types, no actor header, no
-  error mapping.
+- `fetch()` inside a component, bypassing `lib/api/client.ts`: no types, no `Authorization`
+  header or silent refresh, no error mapping.
 - Hardcoding state codes, state labels, priority names or colors in the frontend. All of it
   is taxonomy data from the API (`code`, `label`, `color`) — see hard rule 1.
 - Building transition buttons from a static list, or enabling one whose `requires_fields`

@@ -2,10 +2,10 @@
 /**
  * Connection badge: the only island that renders the SSE store's status.
  *
- * Server-rendered as CONNECTING (dim); the colocated script subscribes via
- * `onStatus` and patches `data-status` plus the legend word. The unsubscribe is
- * stored and called on `astro:before-swap` — skipping it leaks the handler across
- * view transitions and keeps patching a detached node (FRONTEND.md §6).
+ * Server-rendered as connecting; the colocated script subscribes via
+ * `onStatus` and patches `data-status` plus the word. The unsubscribe is
+ * stored and called on `astro:before-swap` — skipping it leaks the handler
+ * across view transitions and keeps patching a detached node (FRONTEND.md §6).
  */
 ---
 
@@ -17,9 +17,12 @@
   aria-live="polite"
 >
   <span class="lamp" aria-hidden="true"></span>
-  <span class="label legend" data-connection-label>CONNECTING</span>
-  <button type="button" class="label reconnect" data-connection-reconnect hidden
-    >RECONNECT</button
+  <span class="word small" data-connection-label>Conectando</span>
+  <button
+    type="button"
+    class="btn btn-secondary reconnect"
+    data-connection-reconnect
+    hidden>Reconectar</button
   >
 </div>
 
@@ -38,10 +41,10 @@
       if (legend !== null) {
         legend.textContent =
           status === "open"
-            ? "LIVE"
+            ? "En vivo"
             : status === "connecting"
-              ? "CONNECTING"
-              : "DISCONNECTED";
+              ? "Conectando"
+              : "Sin conexión";
       }
       if (reconnect !== null) {
         reconnect.hidden = status !== "disconnected";
@@ -63,53 +66,70 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    padding: var(--space-1) var(--space-3);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-full);
+    background: var(--carta);
   }
 
   .lamp {
     display: block;
     width: var(--space-2);
     height: var(--space-2);
-    background: var(--color-legend-dim);
+    border-radius: var(--radius-full);
+    background: var(--tinta-suave);
   }
 
-  .legend {
-    color: var(--color-legend-dim);
+  .word {
+    color: var(--tinta-media);
+    white-space: nowrap;
   }
 
   .badge[data-status="open"] .lamp {
-    background: var(--color-go);
+    background: var(--verde);
+    animation: latido 2.4s ease-in-out infinite;
   }
 
-  .badge[data-status="open"] .legend {
-    color: var(--color-go);
+  .badge[data-status="open"] .word {
+    color: var(--verde-ink);
   }
 
   .badge[data-status="disconnected"] .lamp {
-    background: var(--color-nogo);
+    background: var(--rojo);
   }
 
-  .badge[data-status="disconnected"] .legend {
-    color: var(--color-nogo);
+  .badge[data-status="disconnected"] .word {
+    color: var(--rojo-ink);
+  }
+
+  /* The live lamp breathes; a dead or connecting one holds still. */
+  @keyframes latido {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 var(--verde-wash);
+    }
+    50% {
+      box-shadow: 0 0 0 4px var(--verde-wash);
+    }
   }
 
   .reconnect {
-    padding: var(--space-1) var(--space-2);
-    color: var(--color-legend);
-    background: var(--color-plate);
-    border: 1px solid var(--color-rule);
-    cursor: pointer;
-  }
-
-  .reconnect:hover {
-    background: var(--color-panel);
-  }
-
-  .reconnect:focus-visible {
-    outline: 1px solid var(--color-legend);
-    outline-offset: var(--space-1);
+    height: 28px;
+    padding-inline: var(--space-3);
+    font-size: var(--text-small-size);
   }
 
   .reconnect[hidden] {
     display: none;
+  }
+
+  @media (max-width: 640px) {
+    .badge {
+      padding-inline: var(--space-2);
+    }
+
+    .word {
+      display: none;
+    }
   }
 </style>

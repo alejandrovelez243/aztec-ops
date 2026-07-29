@@ -77,7 +77,9 @@ class OutboxDeliveryTestCase(EagerCeleryMixin, TransactionTestCase):
         with only_handlers(listener.registration):
             dispatched = drain_outbox()
 
-        self.assertEqual(dispatched, 1)
+        # The return value is prose because it is what django_celery_results renders in the
+        # admin, so assert on what it reports rather than on a bare count.
+        self.assertIn("Dispatched 1 event(s)", dispatched)
         self.assertEqual([envelope.id for envelope in listener.seen], [row.id])
 
 
@@ -95,8 +97,8 @@ class IdempotencyTestCase(EagerCeleryMixin, TransactionTestCase):
                 kwargs={"handler_name": "listener", "event_id": str(row.id)}
             ).get()
 
-        self.assertEqual(first, OUTCOME_APPLIED)
-        self.assertEqual(second, OUTCOME_DUPLICATE)
+        self.assertIn(OUTCOME_APPLIED, first)
+        self.assertIn(OUTCOME_DUPLICATE, second)
         self.assertEqual(len(listener.seen), 1)
         self.assertEqual(ProcessedEvent.objects.filter(event_id=row.id).count(), 1)
 

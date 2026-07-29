@@ -41,14 +41,21 @@ service and do not put the logic in the view.
    `POST /api/v1/projects/{code}/transition`, which calls the transition service.
 6. Read endpoints for the command center query the read side (`ProjectSnapshot` via its service),
    not the write aggregates.
-7. Actor comes from the request (Django auth user, or the `X-Actor` header in this scope) and is
-   passed explicitly to the service. Services never read request objects.
+7. Actor comes from the authenticated request and is passed explicitly to the service:
+   `actor_code_of(request)` turns the JWT-authenticated `request.user` into the
+   `accounts.User.code` a service takes. Auth is API-wide (`config/auth.py`, bearer header — plus
+   the `aztec_access` cookie, honoured only on GET/HEAD/OPTIONS); only the token routes and the
+   health probes declare `auth=None`, and the two routes that overrule the engine (priority
+   override, portfolio recompute) declare `auth=ops_lead` and answer 403 `ops_lead_required`.
+   Services never read request objects.
 8. All list endpoints are paginated and their filters are declared as a typed `FilterSchema` /
    `Query` model — never parsed from `request.GET`.
 9. Routes are mounted under a version prefix (`/api/v1/...`). `GET /api/stream` is the one
    unversioned, always-on endpoint the frontend keeps open.
-10. CORS allows only the Astro origin(s) from settings, and must expose/allow the headers SSE and
-    the actor header need. No `allow_all_origins` outside local dev settings.
+10. CORS allows only the Astro origin(s) from settings and runs with credentials, because the
+    `aztec_access` cookie is how `EventSource` authenticates `GET /api/stream`; the
+    `Authorization` header must stay allowed. A credentialed request may never be answered with
+    `*`, so `allow_all_origins` is out in every environment, local dev included.
 11. One schema per use case (`BACKEND.md` §4, ISP). The queue row, the detail page and the command
     body are three schemas, not one `ProjectSchema` with every field `| None = None`. A field is
     optional in an `*Out` only when the response genuinely omits it; if two routes need different
@@ -78,6 +85,7 @@ from ninja.pagination import paginate, PageNumberPagination
 
 from apps.portfolio.services.transitions import transition_project
 from apps.portfolio.services.queries import list_project_snapshots
+from config.auth import actor_code_of
 from .schemas import ProjectFilters, ProjectSnapshotOut, TransitionIn, ProjectOut
 
 router = Router(tags=["projects"])
@@ -95,7 +103,7 @@ def transition(request, code: str, payload: TransitionIn):
         code=code,
         to_state=payload.to_state,
         reason=payload.reason,
-        actor=request.actor,
+        actor=actor_code_of(request),
     )
     return project
 ```
@@ -143,7 +151,10 @@ def handle_domain_error(request, exc: DomainError):
    dead connection. On reconnect the browser sends `Last-Event-ID`; the endpoint passes it to the
    fan-out subscription so replay starts after that id. Optional `?topics=` / `?project=` filters
    are typed `Query` params. The view itself contains no Redis client — it consumes the
-   subscription interface provided by the events context.
+   subscription interface provided by the events context. It authenticates like every other
+   route, through `config.auth.authenticate_request`: the bearer header, or — since
+   `EventSource` cannot send one — the `aztec_access` cookie the browser attaches when the
+   client opens the stream with `withCredentials: true`.
 6. Run `make lint`, then the API tests.
 
 ## Definition of done

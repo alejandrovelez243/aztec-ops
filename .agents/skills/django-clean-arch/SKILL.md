@@ -129,6 +129,7 @@ Example: "resolve a blocker on a project". Files touched, in this order.
 # backend/apps/work/tests/test_resolve_blocker.py
 from django.test import SimpleTestCase, TestCase
 
+from apps.accounts.tests.support import bearer, make_member
 from apps.activity.models import ActivityRecord
 from apps.events.models import OutboxEvent
 from apps.work.domain.errors import BlockerAlreadyResolved
@@ -185,13 +186,14 @@ class ResolveBlockerApiTests(TestCase):
     @classmethod
     def setUpTestData(cls) -> None:
         cls.blocker = BlockerFactory(resolved_at="2026-01-01T00:00:00Z")
+        make_member(code="camila")
 
     def test_resolving_an_already_resolved_blocker_returns_409(self) -> None:
         response = self.client.post(
             f"/api/blockers/{self.blocker.id}/resolve",
             data={"reason": "again"},
             content_type="application/json",
-            headers={"x-actor": "camila"},
+            **bearer(username="camila"),
         )
         self.assertEqual(response.status_code, 409)
 ```
@@ -260,9 +262,9 @@ Notes that matter:
 def resolve(request, blocker_id: int, body: ResolveBlockerIn):
     return resolve_blocker(
         blocker_id=blocker_id,
-        actor=request.actor,
+        actor=actor_code_of(request),  # config.auth — the JWT-authenticated user's code
         reason=body.reason,
-        correlation_id=request.correlation_id,
+        correlation_id=uuid4(),
     )
 ```
 
