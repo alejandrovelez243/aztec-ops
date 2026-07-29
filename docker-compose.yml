@@ -1,6 +1,7 @@
 # Aztec Ops — local stack.
 #
-# Six services, three of them application processes. That is the whole system:
+# Six services — postgres, redis, api, worker, beat, frontend — and the three Django/Celery ones
+# are the whole application:
 #
 #   api      uvicorn (ASGI) — the REST contract under /api/v1 and the open SSE stream.
 #   worker   `celery -A config worker` — THE ONLY WORKER, and it does two jobs that used to be
@@ -17,9 +18,18 @@
 # this workload does not have. If one ever needs isolating, the honest version is `--queues` and a
 # routing rule for that handler alone, plus a measurement in the commit message that justifies it.
 #
-# Ordering is by healthcheck, never by sleep: the backing services (postgres, redis) gate on
-# `condition: service_healthy`. A sleep is a guess about someone else's startup time and it is wrong
-# on a cold machine. The application services carry no healthcheck of their own.
+# Ordering is by healthcheck, never by sleep — every `depends_on` in this file gates on
+# `condition: service_healthy`. A sleep is a guess about someone else's startup time and it is
+# wrong on a cold machine.
+#
+# The chain is: postgres/redis healthy → api (migrates, seeds, then serves) healthy → worker, beat
+# and frontend. That is why `api` is the only service here with a healthcheck: it is the only one
+# anything waits on, and it is the only migrator, so a worker can no longer reach
+# `events_outboxevent` before the table exists.
+#
+# `command:` names a ROLE, not a process. The image's entrypoint (backend/docker-entrypoint.sh)
+# owns how each role starts — flags, reload, migrations — so a deploy that is not Compose gets the
+# same start-up sequence for free instead of reimplementing it in different quoting.
 #
 # Platform: every image here is multi-arch (arm64 and amd64) and no `platform:` key is pinned, so
 # the same file works on an Apple Silicon laptop and on an x86 CI runner without emulation.
@@ -57,7 +67,7 @@ x-django-env: &django-env
   EVENT_MAX_ATTEMPTS: ${EVENT_MAX_ATTEMPTS:-5}
   EVENT_DRAIN_INTERVAL_SECONDS: ${EVENT_DRAIN_INTERVAL_SECONDS:-5}
   EVENT_DRAIN_BATCH_SIZE: ${EVENT_DRAIN_BATCH_SIZE:-100}
-  # Seed credentials. These MUST be forwarded or `bootstrap`'s seed silently creates no admin and
+  # Seed credentials. These MUST be forwarded or the api's seed silently creates no admin and
   # leaves every seeded member unable to sign in — the README tells people to set them in .env, and
   # without these four lines that instruction is a lie. Empty defaults on purpose: a default that
   # works is a hardcoded credential, and this repository is public.
@@ -73,17 +83,17 @@ x-django-depends: &django-depends
   redis:
     condition: service_healthy
 
-# `worker` waits for `api` as well, and the reason is migrations, not politeness: `api` applies them
-# before it binds its port. With no healthcheck on `api` this is only `service_started`, so the
-# worker can still reach `events_outboxevent` before the table exists and die on a ProgrammingError.
-# `restart: on-failure:5` is what recovers it — the schema is there by the second attempt.
+# Everything that reads or writes application tables waits for `api` to be healthy, and the reason
+# is migrations, not politeness: `api` applies them and seeds before it answers its first probe, so
+# a dependant that reaches `events_outboxevent` finds the table there. No crash-and-retry, no
+# one-shot job to sequence.
 x-django-depends-migrated: &django-depends-migrated
   postgres:
     condition: service_healthy
   redis:
     condition: service_healthy
-  bootstrap:
-    condition: service_completed_successfully
+  api:
+    condition: service_healthy
 
 # A service that has failed five times running is broken, not unlucky. Stopping makes the failure
 # visible in `docker compose ps` instead of burying it under an endless restart log.
@@ -135,47 +145,42 @@ services:
 
   # --- application -----------------------------------------------------------------------------
 
-  # Runs once and exits. Everything else waits for it to exit 0, which is why no service needs a
-  # healthcheck to get the ordering right and why nothing crash-loops against a schema that does
-  # not exist yet. It also means migrations run in exactly one place: if `api` were ever scaled to
-  # two replicas, having it migrate would have both replicas migrating the same database at once.
-  # `&&` so a failed migration fails the bootstrap, and a failed bootstrap stops the whole stack
-  # instead of serving a half-loaded database.
-  bootstrap:
-    <<: *django-image
-    environment: *django-env
-    depends_on: *django-depends
-    command: >
-      sh -c "python manage.py migrate --noinput &&
-             python manage.py seed"
-    volumes:
-      # The same bind mount api, worker and beat use. Without it this service runs the code baked
-      # into the image while every other service runs the working tree, so a new migration or an
-      # edited fixture would need a rebuild to take effect — and the mismatch is invisible, because
-      # the seed still reports success while applying the wrong version.
-      - ./backend:/app
-    restart: "no"
-
+  # The image's default role (`CMD ["api"]`), so this service declares no command at all: migrate,
+  # seed, then uvicorn — ASGI, not WSGI, and not negotiable, because `GET /api/stream` holds a
+  # connection open per dashboard and a WSGI worker would hold a whole thread for each one.
+  #
+  # It is the only migrator in the stack. That is a single-replica assumption stated out loud: put
+  # two replicas behind a load balancer and both would migrate the same database at once, and the
+  # migration step belongs in a deploy job again.
   api:
     <<: *django-image
     environment: *django-env
-    depends_on: *django-depends-migrated
-    # ASGI, not WSGI, and not negotiable: `GET /api/stream` holds a connection open per dashboard,
-    # and a WSGI worker holds a whole thread for each one. Ten open tabs would exhaust the pool.
-    # It no longer migrates: `bootstrap` did that and this service does not start until it exited 0.
-    command: >
-      sh -c "exec uvicorn config.asgi:application --host 0.0.0.0 --port 8000 --reload"
+    depends_on: *django-depends
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       # Source is bind-mounted for --reload. The virtualenv lives at /opt/venv precisely so this
       # mount cannot hide it.
       - ./backend:/app
-    # No container healthcheck on purpose. Startup ordering comes from `bootstrap` exiting 0, not
-    # from polling, so nothing here needs one — and the image ships neither curl nor wget, so a
-    # probe would mean adding a package to the runtime for something the ordering already solves.
-    # `/api/v1/health/live`, `/ready` and `/pipeline` still exist and are what a real orchestrator
-    # or load balancer should probe.
+    healthcheck:
+      # `/health/live` and not `/ready`: readiness reports on PostgreSQL and Redis, which this
+      # container already waited for, and a dependency blip would then mark the api unhealthy and
+      # take the worker down with it. Liveness answers the only question ordering needs — is this
+      # process serving? — and by the time it answers, migrate and seed have finished.
+      #
+      # urllib rather than curl: the runtime image ships neither curl nor wget on purpose, and the
+      # interpreter is already there. A probe is not worth a package.
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/api/v1/health/live", timeout=3)
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      # Long, because the first start is migrate + seed + recompute on an empty database. Failures
+      # during start_period do not count against `retries`, so a slow cold start is not a failure.
+      start_period: 120s
     restart: *restart
 
   worker:
@@ -189,10 +194,9 @@ services:
     # handler)`, so at-least-once delivery is safe; past EVENT_MAX_ATTEMPTS an event is
     # dead-lettered on its own row and shows up in the admin.
     #
-    # `--concurrency 2` because the work is database-bound and each worker process holds its own
-    # PostgreSQL connection; raising this raises the connection count, so raise `max_connections`
-    # with it or do not raise it.
-    command: ["celery", "-A", "config", "worker", "--loglevel", "info", "--concurrency", "2"]
+    # The flags (`--concurrency`, `--loglevel`) live in the entrypoint with the reasoning that
+    # justifies them; CELERY_CONCURRENCY overrides without editing either file.
+    command: ["worker"]
     volumes:
       - ./backend:/app
     restart: *restart
@@ -200,16 +204,17 @@ services:
   beat:
     <<: *django-image
     environment: *django-env
-    depends_on:
-      redis:
-        condition: service_healthy
+    # Beat keeps no domain state and would run against redis alone, but its first tick fires
+    # seconds after start and every task it enqueues reads the database. Waiting for the same
+    # healthy api costs nothing and keeps the first minute of logs free of retries.
+    depends_on: *django-depends-migrated
     # Celery Beat: holds CELERY_BEAT_SCHEDULE (emit-interval-tick every TICKER_INTERVAL_SECONDS,
     # emit-day-boundary-tick at local midnight, drain-outbox every EVENT_DRAIN_INTERVAL_SECONDS)
-    # and enqueues. It executes nothing and keeps no domain state, which is why it depends on
-    # redis alone. The drain entry is a safety net, not the hot path — `transaction.on_commit`
+    # and enqueues. It executes nothing and keeps no domain state.
+    # The drain entry is a safety net, not the hot path — `transaction.on_commit`
     # kicks a drain the moment a service writes an outbox row; Beat only catches what the broker
     # dropped.
-    command: ["celery", "-A", "config", "beat", "--loglevel", "info"]
+    command: ["beat"]
     volumes:
       - ./backend:/app
     restart: *restart
@@ -228,9 +233,12 @@ services:
       # host and reaches the same API through the published port. Two URLs, two callers.
       PUBLIC_API_URL: http://localhost:${API_PORT:-8000}
       INTERNAL_API_URL: http://api:8000
+    # Healthy, not started: pages render server-side against the API on first request, so a
+    # frontend that opens its port before the API can answer serves an error page to whoever was
+    # fast enough to click the link `make up` just printed.
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "${FRONTEND_PORT:-4321}:4321"
     volumes:
@@ -238,6 +246,15 @@ services:
       # Anonymous volume so the container's own node_modules survives the bind mount above —
       # otherwise the host's (possibly absent, possibly wrong-arch) directory shadows it.
       - /app/node_modules
+    healthcheck:
+      # /login rather than /: it is the one route that renders without a session, so an
+      # unauthenticated probe reads a real page instead of a redirect. wget is in the alpine base.
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:4321/login"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      # Vite compiles the route on first request, and `make up --wait` should not fail over that.
+      start_period: 90s
     restart: *restart
 
 volumes:

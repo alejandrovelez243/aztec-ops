@@ -1,0 +1,59 @@
+---
+/**
+ * Who owns the work: an initials disk in that person's own hue, plus their
+ * name; or the named absence when nobody owns it.
+ *
+ * The hue is derived from the alias, so one person keeps one colour across
+ * every surface without anything being stored. An unowned project renders an
+ * ámbar "Sin responsable" chip rather than an empty column — an owner nobody
+ * assigned is a staffing fact, not a blank.
+ */
+import { avatarHue, initials } from "../../lib/auth/session";
+
+export interface Props {
+  /** `accounts.User.code`; `null` when the project has no owner. */
+  alias: string | null;
+  /** Display name; `null` together with `alias`. */
+  label: string | null;
+  /** Hides the name and keeps only the disk, for dense rows. */
+  compact?: boolean;
+}
+
+const { alias, label, compact = false } = Astro.props;
+const isOwned = alias !== null && label !== null;
+---
+
+{
+  isOwned ? (
+    <span class="owner" title={label ?? undefined}>
+      <span class="avatar" style={`--avatar-h: ${avatarHue(alias ?? "")}`} aria-hidden="true">
+        {initials(label ?? "")}
+      </span>
+      {!compact && <span class="owner-name small">{label}</span>}
+      {compact && <span class="visually-hidden">{label}</span>}
+    </span>
+  ) : (
+    <span class="chip tone-ambar">Sin responsable</span>
+  )
+}
+
+<style>
+  .owner {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .owner .avatar {
+    width: var(--space-5);
+    height: var(--space-5);
+  }
+
+  .owner-name {
+    color: var(--tinta);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+</style>

@@ -1,0 +1,226 @@
+---
+/**
+ * Spot illustrations for empty and error states, drawn in the world's own
+ * grammar: cards on a wall, hairline strokes, one cobalto accent.
+ *
+ * Inline SVG rather than files in `public/`, for three reasons that all matter
+ * here: the strokes read design tokens, so an illustration can never drift from
+ * the palette; `data-piece` handles let {@link EmptyState} animate the cards
+ * settling with the same spring the rest of the interface uses; and each scene
+ * costs about a line of markup instead of the 30 KB of traced béziers a
+ * generated file carries for the same four rectangles.
+ *
+ * Compositions were art-directed with generated studies, then authored here.
+ * All are decorative: the meaning lives in the copy beside them, so they are
+ * `aria-hidden` and never carry a label.
+ */
+export type Scene = "clear" | "quiet" | "nothing-found" | "lost";
+
+export interface Props {
+  scene: Scene;
+  /** Rendered width in px; the scene keeps its 4:3 ratio. */
+  width?: number;
+}
+
+const { scene, width = 220 } = Astro.props;
+const height = Math.round((width * 3) / 4);
+---
+
+<svg
+  class="illustration"
+  width={width}
+  height={height}
+  viewBox="0 0 240 180"
+  fill="none"
+  aria-hidden="true"
+>
+  {
+    scene === "clear" && (
+      <>
+        {/* Nothing pending: the wall's placeholders are empty and the one real
+            card carries a settled check. */}
+        <rect
+          class="ghost"
+          x="18"
+          y="52"
+          width="74"
+          height="52"
+          rx="10"
+          data-piece="1"
+        />
+        <rect
+          class="ghost"
+          x="148"
+          y="44"
+          width="74"
+          height="52"
+          rx="10"
+          data-piece="2"
+        />
+        <g data-piece="3">
+          <rect
+            class="sheet"
+            x="74"
+            y="78"
+            width="92"
+            height="64"
+            rx="12"
+            transform="rotate(-3 120 110)"
+          />
+          <path
+            class="accent-verde"
+            d="M103 110.5l10.5 10.5 21-22"
+            transform="rotate(-3 120 110)"
+          />
+        </g>
+      </>
+    )
+  }
+
+  {
+    scene === "quiet" && (
+      <>
+        {/* An empty timeline: the thread is drawn, its beads unlit, and only
+            the newest position carries a mark. Absence rendered, not hidden. */}
+        <path class="thread" d="M120 26v128" />
+        {[40, 71, 102, 133].map((cy, index) => (
+          <circle
+            class="bead"
+            cx="120"
+            cy={cy}
+            r="9"
+            data-piece={String(index + 1)}
+          />
+        ))}
+        <circle class="accent-dot" cx="99" cy="40" r="5.5" data-piece="1" />
+      </>
+    )
+  }
+
+  {
+    scene === "nothing-found" && (
+      <>
+        {/* The search passed over the wall and every card came back blank. */}
+        {[
+          [30, 92],
+          [128, 92],
+          [30, 132],
+          [128, 132],
+        ].map(([x, y], index) => (
+          <rect
+            class="ghost dashed"
+            x={x}
+            y={y}
+            width="82"
+            height="32"
+            rx="9"
+            data-piece={String(index + 1)}
+          />
+        ))}
+        <g class="accent-stroke" data-piece="1">
+          <circle cx="112" cy="48" r="27" />
+          <path d="M132 68l19 19" />
+        </g>
+      </>
+    )
+  }
+
+  {
+    scene === "lost" && (
+      <>
+        {/* A tidy wall with one card knocked out of its slot and falling. */}
+        {[
+          [24, 34],
+          [92, 34],
+          [160, 34],
+          [24, 76],
+          [160, 76],
+          [24, 118],
+          [92, 118],
+          [160, 118],
+        ].map(([x, y], index) => (
+          <rect
+            class="ghost"
+            x={x}
+            y={y}
+            width="56"
+            height="30"
+            rx="8"
+            data-piece={String((index % 3) + 1)}
+          />
+        ))}
+        <rect
+          class="accent-fill"
+          x="92"
+          y="76"
+          width="56"
+          height="30"
+          rx="8"
+          transform="rotate(11 120 91)"
+          data-piece="3"
+        />
+      </>
+    )
+  }
+</svg>
+
+<style>
+  .illustration {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    overflow: visible;
+  }
+
+  /* An unfilled placeholder on the wall. */
+  .ghost {
+    fill: none;
+    stroke: var(--hairline);
+    stroke-width: 2;
+  }
+
+  .dashed {
+    stroke-dasharray: 7 6;
+  }
+
+  /* A real card: paper, with the wall's own hairline edge. */
+  .sheet {
+    fill: var(--carta);
+    stroke: var(--tinta-suave);
+    stroke-width: 2;
+  }
+
+  .thread {
+    stroke: var(--hairline);
+    stroke-width: 2;
+  }
+
+  .bead {
+    fill: var(--carta);
+    stroke: var(--hairline);
+    stroke-width: 2;
+  }
+
+  .accent-verde {
+    fill: none;
+    stroke: var(--verde);
+    stroke-width: 5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .accent-dot {
+    fill: var(--cobalto);
+  }
+
+  .accent-stroke {
+    fill: none;
+    stroke: var(--cobalto);
+    stroke-width: 3;
+    stroke-linecap: round;
+  }
+
+  .accent-fill {
+    fill: var(--cobalto);
+  }
+</style>

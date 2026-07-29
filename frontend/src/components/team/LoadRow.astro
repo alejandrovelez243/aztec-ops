@@ -1,0 +1,191 @@
+---
+/**
+ * One person's load, as a card on the wall.
+ *
+ * Presentational: it receives one roster row and renders it. Every value it paints is
+ * addressable through a `data-field` (or `data-chip`) hook, because the island patches this
+ * same DOM after each refetch instead of re-rendering markup in a second language — the
+ * markup lives here, the words and tones live in `./load.ts`, and both sides call the same
+ * functions.
+ *
+ * The whole entry is the prop rather than a narrower bag: this card renders every field
+ * `TeamLoadView` carries, so naming them one by one would restate the schema without
+ * loosening a single dependency.
+ */
+import type { TeamLoadEntry } from "../../lib/api/domain";
+import { avatarHue, initials } from "../../lib/auth/session";
+import {
+  barPercent,
+  chipsFor,
+  formatMeta,
+  formatPoints,
+  formatUtilization,
+  loadTone,
+} from "./load";
+
+export interface Props {
+  /** One row of `GET /api/v1/team/load`, computed from task rows at read time. */
+  entry: TeamLoadEntry;
+}
+
+const { entry } = Astro.props;
+
+const chips = chipsFor(entry);
+---
+
+<li
+  class:list={[
+    "row",
+    "card",
+    loadTone(entry.is_overloaded),
+    { "is-overloaded": entry.is_overloaded },
+  ]}
+  data-alias={entry.alias}
+  data-utilization={String(entry.utilization)}
+>
+  <div class="identity">
+    <span
+      class="avatar"
+      data-field="avatar"
+      style={`--avatar-h: ${avatarHue(entry.alias)}`}
+      aria-hidden="true">{initials(entry.label)}</span
+    >
+    <div class="who">
+      <p class="title name" data-field="label">{entry.label}</p>
+      <p class="small meta" data-field="meta">
+        {formatMeta(entry.role, entry.projects_owned)}
+      </p>
+    </div>
+    <p class="figures">
+      <span class="visually-hidden">Carga:</span>
+      <span class="figure points" data-field="points">
+        {formatPoints(entry.load_points, entry.weekly_capacity_points)}
+      </span>
+      <span class="figure util" data-field="utilization">
+        {formatUtilization(entry.utilization)}
+      </span>
+    </p>
+  </div>
+
+  {/* The figures above say the same thing in words, so the bar is decoration to a reader. */}
+  <div class="track well" aria-hidden="true">
+    <span
+      class="bar"
+      data-field="bar"
+      style={`width: ${barPercent(entry.utilization)}%`}></span>
+  </div>
+
+  <div class="chips">
+    {
+      chips.map((chip) => (
+        <span
+          class:list={["chip", chip.tone]}
+          data-chip={chip.key}
+          hidden={!chip.visible}
+        >
+          {chip.text}
+        </span>
+      ))
+    }
+  </div>
+</li>
+
+<style>
+  .row {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+  }
+
+  .identity {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .who {
+    min-width: 0;
+  }
+
+  .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meta {
+    color: var(--tinta-media);
+  }
+
+  .figures {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    white-space: nowrap;
+  }
+
+  .points {
+    color: var(--tinta-media);
+  }
+
+  .util {
+    color: var(--tone-ink);
+    font-size: var(--text-h2-size);
+    font-weight: var(--text-h2-weight);
+  }
+
+  /*
+   * The track overrides `.well`'s card radius: a 8px bar with a 16px radius reads as a
+   * lozenge rather than as a measure.
+   */
+  .track {
+    height: var(--space-2);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+  }
+
+  .bar {
+    display: block;
+    height: 100%;
+    border-radius: var(--radius-full);
+    background-color: var(--tone-solid);
+    transform-origin: left center;
+    transition:
+      width var(--motion-carta-duration) var(--motion-carta-ease),
+      background-color var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  /* `.chip` is inline-flex, which outranks the UA's `[hidden] { display: none }`. */
+  .chip[hidden] {
+    display: none;
+  }
+
+  /*
+   * The overload marker. `.rail` from base.css sets `box-shadow` outright, which would erase
+   * the card's elevation; composing both here keeps the stripe *and* the paper.
+   */
+  .row.is-overloaded {
+    box-shadow:
+      var(--shadow-resting),
+      inset var(--rail-width) 0 0 0 var(--tone-solid);
+  }
+
+  @media (max-width: 640px) {
+    .identity {
+      grid-template-columns: auto minmax(0, 1fr);
+      row-gap: var(--space-2);
+    }
+
+    .figures {
+      grid-column: 1 / -1;
+      justify-content: space-between;
+    }
+  }
+</style>

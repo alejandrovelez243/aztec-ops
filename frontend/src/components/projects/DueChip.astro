@@ -1,0 +1,24 @@
+---
+/**
+ * A target date read against today: "Venció hace 3 d", "Vence hoy", "Vence en
+ * 4 d", the plain date, or the named absence "Sin fecha".
+ *
+ * The absent arm is ámbar and speaks (Present-Absence Rule): a project with no
+ * deadline is exactly the one that slips unnoticed, and an empty cell would
+ * hide the `NO_TARGET_DATE` signal the engine is already scoring.
+ */
+import { dueState } from "./format";
+
+export interface Props {
+  /** ISO calendar date, or `null` when the project has none. */
+  date: string | null;
+}
+
+const { date } = Astro.props;
+const due = dueState(date);
+const title = "title" in due ? due.title : null;
+---
+
+<span class:list={["chip", due.tone]} title={title} data-due-chip>
+  <span data-field="due-label">{due.label}</span>
+</span>
