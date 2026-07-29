@@ -49,7 +49,8 @@ activity is surfaced as a risk rather than sitting quietly at the bottom of a li
 - Work is classified into three engagement types that behave differently: Proyecto,
   Mantenimiento o recurrente, and Diagnostico.
 - State changes follow configurable workflows, one per engagement type — a project cannot jump
-  to an arbitrary state, only along legal transitions.
+  to an arbitrary state, only along legal transitions. The workflows themselves are shaped from
+  inside the product, by the operations lead, on the day the operation changes.
 - Every state change, reprioritization, blocker raised or resolved, and owner change is written
   to an append-only activity record. Deprioritizing one project to prioritize another is stored
   as a single correlated decision.
@@ -60,15 +61,33 @@ activity is surfaced as a risk rather than sitting quietly at the bottom of a li
 
 ## Capabilities and Constraints
 
-- Create and update projects and tasks; store owner, state, priority, due date, next step,
+- Create, update and remove projects and tasks; store owner, state, priority, due date, next step,
   blockers and notes. Everything the system asks for, it lets you answer in place: the next
   step is written where its absence is reported, and owner and state change from the row that
   shows them.
+- **Removing a task takes it off the board, not out of the record.** A task removed by mistake is
+  put back from the list of removed tasks, and both the removal and the restoration appear on the
+  project's timeline with who did it. Its comments, its impediments and the prerequisites other
+  tasks declared on it survive untouched, and its identifier is never handed to another task —
+  which is what makes the timeline still readable a month later. An impediment raised against a
+  removed task stays open on the project: work is taken off the board by being removed, and a
+  blocker is cleared by being resolved with a reason. The two are different acts and neither
+  stands in for the other.
 - One screen per task, reachable from anywhere the task is named, carrying its comments,
   dependencies and legal moves — the place a conversation about one piece of work lives.
 - Detect projects at risk, blocked, or without a clear next step, through composable rules.
 - Prioritized queue with an explainable score, plus manual override with a reason.
-- Configurable taxonomies and workflows, editable from the Django admin without a deploy.
+- **Workflow authoring is a capability of the product, not an errand in the admin.** On
+  "Flujos de trabajo" the operations lead creates a flow, adds, renames and retires its states,
+  opens, edits and withdraws the moves between them, and binds the engagement types whose projects
+  and tasks follow it. Which lifecycle a given record obeys is decided in the interface too: a
+  project can be put on a specific flow, or handed back to the one its engagement type resolves to.
+  The interface owns this because of principle 4: the operation changes without a deploy, and a
+  lifecycle only reshapeable by somebody holding a Django admin account is configurable by
+  engineering, not by the operation. The admin keeps the same tables and stays a second door.
+  Retiring never deletes: a state somebody is standing on refuses to be retired and says how many
+  records are in the way.
+- Configurable taxonomies, editable from the Django admin without a deploy.
 - Load per person, computed from tasks rather than stored.
 - Real authentication. `POST /auth/token` exchanges username and password for an access/refresh
   pair and also sets the access token as an HttpOnly cookie, because `EventSource` cannot send a
@@ -78,9 +97,13 @@ activity is surfaced as a risk rather than sitting quietly at the bottom of a li
   `POST /auth/token/refresh`; signing out clears the cookie and the local session.
 - **Permissions are two levels, not a matrix.** This is a collaborative tool: any authenticated
   member may act on any project or task — transition it, raise or resolve a blocker, add a note.
-  "Lo mío" is a filter, never a permission. Exactly three actions need the ops-lead capability,
-  because all three overrule the engine: setting a priority override, clearing it, and rebuilding
-  the whole portfolio's scores. Recomputing a single project is not gated. The API reports
+  "Lo mío" is a filter, never a permission. Two kinds of action need the ops-lead capability. Three
+  overrule the engine: setting a priority override, clearing it, and rebuilding the whole
+  portfolio's scores. The rest shape the operation everyone else works inside: every write on
+  "Flujos de trabajo", because reshaping a lifecycle changes how everybody's work behaves, and
+  every one of them is recorded in the activity trail. Reading the workflows is open to any
+  member — reading the shape of the operation is not the same permission as deciding it.
+  Recomputing a single project is not gated. The API reports
   `is_ops_lead` at sign-in, so the interface renders those controls from the server's answer and
   never by decoding the token; the server refuses them regardless of what the UI shows.
 - Direct manipulation on the board: work moves between states by dragging its card — always
@@ -123,7 +146,9 @@ typography are available or assumed, and none may be invented.
 3. **Decisions leave a trace.** Anything that changes what the team does is recorded with actor
    and reason, and is readable later as a timeline.
 4. **The operation can change without a deploy.** New states, transitions and taxonomies are
-   data, so the interface must render whatever the database defines rather than a fixed set.
+   data, so the interface must render whatever the database defines rather than a fixed set — and,
+   for the lifecycles the operation lives by, let it author them too. Configuration reachable only
+   through an engineering tool is not configurable by the people running the week.
 5. **Triage over browsing.** The default view is ordered by what needs a decision today, not
    alphabetically or by recency.
 6. **Every action gets an answer.** Hover, press, in-flight, success and failure are all
