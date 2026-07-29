@@ -1,0 +1,9 @@
+# node_modules is installed inside the image for the image's own platform; copying the host's
+# would ship arm64 binaries into an amd64 build (or the reverse).
+
+node_modules/
+dist/
+.astro/
+.env
+.git/
+.DS_Store

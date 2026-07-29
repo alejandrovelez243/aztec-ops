@@ -1,180 +1,229 @@
-<!-- SEED: established with the user before implementation; re-run /impeccable document once there's code to capture the actual tokens and components. -->
 ---
 name: Aztec Ops
-description: A flight control room for a project portfolio — every project answers GO or NO GO, and shows why.
+description: The operations wall rebuilt as software — white cards with real weight and spring physics on a warm paper surface, one cobalt accent, priority read as color before it is read as text.
 ---
 
 # Design System: Aztec Ops
 
 ## Overview
 
-**Creative North Star: "The Flight Control Room"**
+**Creative North Star: "El Muro" — the operations wall, rebuilt as software**
 
-A mission control room exists to turn many simultaneous, partially-broken situations into one
-decision, out loud, on a schedule. A flight director polls each console position and each answers
-one word. Behind the answer sits a wall of instruments that make the word defensible, and a
-chronology on the side that records who said what and when. That is exactly the job of this
-product, so the interface is built as a control room rather than as a dashboard.
+Before software, an operations lead ran the week on a wall: index cards, magnets, colored tape
+zones, a marker. That wall had three properties this product inherits wholesale. Every item was
+a physical object you could pick up — moving work felt like moving matter, and when a colleague
+moved a card you saw the hand do it. Position and color carried meaning before any text was
+read. And the wall itself was calm — paper, daylight, one wall color — so the drama came from
+the work, never from the surface.
 
-The register is institutional, not nostalgic. This is not a retro tribute: no CRT curvature, no
-scanline filters, no photoreal brushed metal. What carries over is the grammar — a fixed status
-matrix where position means more than color, one-word verdicts, a countdown clock as the primary
-expression of time, and a chronology that only ever grows. The surface is a console body: a
-desaturated green-grey painted panel, with numeric readouts sunk into darker inset plates.
+The register is a modern, light, friendly product surface with the wall's physics grafted in:
+white cards with true elevation on a warm paper ground, one confident cobalt accent, and a
+motion system in which cards have mass — they lift, tilt, glide and settle as if a hand moved
+them. Live updates over SSE are the signature: when someone else moves a card, the card visibly
+travels across your screen with an attribution chip riding on it. The product's multiplayer
+nature is shown, never implied.
 
-Density is the point. This screen is read for six minutes each morning by someone who already
-knows the layout, so it optimizes for the second visit, not the first. Twenty-two rows fit
-without scrolling on a laptop. Nothing is centered, nothing is padded to feel calm, and there
-is no sidebar taking a fifth of the width to hold four links.
+Density serves comprehension, not compression. The old one-glance matrix is replaced by
+navigable surfaces — an overview to land on, a ranked queue to decide with, a board to move
+work on, a detail to act in — with explicit wayfinding: sidebar, breadcrumbs, back. A tool
+people want to open every morning never makes them feel lost.
 
-**Key Characteristics:**
-- Full-bleed status matrix; fixed column positions across every row
-- One-word verdict per project, with its reasoning on the same reading line
-- Countdown clocks, not date strings
-- Unlit states are drawn, never blank
-- Square plates, hairline rules, zero border radius, zero drop shadows
-- Color is a legal code with three meanings, never decoration
+**Key characteristics:**
+- Cards as physical objects: real elevation, spring motion, drag with weight and tilt
+- Priority legible as color before text — washed card headers and rails, driven by taxonomy data
+- One brand accent (Cobalto) that never means a state; states keep their own semantic set
+- Warm paper ground, white surfaces, generous radius, soft layered shadows
+- Persistent shell: collapsible sidebar, topbar with breadcrumbs and back
+- Every action answers: hover, press, in-flight, toast, live flash
+- Desktop-first and fully responsive; drag always has a keyboard/menu twin
 
 ## Colors
 
-A painted console body with instruments sunk into it: desaturated green-greys carry every
-surface, and the only saturated color on screen is a state declaration.
+A daylit room: warm paper walls, white paper cards, ink text. Exactly one brand accent, and a
+semantic set that belongs to the data.
 
-### Primary
-- **Console Green-Grey** (`#2E3532`): the panel body. The default ground of every surface, chosen
-  over black so the screen survives a daylit office across a whole workday.
-- **Plotboard Black** (`#141917`): inset plates holding numeric readouts — scores, countdown
-  clocks, load figures. Recessed regions only; never a page background.
+### Ground & surfaces
+- **Papel** `#F4F3EF` — page ground. Warm, never lab-grey.
+- **Carta** `#FFFFFF` — cards and raised surfaces.
+- **Pozo** `#ECEAE4` — sunken wells: board column bodies, input fills, code chips.
+- **Hairline** `#E4E2DB` — 1px borders and dividers.
 
-### Secondary
-- **Signal Green** (`#63A17A`): GO. Nominal state, live figures, a transition that is legal.
-- **Caution Amber** (`#D9A441`): attention required, but not today. Risk flags below the
-  intervention threshold, a clock inside its final week, a stale project.
+### Ink
+- **Tinta** `#1B1D22` — primary text.
+- **Tinta media** `#565B64` — secondary text, descriptions, meta.
+- **Tinta suave** `#8A8F99` — tertiary: hints, placeholders, disabled.
 
-### Tertiary
-- **No-Go Red** (`#C4483C`): a human must intervene today. Blocked, overdue, NO GO.
+### Brand
+- **Cobalto** `#2545DE` — the interface's own voice: primary actions, active navigation, links,
+  focus rings, selection, drop targets. Hover **Cobalto profundo** `#1B33AE`; background wash
+  **Cobalto papel** `#EAEDFC`.
 
-### Neutral
-- **Legend Ivory** (`#E8E4D9`): primary text and engraved legends. Warm, never pure white, so
-  long reading sessions do not glare.
-- **Legend Dim** (`#8A928D`): secondary text, units, column headers, and — critically — the
-  unlit state of every status legend.
-- **Rule Grey** (`#414A46`): hairline dividers, plate edges, table rules.
+### Semantic set (data-facing)
+Each semantic color ships in three tones — **ink** (text-grade, AA on its wash), **solid**
+(dots, rails, small marks), **wash** (chip and band backgrounds). Solids listed; exact ink/wash
+tones are established by the build under contrast checks.
 
-### Named Rules
+- **Rojo** `#D8433B` (wash `#FBEAE8`) — urgent priority, blocked, overdue, critical risk.
+- **Ámbar** `#DE8F13` (wash `#FBF2DF`) — high priority, warning-level risk, stale, named absence.
+- **Verde** `#2E9E5B` (wash `#E7F5EC`) — low priority, done category, healthy, resolved.
+- **Cielo** `#3B87DC` (wash `#E9F1FB`) — medium priority, in-progress category, informational.
+- **Piedra** `#6E747E` (wash `#EFEFEB`) — todo category, neutral, not-yet-measured.
 
-**The Reserved Red Rule.** No-Go Red appears only where a person must act today. If more than a
-quarter of rows show red, the risk thresholds are miscalibrated — the fix is the threshold, never
-the palette. Red is never used for a brand accent, a hover, or a heading.
+### Named rules
 
-**The Ghost Legend Rule.** A status legend that is not firing still renders, in Legend Dim, in its
-fixed position. Empty cells are forbidden. The operator must be able to see what could be wrong,
-not only what is wrong. This is the visual form of the product's principle that absence is a signal.
+**The One-Voice Rule.** Cobalto is the interface speaking — act here, you are here, this is
+selected. It is never a state, a priority, or a chart category. Cobalto on a status chip means
+the chip is wrong.
 
-**The Three Meanings Rule.** Green, amber and red mean exactly one thing each and are never
-borrowed for a fourth purpose. Any other distinction is made with position, weight or rule, not
-with a new hue.
+**The Data-Owns-Color Rule.** Priority, state and risk colors render from what the API and
+taxonomies return, mapped onto the semantic set. Code never hardcodes "urgent is red"; fixtures
+do. A new state arriving from the admin renders correctly with zero frontend changes.
+
+**The Wash Rule.** Semantic color covers area (card headers, zone bands, chips) only as a wash
+with same-hue ink text. Solid semantic fills are reserved for small marks: dots, rails, badges.
+A screen of solid red cards is an alarm, not a tool.
+
+**The Present-Absence Rule.** Missing data — no due date, no next step, no recent activity —
+renders as an Ámbar-washed chip naming the absence ("sin fecha", "sin próximo paso"), never as
+an empty cell. The old world's Ghost Legend, translated: absence stays a first-class signal.
 
 ## Typography
 
-**Display / Legend Font:** Archivo Narrow (with Arial Narrow, sans-serif)
-**Body Font:** Archivo (with system-ui, sans-serif)
-**Numeric / Mono Font:** JetBrains Mono (with ui-monospace, monospace)
+**UI / Display:** Schibsted Grotesk (fallback system-ui, sans-serif)
+**Numeric / Code:** Spline Sans Mono (fallback ui-monospace, monospace)
 
-**Character:** Archivo Narrow set in letterspaced caps reads as an engraved instrument plate —
-compressed, functional, machine-cut, with no editorial warmth. Archivo carries the prose that a
-condensed face would punish: summaries, blocker descriptions, timeline entries. JetBrains Mono
-owns everything that must align in a column or tick: scores, countdown clocks, load figures,
-timestamps.
+Schibsted Grotesk was commissioned for a news group's morning products: compact, high-clarity,
+slightly sharp — pragmatic warmth rather than startup-neutral. One family carries display
+figures through body copy, so the surface speaks with one voice. Spline Sans Mono owns whatever
+must align or count: scores, ranks, codes, dates, deltas.
 
 ### Hierarchy
-- **Display** (JetBrains Mono, 600, 40–56px, 1.0): the score and the countdown clock. The only
-  large type on the surface. Tabular figures always.
-- **Headline** (Archivo Narrow, 600, 20px, 1.2, +0.06em, uppercase): board titles and section
-  plates.
-- **Title** (Archivo, 600, 15px, 1.3): project names and task titles.
-- **Body** (Archivo, 400, 14px, 1.5, max 70ch): summaries, blocker descriptions, reasons,
-  timeline entries.
-- **Label** (Archivo Narrow, 600, 11px, 1.1, +0.1em, uppercase): every column header, status
-  legend, verdict, and control label.
-- **Figure** (JetBrains Mono, 500, 13px, tabular): in-table numerics, task counts, dates.
+- **Display** — Schibsted 700, 40–48px / 1.05, −0.02em: KPI figures, the score dial.
+- **H1** — Schibsted 700, 26–30px / 1.15: page titles.
+- **H2** — Schibsted 600, 19px / 1.25: section and card-group titles.
+- **Title** — Schibsted 600, 15.5px / 1.35: card titles, project names.
+- **Body** — Schibsted 400, 14.5px / 1.55, max 68ch: descriptions, reasons, notes.
+- **Small** — Schibsted 400–500, 13px / 1.45: meta lines, timestamps.
+- **Label** — Schibsted 600, 11.5px / 1.2, +0.05em, uppercase: column headers, chips, nav groups.
+- **Figure** — Spline Sans Mono 500, 13px, tabular: table numerics, codes, deltas.
 
-### Named Rules
+### Named rules
 
-**The Engraved Legend Rule.** Anything that names a state, a column, or a control is Archivo
-Narrow in uppercase with +0.1em tracking. Anything a human wrote — a summary, a reason, a note —
-is Archivo in sentence case. Mixing the two registers inside one string is the tell of a
-carelessly built screen.
+**The Tabular Figures Rule** (kept from the old world). Every numeral in a repeated position
+sets `font-variant-numeric: tabular-nums`. Misaligned number columns are a defect.
 
-**The Tabular Figures Rule.** Every numeral in a repeated position uses `font-variant-numeric:
-tabular-nums`. Columns of numbers that do not align are a defect, not a preference.
+**The One-Voice, Two-Hands Rule.** Schibsted speaks for the interface and its humans; the mono
+appears only where alignment or count is the point — scores, ranks, codes, timestamps. Mono
+prose is forbidden, and so is grotesk where a column of figures must align.
 
 ## Layout
 
-A full-bleed status board with no sidebar. Horizontal space belongs to the data; navigation is a
-single top plate, one row tall, holding the mission clock and the board switcher.
+Persistent shell. Sidebar 264px — Carta surface, hairline edge — collapsible to a 72px icon
+rail with tooltips; below 1024px it becomes an overlay drawer. Topbar 64px: back button and
+breadcrumbs on the left; live-connection indicator, search and the operator's avatar menu on
+the right. Content region on Papel, max-width 1360px, 24–32px gutters, on an 8px spacing base
+(4px permitted inside chips).
 
-The board is a fixed column matrix, and column position is load-bearing: the same information sits
-at the same x-coordinate on every row, so a practiced operator scans coordinates rather than
-reading labels. Column order on the command center: code, project and client, owner position, the
-status legend block (six fixed cells), the countdown clock, the score, the verdict.
+Surfaces:
+- **/login** — operator selection, centered roster cards. The guard redirects here without a session.
+- **/ (Resumen)** — KPI row, "Decidir hoy" top of the queue, owner load, latest activity.
+- **/prioridades** — the ranked queue: rank plate, delta, project, owner, risk strip, due chip,
+  score; the breakdown opens one gesture away, never a page away. The product's heart.
+- **/proyectos** — card grid ↔ table toggle, filters as a pill bar.
+- **/proyectos/{code}** — detail: header card with state and legal transitions, score with
+  breakdown, tabs (tareas / bloqueos / notas / actividad).
+- **/tablero** — board by workflow state; columns are data, one engagement type at a time.
+- **/equipo** — load per person, bars plus task lists.
+- **/actividad** — portfolio-wide feed.
 
-Density target: 22 rows visible without scrolling at 1440×900. Row height 40px, with an expanded
-state that pushes the score breakdown into the same row rather than a modal or a drawer — the
-reasoning must be readable in the same reading line as the number it explains.
-
-Spacing rhythm is a strict 4px base, used in 4 / 8 / 12 / 16 / 24 / 32 steps. More space above a
-heading plate than below it. No section is separated by more than 32px; whitespace is not the
-device this system uses to create hierarchy — rules and plate edges are.
-
-Below 1024px the matrix drops its lower-priority columns in a fixed order (client, then owner,
-then countdown) rather than reflowing into cards. Below 640px each project becomes a stacked plate
-that preserves the legend block intact, because the legend block is the one thing that must never
-change shape.
+Responsive: ≥1440 full; 1024–1439 sidebar rail; 768–1023 drawer, tables shed tertiary columns;
+<768 rows become stacked cards, the board becomes horizontally snap-scrolled columns, detail
+tabs stack. Hit targets ≥40px on touch. Nothing disappears without a way back in: every dropped
+column reappears inside the card form.
 
 ## Elevation & Depth
 
-No drop shadows anywhere. Depth is tonal and inset: instruments are recessed into the console, not
-floating above it. A numeric plate is Plotboard Black with a 1px Rule Grey border and a 1px
-lighter top edge, which reads as a milled recess without a single blur.
+Cards are paper above the wall: real, soft, layered shadows, with hairline edges keeping them
+crisp on a light ground.
 
-**The Inset-Not-Raised Rule.** Surfaces recess; they never lift. Any `box-shadow` that casts
-outward is foreign to this world. Focus and hover are expressed by a border or a background shift,
-never by elevation.
+- **Resting** — `0 1px 2px rgba(27,29,34,.05), 0 4px 12px rgba(27,29,34,.06)` + hairline.
+- **Raised** (hover, open menus) — `0 2px 6px rgba(27,29,34,.07), 0 12px 28px rgba(27,29,34,.10)`.
+- **Lifted** (dragged card, dialogs) — `0 8px 18px rgba(27,29,34,.12), 0 32px 64px rgba(27,29,34,.16)`.
+
+**The Physical Shadow Rule.** Shadow means exactly one thing: distance from the wall, and
+therefore closeness to your hand. Resting → raised → lifted tracks interaction. A decorative
+shadow on something that cannot be touched is foreign here.
 
 ## Shapes
 
-Zero radius, everywhere, without exception. Every plate, button, cell, input and legend is a
-square-cornered rectangle, because this world is made of cut and bolted panels.
+- Cards and panels 16px radius; controls and inputs 10px; small chips 8px; pills and avatars full.
+- Hairline borders 1px. Selection and drop targets 1.5–2px Cobalto; drop slots dash.
+- A 3px rounded left rail on a row or card may carry a semantic color — the marker stripe on
+  the wall card. Rails mark, washes cover, solids dot: three sizes of semantic presence.
 
-Borders are 1px hairlines in Rule Grey. Emphasis is achieved by a 2px left edge in a state color
-on the row itself — the mark a controller makes against a line — not by a heavier box.
+## Motion — "La mano invisible"
 
-**The Square Plate Rule.** A rounded corner anywhere in this interface means the component was
-imported from another world and has not been rebuilt yet.
+The wall's physics, implemented. Objects have mass; the interface never teleports. FLIP powers
+every reorder; springs power every settle; the Web Animations API and Astro view transitions
+carry both.
+
+### Springs
+- **firme** — stiffness 420, damping 34 (~200ms settle): chips, buttons, small elements.
+- **carta** — stiffness 320, damping 26, slight overshoot (~450ms): card lift, travel, drop.
+- **panel** — stiffness 240, damping 30 (~500ms): drawers, accordions, page-level shifts.
+
+### The card lifecycle (drag)
+1. **Grab** — cursor closes; the card scales to 1.03, tilts up to ±3° toward pointer velocity,
+   shadow goes lifted; the board announces legality.
+2. **Carry** — the card follows with spring lag (it trails the hand slightly: mass). Legal
+   columns open a Cobalto dashed drop slot that grows to card height; illegal columns dim to
+   55% and show a lock chip naming why ("sin transición desde En progreso").
+3. **Drop** — one overshoot, then settle; neighbors make room via FLIP on `carta`; the state
+   chip snaps to its new color; a toast confirms; undo appears when the reverse transition is legal.
+4. **Reject** — an illegal drop or API error springs the card back along its path with one
+   ±4px shake; the toast names the domain rule that refused it.
+
+### The remote move (SSE) — signature moment
+When someone else changes state or rank: the affected card pulses a Cobalto ring, lifts,
+travels to its new position along a slight arc on `carta`, and settles; a small attribution
+chip ("Valentina → En progreso") rides with it and fades. In a table view the same event is a
+FLIP reorder plus a wash flash on the moved row. The tool is visibly multiplayer.
+
+### Feedback inventory — every interactive element answers
+- **Hover:** raise (cards) or wash (rows, nav) within 120ms.
+- **Press:** scale 0.97 on `firme`.
+- **Focus:** 2px Cobalto ring, 2px offset, always visible for keyboard users.
+- **In-flight:** the pressed control hosts an inline spinner and disables; surfaces never
+  freeze silently.
+- **Result:** toast bottom-right, springs in; failures state the domain rule in words.
+- **Numbers:** count up/down over 300ms in mono; deltas pop a ▲/▼ chip on `firme`.
+- **Loading:** skeletons in the exact geometry of the loaded state, shimmering. Whole-page
+  spinners are forbidden.
+- **Navigation:** view transitions — a project card morphs into its detail header (shared
+  element); the rest crossfades. Back always reverses the morph.
+
+### Reduced motion
+Under `prefers-reduced-motion`: travel and morphs become 120ms crossfades, count-ups render
+final values, springs collapse to opacity — color and toast feedback stay whole.
 
 ## Do's and Don'ts
 
-### Do:
-- **Do** render every status legend in its fixed position at all times, lit in a state color or
-  unlit in Legend Dim (The Ghost Legend Rule).
-- **Do** express time until a deadline as a countdown that crosses into overrun in the same
-  format, and give a project with no deadline a named condition rather than an empty cell.
-- **Do** keep the score and its reason breakdown on the same reading line; a number whose
-  justification lives in a modal has failed this system's purpose.
-- **Do** render the workflow's illegal transitions as visibly present and visibly dead, so the
-  operator learns the shape of the workflow by looking at it.
-- **Do** use `tabular-nums` on every numeral in a repeated position.
-- **Do** snap state changes instantly. An annunciator lamp does not fade in.
+### Do
+- **Do** give every state change a visible cause and a visible effect: motion + toast + a line
+  in the activity trail.
+- **Do** render taxonomy colors from data through the semantic set (Data-Owns-Color).
+- **Do** keep a score and its breakdown one gesture apart — expand in place, never a page away.
+- **Do** name absences with chips: "sin fecha", "sin próximo paso" (Present-Absence Rule).
+- **Do** keep a back path from every screen; breadcrumbs on every level below the top.
+- **Do** ship the keyboard/touch twin of every drag: a "Mover a…" menu on the card.
+- **Do** keep `tabular-nums` on every repeated numeral.
 
-### Don't:
-- **Don't** use a border radius, a drop shadow, or a gradient.
-- **Don't** introduce a fourth semantic color, or reuse green, amber or red for anything other
-  than their single assigned meaning.
-- **Don't** build a card grid, a donut chart, a sparkline strip, or a sidebar navigation. This
-  system's answer to "show the portfolio" is a matrix.
-- **Don't** simulate CRT scanlines, screen curvature, phosphor bloom, brushed metal, rivets, or
-  any photoreal console texture. The grammar carries over; the nostalgia does not.
-- **Don't** collapse dense content into cards on small screens at the cost of the legend block.
-- **Don't** center body text or pad rows for calm. This screen is read fast by someone who has
-  read it a hundred times.
+### Don't
+- **Don't** use Cobalto for a state, a priority, or a chart series (One-Voice Rule).
+- **Don't** fill areas with solid semantic color; wash + same-hue ink (Wash Rule).
+- **Don't** teleport anything the user can see move, and don't animate what carries no meaning.
+- **Don't** build modal walls: expansions happen in place; modals are for confirmation and
+  destructive intent only.
+- **Don't** reintroduce the control-room grammar: no zero-radius plates, no engraved-caps
+  matrices, no countdown-clock typography as decoration, no dark console surfaces.
+- **Don't** leave an action unanswered: silent success is a bug, silent failure is a defect.

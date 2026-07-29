@@ -1,0 +1,657 @@
+---
+import type { Blocker } from "../../lib/api/domain";
+import StaleBanner from "./StaleBanner.astro";
+import LoadingBlock from "./LoadingBlock.astro";
+
+/**
+ * The blockers panel: open impediments with kind, age, owner and a Resolve control;
+ * resolved ones listed dimmed beneath (docs/EVENTS.md §4, `blocker.raised` /
+ * `blocker.resolved`).
+ *
+ * This is an interactive region with a colocated script — a de-facto island placed
+ * in `components/project/` because the project-detail island set is fixed. The
+ * script owns every mutation: `postBlockerResolve` behind a required-resolution
+ * dialog, `blocker.resolved` patches (the button is pending until the envelope
+ * arrives, never optimistic), and a `getProject` resync on `blocker.raised` /
+ * `stream.reset` / `conflicting_state` — the raised envelope carries the blocker's
+ * business `code` but not the numeric id the resolve route needs, so a refetch is
+ * the honest reconciliation there.
+ *
+ * Empty is a sentence, not a blank region: "No open blockers."
+ *
+ * The styles are global (`blocker-*`): rows rebuilt at runtime by
+ * `document.createElement` would not carry Astro's scoped-style attribute.
+ */
+export interface Props {
+  /** Open first, then resolved, newest first — the API's own ordering. */
+  blockers: readonly Blocker[];
+  projectCode: string;
+  /** `updated_at` of the project fetch that rendered the panel; the stale-patch guard. */
+  updatedAt: string;
+}
+
+const { blockers, projectCode, updatedAt } = Astro.props;
+
+const open = blockers.filter(
+  (b) => b.resolved_at === null || b.resolved_at === undefined,
+);
+const resolved = blockers.filter(
+  (b) => b.resolved_at !== null && b.resolved_at !== undefined,
+);
+
+/** `2026-07-28T10:02:41Z` → `2026-07-28 10:02 UTC`. */
+function formatInstant(iso: string): string {
+  return `${iso.replace("T", " ").slice(0, 16)} UTC`;
+}
+---
+
+<section
+  class="blocker-panel"
+  data-blocker-panel
+  data-project-code={projectCode}
+  data-updated-at={updatedAt}
+  aria-label="Blockers"
+>
+  <StaleBanner />
+  <LoadingBlock rows={2} />
+
+  <div data-blocker-content>
+    <ul class="blocker-list" data-open-blockers>
+      {
+        open.map((blocker) => (
+          <li
+            class="blocker-row"
+            data-blocker-code={blocker.code}
+            data-blocker-id={blocker.id}
+          >
+            <span class="label blocker-kind">{blocker.kind}</span>
+            <span class="figure blocker-age">{blocker.age_days}d</span>
+            <span class="body-text blocker-owner">
+              {blocker.owner !== null && blocker.owner !== undefined
+                ? blocker.owner.label
+                : "UNASSIGNED"}
+            </span>
+            <span class="body-text blocker-description">
+              {blocker.description}
+            </span>
+            {blocker.task_code !== null && blocker.task_code !== undefined && (
+              <span class="figure blocker-task">{blocker.task_code}</span>
+            )}
+            <button type="button" class="label blocker-resolve" data-resolve>
+              RESOLVE
+            </button>
+          </li>
+        ))
+      }
+    </ul>
+    <p class="label blocker-empty" data-empty-open hidden={open.length > 0}>
+      No open blockers.
+    </p>
+
+    <div
+      class="blocker-resolved-section"
+      data-resolved-section
+      hidden={resolved.length === 0}
+    >
+      <span class="label blocker-resolved-heading">RESOLVED</span>
+      <ul class="blocker-list" data-resolved-blockers>
+        {
+          resolved.map((blocker) => (
+            <li
+              class="blocker-row blocker-is-resolved"
+              data-blocker-code={blocker.code}
+            >
+              <span class="label blocker-kind">{blocker.kind}</span>
+              <span class="figure blocker-age">
+                {blocker.resolved_at !== null &&
+                blocker.resolved_at !== undefined
+                  ? formatInstant(blocker.resolved_at)
+                  : ""}
+              </span>
+              <span class="body-text blocker-description">
+                {blocker.description}
+              </span>
+              <span class="body-text blocker-resolution" lang="es">
+                {blocker.resolution_reason}
+              </span>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </div>
+
+  <p class="label blocker-panel-error" data-panel-error hidden role="alert"></p>
+
+  <dialog
+    class="blocker-dialog"
+    data-resolve-dialog
+    aria-label="Resolve blocker"
+  >
+    <form data-resolve-form>
+      <label class="label" for="resolution-input"
+        >HOW WAS IT CLEARED — REQUIRED</label
+      >
+      <textarea
+        id="resolution-input"
+        data-resolution-input
+        rows="4"
+        required
+        lang="es"></textarea>
+      <div class="blocker-dialog-actions">
+        <button type="submit" class="label" data-resolution-submit disabled>
+          CONFIRM RESOLUTION
+        </button>
+        <button type="button" class="label" data-resolution-cancel
+          >CANCEL</button
+        >
+      </div>
+      <p
+        class="label blocker-dialog-error"
+        data-dialog-error
+        hidden
+        role="alert"
+      >
+      </p>
+    </form>
+  </dialog>
+</section>
+
+<script>
+  import { getProject, postBlockerResolve } from "../../lib/api/client";
+  import type { Blocker } from "../../lib/api/domain";
+  import { onReset, onStatus, retry, subscribe } from "../../lib/stream/store";
+
+  const panel = document.querySelector<HTMLElement>("[data-blocker-panel]");
+  if (panel !== null) {
+    const root = panel;
+    const projectCode = root.dataset.projectCode ?? "";
+    const openList = root.querySelector<HTMLUListElement>(
+      "[data-open-blockers]",
+    );
+    const emptyNote = root.querySelector<HTMLElement>("[data-empty-open]");
+    const resolvedSection = root.querySelector<HTMLElement>(
+      "[data-resolved-section]",
+    );
+    const resolvedList = root.querySelector<HTMLUListElement>(
+      "[data-resolved-blockers]",
+    );
+    const content = root.querySelector<HTMLElement>("[data-blocker-content]");
+    const loading = root.querySelector<HTMLElement>("[data-loading]");
+    const staleBanner = root.querySelector<HTMLElement>("[data-stale-banner]");
+    const staleRetry =
+      root.querySelector<HTMLButtonElement>("[data-stale-retry]");
+    const panelError = root.querySelector<HTMLElement>("[data-panel-error]");
+    const dialog = root.querySelector<HTMLDialogElement>(
+      "[data-resolve-dialog]",
+    );
+    const form = root.querySelector<HTMLFormElement>("[data-resolve-form]");
+    const input = root.querySelector<HTMLTextAreaElement>(
+      "[data-resolution-input]",
+    );
+    const submit = root.querySelector<HTMLButtonElement>(
+      "[data-resolution-submit]",
+    );
+    const cancel = root.querySelector<HTMLButtonElement>(
+      "[data-resolution-cancel]",
+    );
+    const dialogError = root.querySelector<HTMLElement>("[data-dialog-error]");
+
+    const cleanups: Array<() => void> = [];
+
+    /** Open while a resolve POST is in flight; the envelope is what closes it. */
+    let pendingResolve: {
+      code: string;
+      button: HTMLButtonElement | null;
+    } | null = null;
+    /** Blocker the open dialog is resolving; null while the dialog is closed. */
+    let dialogTarget: { id: number; code: string } | null = null;
+
+    /**
+     * The stale-patch guard: an envelope older than the rendered `updated_at` is a
+     * redelivery, not news (docs/standards/PATTERNS_FRONTEND.md §6).
+     */
+    function isNewer(occurredAt: string): boolean {
+      const current = root.dataset.updatedAt ?? "";
+      if (current === "") return true;
+      return Date.parse(occurredAt) > Date.parse(current);
+    }
+
+    function markUpdatedAt(occurredAt: string): void {
+      const current = root.dataset.updatedAt ?? "";
+      if (current === "" || Date.parse(occurredAt) > Date.parse(current)) {
+        root.dataset.updatedAt = occurredAt;
+      }
+    }
+
+    function showError(target: HTMLElement | null, message: string): void {
+      if (target === null) return;
+      target.textContent = message;
+      target.hidden = false;
+    }
+
+    function hideError(target: HTMLElement | null): void {
+      if (target === null) return;
+      target.hidden = true;
+      target.textContent = "";
+    }
+
+    function setLoading(on: boolean): void {
+      if (loading !== null) loading.hidden = !on;
+      if (content !== null) content.hidden = on;
+      root.setAttribute("aria-busy", on ? "true" : "false");
+    }
+
+    function formatInstant(iso: string): string {
+      return `${iso.replace("T", " ").slice(0, 16)} UTC`;
+    }
+
+    function makeOpenRow(blocker: Blocker): HTMLLIElement {
+      const row = document.createElement("li");
+      row.className = "blocker-row";
+      row.dataset.blockerCode = blocker.code;
+      row.dataset.blockerId = String(blocker.id);
+
+      const kind = document.createElement("span");
+      kind.className = "label blocker-kind";
+      kind.textContent = blocker.kind;
+      const age = document.createElement("span");
+      age.className = "figure blocker-age";
+      age.textContent = `${blocker.age_days}d`;
+      const owner = document.createElement("span");
+      owner.className = "body-text blocker-owner";
+      owner.textContent = blocker.owner?.label ?? "UNASSIGNED";
+      const description = document.createElement("span");
+      description.className = "body-text blocker-description";
+      description.textContent = blocker.description;
+      row.append(kind, age, owner, description);
+      if (blocker.task_code !== null && blocker.task_code !== undefined) {
+        const task = document.createElement("span");
+        task.className = "figure blocker-task";
+        task.textContent = blocker.task_code;
+        row.append(task);
+      }
+      const resolve = document.createElement("button");
+      resolve.type = "button";
+      resolve.className = "label blocker-resolve";
+      resolve.dataset.resolve = "";
+      resolve.textContent = "RESOLVE";
+      row.append(resolve);
+      return row;
+    }
+
+    function makeResolvedRow(blocker: Blocker): HTMLLIElement {
+      const row = document.createElement("li");
+      row.className = "blocker-row blocker-is-resolved";
+      row.dataset.blockerCode = blocker.code;
+      const kind = document.createElement("span");
+      kind.className = "label blocker-kind";
+      kind.textContent = blocker.kind;
+      const age = document.createElement("span");
+      age.className = "figure blocker-age";
+      age.textContent =
+        blocker.resolved_at !== null && blocker.resolved_at !== undefined
+          ? formatInstant(blocker.resolved_at)
+          : "";
+      const description = document.createElement("span");
+      description.className = "body-text blocker-description";
+      description.textContent = blocker.description;
+      const resolution = document.createElement("span");
+      resolution.className = "body-text blocker-resolution";
+      resolution.lang = "es";
+      resolution.textContent = blocker.resolution_reason;
+      row.append(kind, age, description, resolution);
+      return row;
+    }
+
+    function syncEmptyAndResolved(
+      openCount: number,
+      resolvedCount: number,
+    ): void {
+      if (emptyNote !== null) emptyNote.hidden = openCount > 0;
+      if (resolvedSection !== null)
+        resolvedSection.hidden = resolvedCount === 0;
+    }
+
+    /**
+     * Moves one open row to the resolved list. Runs from the `blocker.resolved`
+     * envelope — the button stays pending until this arrives, and nothing is
+     * painted from the POST alone (docs/standards/PATTERNS_FRONTEND.md §8).
+     */
+    function markResolved(
+      code: string,
+      resolution: string,
+      resolvedAt: string,
+      openForDays: number,
+    ): void {
+      if (openList === null || resolvedList === null) return;
+      const row = openList.querySelector<HTMLLIElement>(
+        `[data-blocker-code="${code}"]`,
+      );
+      const resolvedRow = makeResolvedRow({
+        id: 0,
+        code,
+        kind: row?.querySelector(".blocker-kind")?.textContent ?? "",
+        description:
+          row?.querySelector(".blocker-description")?.textContent ?? "",
+        owner: null,
+        raised_at: "",
+        resolved_at: resolvedAt,
+        resolution_reason: resolution,
+        age_days: openForDays,
+        task_code: null,
+      });
+      if (row !== null) row.remove();
+      resolvedList.prepend(resolvedRow);
+      syncEmptyAndResolved(
+        openList.querySelectorAll("[data-blocker-code]").length,
+        resolvedList.querySelectorAll("[data-blocker-code]").length,
+      );
+      if (pendingResolve !== null && pendingResolve.code === code) {
+        if (pendingResolve.button !== null) {
+          pendingResolve.button.dataset.pending = "false";
+        }
+        pendingResolve = null;
+      }
+    }
+
+    /**
+     * Refetches the project and rebuilds both lists — the reconciliation for
+     * `blocker.raised` (whose payload lacks the numeric id the resolve route
+     * needs), for `stream.reset`, and for a `conflicting_state` answer.
+     */
+    async function resync(): Promise<void> {
+      setLoading(true);
+      hideError(panelError);
+      const res = await getProject(projectCode);
+      setLoading(false);
+      if (!res.ok) {
+        showError(panelError, "The blocker list could not be refreshed.");
+        return;
+      }
+      const blockers = res.data.blockers;
+      const open = blockers.filter(
+        (b) => b.resolved_at === null || b.resolved_at === undefined,
+      );
+      const resolved = blockers.filter(
+        (b) => b.resolved_at !== null && b.resolved_at !== undefined,
+      );
+      if (openList !== null) {
+        openList.replaceChildren(...open.map(makeOpenRow));
+      }
+      if (resolvedList !== null) {
+        resolvedList.replaceChildren(...resolved.map(makeResolvedRow));
+      }
+      syncEmptyAndResolved(open.length, resolved.length);
+      markUpdatedAt(res.data.updated_at);
+      pendingResolve = null;
+    }
+
+    // --- Resolve dialog --------------------------------------------------------
+
+    // One delegated listener survives list rebuilds; per-row listeners would not.
+    root.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLButtonElement)) return;
+      if (target.dataset.resolve === undefined) return;
+      const row = target.closest("[data-blocker-code]");
+      if (!(row instanceof HTMLElement)) return;
+      const code = row.dataset.blockerCode ?? "";
+      const id = Number(row.dataset.blockerId);
+      if (code === "" || Number.isNaN(id)) return;
+      dialogTarget = { id, code };
+      hideError(dialogError);
+      if (input !== null) input.value = "";
+      if (submit !== null) submit.disabled = true;
+      dialog?.showModal();
+      input?.focus();
+    });
+
+    input?.addEventListener("input", () => {
+      if (submit !== null) submit.disabled = input.value.trim() === "";
+    });
+
+    cancel?.addEventListener("click", () => {
+      dialogTarget = null;
+      dialog?.close();
+    });
+
+    form?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (dialogTarget === null || input === null) return;
+      const resolution = input.value.trim();
+      if (resolution === "") return;
+      const target = dialogTarget;
+      const button = root.querySelector<HTMLButtonElement>(
+        `[data-blocker-code="${target.code}"] [data-resolve]`,
+      );
+      if (button !== null) {
+        button.disabled = true;
+        button.dataset.pending = "true";
+      }
+      pendingResolve = { code: target.code, button };
+      dialogTarget = null;
+      dialog?.close();
+      void runResolve(target.id, resolution, button);
+    });
+
+    async function runResolve(
+      id: number,
+      resolution: string,
+      button: HTMLButtonElement | null,
+    ): Promise<void> {
+      const res = await postBlockerResolve(id, { resolution });
+      if (res.ok) {
+        // Not painted: the row moves when blocker.resolved arrives on the stream.
+        return;
+      }
+      if (button !== null) {
+        button.disabled = false;
+        button.dataset.pending = "false";
+      }
+      pendingResolve = null;
+      if (
+        res.error.kind === "unknown" &&
+        res.error.code === "conflicting_state"
+      ) {
+        // Already resolved elsewhere — the local list is wrong, not merely stale.
+        await resync();
+        return;
+      }
+      showError(
+        panelError,
+        res.error.kind === "network"
+          ? "The API is unreachable — the blocker is still open."
+          : "The resolution was rejected — the blocker is still open.",
+      );
+    }
+
+    // --- Stream subscriptions ---------------------------------------------------
+
+    cleanups.push(
+      subscribe("blocker.resolved", (envelope) => {
+        if (envelope.payload["project_code"] !== projectCode) return;
+        if (!isNewer(envelope.occurred_at)) return;
+        const resolution = envelope.payload["resolution"];
+        const resolvedAt = envelope.payload["resolved_at"];
+        const openForDays = envelope.payload["open_for_days"];
+        markResolved(
+          envelope.entity.id,
+          typeof resolution === "string" ? resolution : "",
+          typeof resolvedAt === "string" ? resolvedAt : envelope.occurred_at,
+          typeof openForDays === "number" ? openForDays : 0,
+        );
+        markUpdatedAt(envelope.occurred_at);
+      }),
+      subscribe("blocker.raised", (envelope) => {
+        if (envelope.payload["project_code"] !== projectCode) return;
+        if (!isNewer(envelope.occurred_at)) return;
+        // The payload has no numeric id, so the row could not offer RESOLVE;
+        // resync renders it fully actionable.
+        void resync();
+      }),
+      onReset(() => {
+        void resync();
+      }),
+      onStatus((status) => {
+        if (staleBanner !== null)
+          staleBanner.hidden = status !== "disconnected";
+      }),
+    );
+
+    staleRetry?.addEventListener("click", () => {
+      retry();
+    });
+
+    document.addEventListener(
+      "astro:before-swap",
+      () => cleanups.forEach((off) => off()),
+      { once: true },
+    );
+  }
+</script>
+
+<style is:global>
+  .blocker-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .blocker-row {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    min-height: var(--size-row);
+    padding: var(--space-1) 0;
+    border-bottom: var(--border-width) solid var(--color-rule);
+  }
+
+  .blocker-kind {
+    color: var(--color-caution);
+    flex-shrink: 0;
+  }
+
+  .blocker-age {
+    color: var(--color-legend);
+  }
+
+  .blocker-owner {
+    color: var(--color-legend-dim);
+  }
+
+  .blocker-description {
+    color: var(--color-legend);
+    flex-basis: 100%;
+  }
+
+  .blocker-task {
+    color: var(--color-legend-dim);
+  }
+
+  .blocker-resolve {
+    margin-left: auto;
+    padding: var(--space-1) var(--space-2);
+    background: var(--color-plate);
+    border: var(--border-width) solid var(--color-rule);
+    color: var(--color-legend);
+  }
+
+  .blocker-resolve:hover:not(:disabled) {
+    background: var(--color-panel);
+    border-color: var(--color-plate-edge);
+  }
+
+  .blocker-resolve[data-pending="true"] {
+    color: var(--color-legend-dim);
+  }
+
+  .blocker-empty {
+    padding: var(--space-2) 0;
+    color: var(--color-legend-dim);
+  }
+
+  .blocker-empty[hidden] {
+    display: none;
+  }
+
+  .blocker-resolved-section {
+    margin-top: var(--space-3);
+  }
+
+  .blocker-resolved-section[hidden] {
+    display: none;
+  }
+
+  .blocker-resolved-heading {
+    color: var(--color-legend-dim);
+  }
+
+  .blocker-is-resolved .blocker-kind,
+  .blocker-is-resolved .blocker-age,
+  .blocker-is-resolved .blocker-description,
+  .blocker-is-resolved .blocker-resolution {
+    color: var(--color-legend-dim);
+  }
+
+  .blocker-panel-error {
+    color: var(--color-nogo);
+    padding: var(--space-2) 0;
+  }
+
+  .blocker-panel-error[hidden] {
+    display: none;
+  }
+
+  .blocker-dialog {
+    background: var(--color-panel);
+    color: var(--color-legend);
+    border: var(--border-width) solid var(--color-rule);
+    border-top-color: var(--color-plate-edge);
+    padding: var(--space-4);
+    max-width: 52ch;
+  }
+
+  .blocker-dialog::backdrop {
+    background: var(--color-plate);
+  }
+
+  .blocker-dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .blocker-dialog textarea {
+    width: 100%;
+    background: var(--color-plate);
+    border: var(--border-width) solid var(--color-rule);
+    color: var(--color-legend);
+    padding: var(--space-2);
+    resize: vertical;
+  }
+
+  .blocker-dialog-actions {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .blocker-dialog-actions button {
+    padding: var(--space-1) var(--space-2);
+    background: var(--color-plate);
+    border: var(--border-width) solid var(--color-rule);
+    color: var(--color-legend);
+  }
+
+  .blocker-dialog-actions button:disabled {
+    color: var(--color-legend-dim);
+  }
+
+  .blocker-dialog-error {
+    color: var(--color-nogo);
+  }
+
+  .blocker-dialog-error[hidden] {
+    display: none;
+  }
+</style>

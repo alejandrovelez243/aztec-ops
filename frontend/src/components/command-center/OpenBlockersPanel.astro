@@ -1,0 +1,187 @@
+---
+import type { ViewState } from "../../lib/view-state";
+import { assertNever } from "../../lib/view-state";
+
+/**
+ * One line of the open-blockers panel, derived from the queue payload: a project carrying at
+ * least one open blocker, with the reason its `BLOCKED` risk flag raised.
+ */
+export interface BlockerLine {
+  code: string;
+  name: string;
+  openBlockers: number;
+  /** Reason of the project's `BLOCKED` flag, or `null` when the count stands without one. */
+  reason: string | null;
+}
+
+/**
+ * Open blockers panel: every project on the board with unresolved blockers, worst count first.
+ *
+ * Red is reserved here by right — an open blocker is the "a human must intervene today"
+ * condition (DESIGN.md, The Reserved Red Rule), so the count plate reads in No-Go Red while the
+ * reason stays in the body register. All four view states render as real markup; the panel is
+ * server-rendered and re-rendered on navigation, never patched live.
+ */
+export interface Props {
+  state: ViewState<readonly BlockerLine[]>;
+}
+
+const { state } = Astro.props;
+---
+
+<section
+  class="panel"
+  data-panel="open-blockers"
+  aria-labelledby="open-blockers-title"
+>
+  <h2 class="headline panel-title" id="open-blockers-title">Open blockers</h2>
+  {
+    (() => {
+      switch (state.kind) {
+        case "loading":
+          return (
+            <div class="panel-loading" aria-busy="true">
+              {[0, 1, 2].map((row) => (
+                <div
+                  class="skeleton-row"
+                  aria-hidden="true"
+                  data-skeleton={row}
+                />
+              ))}
+              <span class="visually-hidden">Loading open blockers…</span>
+            </div>
+          );
+        case "empty":
+          return <p class="body-text panel-note">{state.message}</p>;
+        case "error":
+          return (
+            <div class="panel-note" role="alert">
+              <p class="body-text">
+                The queue could not be fetched ({state.code}).
+              </p>
+              <a class="label retry" href="/">
+                Retry
+              </a>
+            </div>
+          );
+        case "ready":
+        case "disconnected":
+          return (
+            <>
+              {state.kind === "disconnected" && (
+                <p class="label stale-marker" role="status">
+                  Disconnected — figures may be stale
+                  {state.lastEventAt !== null &&
+                    ` · last event ${state.lastEventAt}`}
+                </p>
+              )}
+              <ul class="line-list">
+                {state.data.map((line) => (
+                  <li class="line">
+                    <a class="figure line-code" href={`/projects/${line.code}`}>
+                      {line.code}
+                    </a>
+                    <span class="plate figure line-count">
+                      {line.openBlockers}
+                    </span>
+                    <span class="line-body">
+                      <span class="title line-name">{line.name}</span>
+                      {line.reason !== null && (
+                        <span class="body-text line-reason">{line.reason}</span>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          );
+        default:
+          return assertNever(state);
+      }
+    })()
+  }
+</section>
+
+<style>
+  .panel {
+    border: 1px solid var(--color-rule);
+    padding: var(--space-3);
+  }
+
+  .panel-title {
+    margin: 0 0 var(--space-3);
+    color: var(--color-legend);
+  }
+
+  .panel-note {
+    color: var(--color-legend-dim);
+    margin: 0;
+  }
+
+  .retry {
+    display: inline-block;
+    margin-top: var(--space-2);
+    color: var(--color-legend);
+    border: 1px solid var(--color-rule);
+    padding: var(--space-1) var(--space-2);
+    text-decoration: none;
+  }
+
+  .retry:hover {
+    background: var(--color-plate);
+  }
+
+  .stale-marker {
+    color: var(--color-caution);
+    margin: 0 0 var(--space-2);
+  }
+
+  .line-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .line {
+    display: grid;
+    grid-template-columns: 9ch 5ch 1fr;
+    gap: var(--space-2);
+    align-items: baseline;
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--color-rule);
+  }
+
+  .line-code {
+    color: var(--color-legend);
+    text-decoration: none;
+  }
+
+  .line-code:hover {
+    text-decoration: underline;
+  }
+
+  .line-count {
+    color: var(--color-nogo);
+    text-align: right;
+    padding: 0 var(--space-1);
+  }
+
+  .line-name {
+    display: block;
+    color: var(--color-legend);
+  }
+
+  .line-reason {
+    display: block;
+    color: var(--color-legend-dim);
+    font-size: 13px;
+  }
+
+  .skeleton-row {
+    height: 40px;
+    border-bottom: 1px solid var(--color-rule);
+    background: var(--color-plate);
+  }
+</style>

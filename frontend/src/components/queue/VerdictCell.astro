@@ -1,0 +1,55 @@
+---
+/**
+ * The verdict of one matrix row: one word, mapped from the API's derived health payload.
+ *
+ * The browser never computes health — `HealthRef.code` is the backend's structural verdict
+ * vocabulary (`HEALTHY | AT_RISK | BLOCKED`), and this component only maps it onto the board's
+ * two words: `BLOCKED` answers NO GO, everything else answers GO. The colour still carries the
+ * full health gradation through `data-health`, so a GO under caution amber reads as
+ * "go, with attention" without inventing a fourth meaning (DESIGN.md, The Three Meanings Rule).
+ */
+export interface Props {
+  /** `QueueItemView.health.code` — structural, safe to branch on (`docs/API.md` §1.6). */
+  healthCode: string;
+  /** Marks the cell as patchable by the queue island; screen readers announce the new verdict. */
+  live?: boolean;
+}
+
+const { healthCode, live = false } = Astro.props;
+
+const verdict = healthCode === "BLOCKED" ? "NO GO" : "GO";
+---
+
+<td
+  class="verdict-cell"
+  data-verdict
+  data-health={healthCode}
+  aria-live={live ? "polite" : undefined}
+>
+  <span class="label">{verdict}</span>
+</td>
+
+<!-- Global: the queue island rebuilds this markup client-side on stream reset, and Astro's
+     scoped styles would not match DOM it creates. -->
+<style is:global>
+  .verdict-cell {
+    padding: var(--space-1) var(--space-3);
+    white-space: nowrap;
+  }
+
+  .verdict-cell .label {
+    font-size: 13px;
+  }
+
+  .verdict-cell[data-health="HEALTHY"] .label {
+    color: var(--color-go);
+  }
+
+  .verdict-cell[data-health="AT_RISK"] .label {
+    color: var(--color-caution);
+  }
+
+  .verdict-cell[data-health="BLOCKED"] .label {
+    color: var(--color-nogo);
+  }
+</style>

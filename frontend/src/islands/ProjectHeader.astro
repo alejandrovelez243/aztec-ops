@@ -1,0 +1,608 @@
+---
+import type {
+  HealthRef,
+  Override,
+  RiskFlag,
+  Score,
+  StateRef,
+} from "../lib/api/domain";
+import { formatCountdown } from "../lib/format/countdown";
+import StateChip from "../components/project/StateChip.astro";
+import ScorePlate from "../components/project/ScorePlate.astro";
+import RiskFlagList from "../components/project/RiskFlagList.astro";
+import StaleBanner from "../components/project/StaleBanner.astro";
+
+/**
+ * The project header: identity, state, countdown and score instruments for
+ * `/projects/{code}` — live, above the fold, so it is one of the three islands of
+ * the detail view.
+ *
+ * First paint is entirely server-rendered from the page's props; the colocated
+ * script never refetches on mount. It subscribes to `project.state_changed`,
+ * `project.updated`, `project.priority.recalculated` and `project.risk.changed`,
+ * filtered by `entity.id`, and patches fields in place — an envelope whose
+ * `occurred_at` is not newer than the rendered `data-updated-at` is discarded
+ * (docs/standards/PATTERNS_FRONTEND.md §6). On `stream.reset` it refetches the
+ * project once and repaints everything, because local state can no longer be
+ * trusted (docs/API.md §3.5).
+ *
+ * Payload gaps the patch works around, both reported: `project.state_changed`
+ * carries state codes, not the new label/colour (the chip falls back to the code
+ * until the next render), and `project.risk.changed` carries the health code, not
+ * its label (same fallback).
+ */
+export interface Props {
+  code: string;
+  name: string;
+  /** Spanish operator-written summary; null means none was recorded. */
+  summary: string | null;
+  clientLabel: string;
+  ownerLabel: string | null;
+  stageLabel: string | null;
+  engagementLabel: string;
+  state: StateRef;
+  health: HealthRef;
+  targetDate: string | null;
+  nextStep: string | null;
+  isArchived: boolean;
+  score: Score | null;
+  override: Override | null;
+  riskFlags: readonly RiskFlag[];
+  /** `updated_at` of the fetch that rendered the header; the stale-patch guard. */
+  updatedAt: string;
+}
+
+const {
+  code,
+  name,
+  summary,
+  clientLabel,
+  ownerLabel,
+  stageLabel,
+  engagementLabel,
+  state,
+  health,
+  targetDate,
+  nextStep,
+  isArchived,
+  score,
+  override,
+  riskFlags,
+  updatedAt,
+} = Astro.props;
+
+const countdown = formatCountdown(targetDate);
+---
+
+<header
+  class="project-header"
+  data-project-header
+  data-project-code={code}
+  data-updated-at={updatedAt}
+>
+  <StaleBanner />
+  <p class="label syncing" data-syncing hidden>SYNCING</p>
+
+  <div class="identity">
+    <span class="figure code">{code}</span>
+    <StateChip
+      code={state.code}
+      label={state.label}
+      category={state.category}
+      color={state.color ?? null}
+    />
+    <span class="label health" data-health={health.code} data-health-chip>
+      {health.label}
+    </span>
+    {isArchived && <span class="label archived">ARCHIVED</span>}
+  </div>
+
+  <h1 class="title name" data-project-name>{name}</h1>
+  {
+    summary !== null && (
+      <p class="body-text summary" lang="es">
+        {summary}
+      </p>
+    )
+  }
+
+  <dl class="meta">
+    <div class="meta-item">
+      <dt class="label">CLIENT</dt>
+      <dd class="body-text">{clientLabel}</dd>
+    </div>
+    <div class="meta-item">
+      <dt class="label">OWNER</dt>
+      <dd class="body-text">{ownerLabel ?? "UNASSIGNED"}</dd>
+    </div>
+    <div class="meta-item">
+      <dt class="label">STAGE</dt>
+      <dd class="body-text" lang="es">{stageLabel ?? "—"}</dd>
+    </div>
+    <div class="meta-item">
+      <dt class="label">ENGAGEMENT</dt>
+      <dd class="body-text" lang="es">{engagementLabel}</dd>
+    </div>
+    <div class="meta-item next-step">
+      <dt class="label">NEXT STEP</dt>
+      <dd
+        class="body-text"
+        data-next-step
+        lang={nextStep !== null ? "es" : undefined}
+      >
+        {nextStep ?? "NO NEXT STEP"}
+      </dd>
+    </div>
+  </dl>
+
+  <div class="instruments">
+    <section class="plate countdown-plate" aria-label="Target countdown">
+      <span class="label">TARGET</span>
+      <span
+        class="figure countdown-value"
+        data-countdown
+        data-tone={countdown.tone}
+      >
+        {countdown.text}
+      </span>
+      <span class="figure target-date" data-target-date>{targetDate ?? ""}</span
+      >
+    </section>
+    <ScorePlate score={score} override={override} />
+  </div>
+
+  <section class="risks" aria-label="Risk flags">
+    <span class="label">RISK</span>
+    <RiskFlagList flags={riskFlags} />
+  </section>
+</header>
+
+<script>
+  import { getProject } from "../lib/api/client";
+  import type {
+    ProjectDetail,
+    RiskFlag,
+    ScoreBreakdownEntry,
+  } from "../lib/api/domain";
+  import { formatCountdown } from "../lib/format/countdown";
+  import { formatScore } from "../lib/format/score";
+  import {
+    onReset,
+    onStatus,
+    retry,
+    subscribe,
+    type Envelope,
+  } from "../lib/stream/store";
+
+  const header = document.querySelector<HTMLElement>("[data-project-header]");
+  if (header !== null) {
+    const root = header;
+    const projectCode = root.dataset.projectCode ?? "";
+    const syncing = root.querySelector<HTMLElement>("[data-syncing]");
+    const staleBanner = root.querySelector<HTMLElement>("[data-stale-banner]");
+    const staleRetry =
+      root.querySelector<HTMLButtonElement>("[data-stale-retry]");
+    const cleanups: Array<() => void> = [];
+
+    /**
+     * The stale-patch guard: an envelope that is not newer than the rendered
+     * `updated_at` is a redelivery, not news.
+     */
+    function isNewer(occurredAt: string): boolean {
+      const current = root.dataset.updatedAt ?? "";
+      if (current === "") return true;
+      return Date.parse(occurredAt) > Date.parse(current);
+    }
+
+    function markUpdatedAt(occurredAt: string): void {
+      const current = root.dataset.updatedAt ?? "";
+      if (current === "" || Date.parse(occurredAt) > Date.parse(current)) {
+        root.dataset.updatedAt = occurredAt;
+      }
+    }
+
+    function forProject(envelope: Envelope): boolean {
+      return (
+        envelope.entity.id === projectCode && isNewer(envelope.occurred_at)
+      );
+    }
+
+    // --- Field-level patches ---------------------------------------------------
+
+    /**
+     * Patches the state chip from a `project.state_changed` payload. The envelope
+     * carries codes and categories only — the new label and colour are not on the
+     * bus — so the chip falls back to rendering the code, and the full label
+     * returns on the next render or reset resync. Never translate a code here.
+     */
+    function patchState(toCode: string, toCategory: string): void {
+      const chip = root.querySelector<HTMLElement>("[data-state-chip]");
+      if (chip === null) return;
+      chip.dataset.category = toCategory;
+      chip.dataset.code = toCode;
+      chip.textContent = toCode;
+      chip.style.removeProperty("--state-color");
+    }
+
+    function patchHealth(healthCode: string): void {
+      const chip = root.querySelector<HTMLElement>("[data-health-chip]");
+      if (chip === null) return;
+      chip.dataset.health = healthCode;
+      chip.textContent = healthCode;
+    }
+
+    function patchNextStep(value: unknown): void {
+      const el = root.querySelector<HTMLElement>("[data-next-step]");
+      if (el === null) return;
+      if (typeof value === "string" && value !== "") {
+        el.textContent = value;
+        el.lang = "es";
+      } else {
+        el.textContent = "NO NEXT STEP";
+        el.removeAttribute("lang");
+      }
+    }
+
+    function patchCountdown(targetDate: unknown): void {
+      const el = root.querySelector<HTMLElement>("[data-countdown]");
+      const dateEl = root.querySelector<HTMLElement>("[data-target-date]");
+      const date = typeof targetDate === "string" ? targetDate : null;
+      const next = formatCountdown(date);
+      if (el !== null) {
+        el.textContent = next.text;
+        el.dataset.tone = next.tone;
+      }
+      if (dateEl !== null) dateEl.textContent = date ?? "";
+    }
+
+    /** Narrows an unparsed payload member to a plain object; arrays are not records. */
+    function isRecord(value: unknown): value is Record<string, unknown> {
+      return (
+        typeof value === "object" && value !== null && !Array.isArray(value)
+      );
+    }
+
+    function rebuildBreakdown(entries: unknown): void {
+      const body = root.querySelector<HTMLElement>("[data-score-breakdown]");
+      if (body === null || !Array.isArray(entries)) return;
+      const rows: HTMLTableRowElement[] = [];
+      for (const entry of entries) {
+        if (!isRecord(entry)) continue;
+        const signal: ScoreBreakdownEntry = {
+          code: typeof entry["code"] === "string" ? entry["code"] : "",
+          raw: typeof entry["raw"] === "number" ? entry["raw"] : 0,
+          weight: typeof entry["weight"] === "number" ? entry["weight"] : 0,
+          contribution:
+            typeof entry["contribution"] === "number"
+              ? entry["contribution"]
+              : 0,
+          reason: typeof entry["reason"] === "string" ? entry["reason"] : "",
+        };
+        const tr = document.createElement("tr");
+        const code = document.createElement("td");
+        code.className = "figure";
+        code.dataset.signalCode = "";
+        code.textContent = signal.code;
+        const weight = document.createElement("td");
+        weight.className = "figure";
+        weight.textContent = String(signal.weight);
+        const contribution = document.createElement("td");
+        contribution.className = "figure";
+        contribution.textContent = formatScore(signal.contribution);
+        const reason = document.createElement("td");
+        reason.className = "body-text";
+        reason.textContent = signal.reason;
+        tr.append(code, weight, contribution, reason);
+        rows.push(tr);
+      }
+      body.replaceChildren(...rows);
+    }
+
+    function patchScore(
+      value: unknown,
+      policyVersion: unknown,
+      breakdown: unknown,
+    ): void {
+      const valueEl = root.querySelector<HTMLElement>("[data-score-value]");
+      if (valueEl !== null && typeof value === "number") {
+        valueEl.textContent = formatScore(value);
+        valueEl.classList.remove("score-not-scored");
+      }
+      const policyEl = root.querySelector<HTMLElement>("[data-score-policy]");
+      if (policyEl !== null && typeof policyVersion === "string") {
+        policyEl.textContent = policyVersion;
+      }
+      rebuildBreakdown(breakdown);
+    }
+
+    function rebuildFlags(flags: unknown): void {
+      const container = root.querySelector<HTMLElement>("[data-risk-flags]");
+      if (container === null || !Array.isArray(flags)) return;
+      const parsed: RiskFlag[] = [];
+      for (const flag of flags) {
+        if (!isRecord(flag)) continue;
+        if (typeof flag["code"] !== "string") continue;
+        parsed.push({
+          code: flag["code"],
+          severity:
+            typeof flag["severity"] === "string" ? flag["severity"] : "",
+          reason: typeof flag["reason"] === "string" ? flag["reason"] : "",
+        });
+      }
+      if (parsed.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "label risk-flags-empty";
+        empty.dataset.riskFlags = "";
+        empty.textContent = "NO RISK FLAGS RAISED";
+        container.replaceWith(empty);
+        return;
+      }
+      const list = document.createElement("ul");
+      list.className = "risk-flags";
+      list.dataset.riskFlags = "";
+      for (const flag of parsed) {
+        const item = document.createElement("li");
+        item.className = "risk-flag";
+        item.dataset.severity = flag.severity;
+        const code = document.createElement("span");
+        code.className = "label risk-flag-code";
+        code.textContent = flag.code;
+        const reason = document.createElement("span");
+        reason.className = "body-text risk-flag-reason";
+        reason.textContent = flag.reason;
+        item.append(code, reason);
+        list.append(item);
+      }
+      container.replaceWith(list);
+    }
+
+    // --- Subscriptions ---------------------------------------------------------
+
+    cleanups.push(
+      subscribe("project.state_changed", (envelope) => {
+        if (!forProject(envelope)) return;
+        const to = envelope.payload["to"];
+        const toCategory = envelope.payload["to_category"];
+        if (typeof to === "string" && typeof toCategory === "string") {
+          patchState(to, toCategory);
+        }
+        markUpdatedAt(envelope.occurred_at);
+      }),
+      subscribe("project.updated", (envelope) => {
+        if (!forProject(envelope)) return;
+        const changes = envelope.payload["changes"];
+        if (!isRecord(changes)) return;
+        const nextStep = changes["next_step"];
+        if (isRecord(nextStep)) {
+          patchNextStep(nextStep["to"]);
+        }
+        const targetDate = changes["target_date"];
+        if (isRecord(targetDate)) {
+          patchCountdown(targetDate["to"]);
+        }
+        markUpdatedAt(envelope.occurred_at);
+      }),
+      subscribe("project.priority.recalculated", (envelope) => {
+        if (!forProject(envelope)) return;
+        patchScore(
+          envelope.payload["value"],
+          envelope.payload["policy_version"],
+          envelope.payload["breakdown"],
+        );
+        markUpdatedAt(envelope.occurred_at);
+      }),
+      subscribe("project.risk.changed", (envelope) => {
+        if (!forProject(envelope)) return;
+        rebuildFlags(envelope.payload["flags"]);
+        const health = envelope.payload["health"];
+        if (typeof health === "string") patchHealth(health);
+        markUpdatedAt(envelope.occurred_at);
+      }),
+      onReset(() => {
+        void resync();
+      }),
+      onStatus((status) => {
+        if (staleBanner !== null)
+          staleBanner.hidden = status !== "disconnected";
+      }),
+    );
+
+    staleRetry?.addEventListener("click", () => {
+      retry();
+    });
+
+    /**
+     * `stream.reset` recovery: local state can no longer be trusted, so the whole
+     * header repaints from one fresh read — this is also where the state label
+     * and colour come back after code-only patches (docs/API.md §3.5).
+     */
+    async function resync(): Promise<void> {
+      if (syncing !== null) syncing.hidden = false;
+      root.setAttribute("aria-busy", "true");
+      const res = await getProject(projectCode);
+      if (syncing !== null) syncing.hidden = true;
+      root.setAttribute("aria-busy", "false");
+      if (!res.ok) return;
+      applyDetail(res.data);
+    }
+
+    function applyDetail(detail: ProjectDetail): void {
+      const chip = root.querySelector<HTMLElement>("[data-state-chip]");
+      if (chip !== null) {
+        chip.dataset.category = detail.state.category;
+        chip.dataset.code = detail.state.code;
+        chip.textContent = detail.state.label;
+        if (detail.state.color !== null && detail.state.color !== undefined) {
+          chip.style.setProperty("--state-color", detail.state.color);
+        } else {
+          chip.style.removeProperty("--state-color");
+        }
+      }
+      const healthChip = root.querySelector<HTMLElement>("[data-health-chip]");
+      if (healthChip !== null) {
+        healthChip.dataset.health = detail.health.code;
+        healthChip.textContent = detail.health.label;
+      }
+      const nameEl = root.querySelector<HTMLElement>("[data-project-name]");
+      if (nameEl !== null) nameEl.textContent = detail.name;
+      patchNextStep(detail.next_step ?? null);
+      patchCountdown(detail.target_date ?? null);
+      if (detail.score !== null && detail.score !== undefined) {
+        patchScore(
+          detail.score.value,
+          detail.score.policy_version,
+          detail.score.breakdown,
+        );
+      }
+      rebuildFlags(detail.risk_flags);
+      markUpdatedAt(detail.updated_at);
+    }
+
+    document.addEventListener(
+      "astro:before-swap",
+      () => cleanups.forEach((off) => off()),
+      { once: true },
+    );
+  }
+</script>
+
+<style>
+  .project-header {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .syncing {
+    color: var(--color-legend-dim);
+  }
+
+  .syncing[hidden] {
+    display: none;
+  }
+
+  .identity {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .code {
+    color: var(--color-legend-dim);
+  }
+
+  .health {
+    color: var(--color-legend-dim);
+    border-left: 2px solid var(--color-rule);
+    padding: var(--space-1) var(--space-2);
+  }
+
+  .health[data-health="HEALTHY"] {
+    color: var(--color-go);
+    border-left-color: var(--color-go);
+  }
+
+  .health[data-health="AT_RISK"] {
+    color: var(--color-caution);
+    border-left-color: var(--color-caution);
+  }
+
+  .health[data-health="BLOCKED"] {
+    color: var(--color-nogo);
+    border-left-color: var(--color-nogo);
+  }
+
+  .archived {
+    color: var(--color-legend-dim);
+    border: var(--border-width) solid var(--color-rule);
+    padding: var(--space-1) var(--space-2);
+  }
+
+  .name {
+    font-size: var(--text-headline-size);
+  }
+
+  .summary {
+    color: var(--color-legend-dim);
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    padding: var(--space-2) 0;
+    border-top: var(--border-width) solid var(--color-rule);
+    border-bottom: var(--border-width) solid var(--color-rule);
+  }
+
+  .meta-item {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .meta-item .label {
+    color: var(--color-legend-dim);
+  }
+
+  .next-step {
+    flex-basis: 100%;
+  }
+
+  .instruments {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+    gap: var(--space-3);
+    align-items: start;
+  }
+
+  @media (max-width: 1024px) {
+    .instruments {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .countdown-plate {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+  }
+
+  .countdown-value {
+    font-size: var(--text-display-size);
+    font-weight: var(--text-display-weight);
+    line-height: var(--text-display-line);
+  }
+
+  .countdown-value[data-tone="go"] {
+    color: var(--color-go);
+  }
+
+  .countdown-value[data-tone="caution"] {
+    color: var(--color-caution);
+  }
+
+  .countdown-value[data-tone="nogo"] {
+    color: var(--color-nogo);
+  }
+
+  .countdown-value[data-tone="dim"] {
+    color: var(--color-legend-dim);
+  }
+
+  .target-date {
+    color: var(--color-legend-dim);
+  }
+
+  .risks {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .risks > .label {
+    color: var(--color-legend-dim);
+  }
+</style>

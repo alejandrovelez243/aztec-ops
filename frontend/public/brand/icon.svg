@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Aztec Ops">
+  <!-- One annunciator lamp cell: four engraved cells, exactly one lit.
+       Hand-authored rather than generated — the mark has to stay square-cornered and
+       legible at 16px, and both of those are geometry problems, not drawing problems.
+       Colors are DESIGN.md tokens. The unlit cells are drawn, never blank. -->
+  <rect x="0" y="0" width="32" height="32" fill="#2E3532"/>
+  <rect x="0.5" y="0.5" width="31" height="31" fill="none" stroke="#414A46" stroke-width="1"/>
+  <rect x="5"  y="5"  width="10" height="10" fill="#63A17A"/>
+  <rect x="17" y="5"  width="10" height="10" fill="#414A46"/>
+  <rect x="5"  y="17" width="10" height="10" fill="#414A46"/>
+  <rect x="17" y="17" width="10" height="10" fill="#414A46"/>
+</svg>

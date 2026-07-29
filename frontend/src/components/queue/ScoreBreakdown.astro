@@ -1,0 +1,133 @@
+---
+import type { ScoreBreakdownEntry } from "../../lib/api/domain";
+import { formatScore } from "../../lib/format/score";
+
+/**
+ * The full argument behind a score: every signal with its name, weight, contribution and the
+ * human-readable reason, on the same reading line as the number it defends (DESIGN.md — a
+ * score never appears as a naked number).
+ *
+ * Entries render in the API's own order (sorted by `contribution` descending server-side);
+ * the UI does not re-sort, so a policy emitting ties keeps a stable presentation.
+ * `modifiers` — the multiplicative adjustments applied after the signals — render verbatim
+ * as `code ×value`, because their codes are policy data, not a frontend vocabulary.
+ *
+ * The island rebuilds this list from `project.priority.recalculated` payloads; the markup
+ * here and the island's DOM builder must stay in lockstep.
+ */
+export interface Props {
+  entries: readonly ScoreBreakdownEntry[];
+  /** Multiplicative modifiers keyed by code (`ScoreView.modifiers`); absent keys mean none. */
+  modifiers?: Record<string, number>;
+  /** `ScoreView.policy_version`, a label such as `v1`, shown so a score stays auditable. */
+  policyVersion: string;
+}
+
+const { entries, modifiers = {}, policyVersion } = Astro.props;
+
+const modifierList = Object.entries(modifiers);
+---
+
+<div class="breakdown" data-breakdown>
+  <span class="label breakdown-title">Score breakdown · {policyVersion}</span>
+  {
+    entries.length === 0 ? (
+      <p class="body-text breakdown-empty">
+        No computed breakdown on record for this score.
+      </p>
+    ) : (
+      <ol class="breakdown-list">
+        {entries.map((entry) => (
+          <li class="breakdown-entry" data-signal={entry.code}>
+            <span class="label signal-code">{entry.code}</span>
+            <span class="figure signal-weight">w {entry.weight}</span>
+            <span class="figure signal-contribution">
+              {formatScore(entry.contribution)}
+            </span>
+            <span class="body-text signal-reason">{entry.reason}</span>
+          </li>
+        ))}
+      </ol>
+    )
+  }
+  {
+    modifierList.length > 0 && (
+      <p class="breakdown-modifiers">
+        <span class="label">Modifiers</span>
+        {modifierList.map(([code, value]) => (
+          <span class="figure modifier">
+            {code} ×{value}
+          </span>
+        ))}
+      </p>
+    )
+  }
+</div>
+
+<!-- Global: the queue island rebuilds this markup client-side on stream reset, and Astro's
+     scoped styles would not match DOM it creates. -->
+<style is:global>
+  .breakdown {
+    padding: var(--space-2) var(--space-3);
+    border-top: 1px solid var(--color-rule);
+  }
+
+  .breakdown-title {
+    display: block;
+    color: var(--color-legend-dim);
+    margin-bottom: var(--space-2);
+  }
+
+  .breakdown-empty {
+    color: var(--color-legend-dim);
+    margin: 0;
+  }
+
+  .breakdown-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .breakdown-entry {
+    display: grid;
+    grid-template-columns: 18ch 6ch 6ch 1fr;
+    gap: var(--space-3);
+    align-items: baseline;
+  }
+
+  .signal-code {
+    color: var(--color-legend);
+  }
+
+  .signal-weight {
+    color: var(--color-legend-dim);
+    text-align: right;
+  }
+
+  .signal-contribution {
+    color: var(--color-legend);
+    text-align: right;
+    font-weight: 600;
+  }
+
+  .signal-reason {
+    color: var(--color-legend-dim);
+    font-size: 13px;
+  }
+
+  .breakdown-modifiers {
+    display: flex;
+    gap: var(--space-3);
+    align-items: baseline;
+    margin: var(--space-2) 0 0;
+    color: var(--color-legend-dim);
+  }
+
+  .modifier {
+    color: var(--color-legend-dim);
+  }
+</style>

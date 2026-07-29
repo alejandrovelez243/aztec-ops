@@ -1,0 +1,1 @@
+"""The activity bounded context."""

@@ -1,0 +1,1 @@
+"""The catalog bounded context."""

@@ -2,11 +2,31 @@
 name = "aztec-ops"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "celery[redis]>=5.3.1",
+    "django>=6.0.7",
+    "django-celery-beat>=2.9.0",
+    "django-celery-results>=2.6.0",
+    "django-cors-headers>=4.9.0",
+    "django-ninja>=1.6.2",
+    "django-ninja-jwt>=5.4.5",
+    "psycopg[binary]>=3.3.4",
+    "pydantic-settings>=2.14.2",
+    "python-dotenv>=1.2.2",
+    "redis>=8.0.1",
+    "uvicorn>=0.51.0",
+    "whitenoise>=6.12.0",
+]
 
 [dependency-groups]
 dev = [
+    "django-stubs>=6.0.7",
+    "django-stubs-ext>=6.0.7",
+    "factory-boy>=3.3.3",
+    "mypy>=2.3.0",
     "pre-commit>=4.6.1",
+    "pytest>=9.1.1",
+    "pytest-django>=4.12.0",
     "ruff>=0.16.0",
 ]
 
@@ -26,13 +46,98 @@ select = [
     "DJ",       # flake8-django
     "SIM",      # simplify
     "TC",       # type-checking blocks
+    "ANN",      # every function annotated, return type included
+    "D",        # docstrings
+    "S",        # security (bandit)
+    "PT",       # pytest style
+    "RET",      # return / guard-clause hygiene
+    "ARG",      # unused arguments
+    "ERA",      # commented-out code
+    "PL",       # pylint subset: too many args / branches / statements
+    "TRY",      # exception antipatterns
     "RUF",
 ]
-ignore = ["E501"]  # line length is enforced by the formatter, not the linter
+ignore = [
+    "E501",          # line length is the formatter's job, not the linter's
+    "ANN401",        # Any is allowed where a comment justifies it
+    "D107",          # __init__ is documented on the class, not the method
+    "D203", "D213",  # incompatible with the chosen docstring layout
+    "D105",          # magic methods: __str__ returning a label needs no prose
+    "D106",          # Django's nested Meta class is framework structure, not API
+]
 
 [tool.ruff.lint.per-file-ignores]
-"*/migrations/*" = ["E501", "RUF012"]
-"*/tests/*" = ["S101"]
+# Generated code is not ours to document or format-police.
+"*/migrations/*" = ["E501", "RUF012", "D", "ANN", "ARG"]
+# In tests, assert is the point and the test name documents the behaviour better than a docstring:
+# BACKEND.md §2 and §8 say a test class and a test method are named as the sentence they prove, so
+# D101/D102/D103 there would only produce docstrings restating the method name. PT009/PT027 are the
+# opposite direction — they push unittest assertions towards bare `assert`, while CLAUDE.md rule 15
+# and BACKEND.md §7 mandate Django TestCase classes and `self.assertEqual`, precisely so the base
+# class declares what a test may touch. The rest of PT stays on.
+"*/tests/*" = ["S101", "D101", "D102", "D103", "PLR2004", "PT009", "PT027"]
+"conftest.py" = ["D"]
+# Django's model and admin APIs are declared as plain class-level lists (Meta.constraints,
+# Meta.indexes, list_display, readonly_fields). RUF012 wants ClassVar on each, which would mean
+# annotating the framework's own contract to satisfy a linter. Ignored where that API lives.
+"*/models.py" = ["RUF012"]
+"*/admin.py" = ["RUF012"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = ["django.db.models.Model", "ninja.Schema", "pydantic.BaseModel"]
+
+[tool.ruff.lint.pylint]
+max-args = 6
 
 [tool.ruff.lint.isort]
 known-first-party = ["apps", "config"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+# Tests are Django TestCase classes, so collection targets classes, not loose functions.
+python_files = ["test_*.py"]
+python_classes = ["*TestCase", "Test*"]
+addopts = "--strict-markers --strict-config -ra"
+testpaths = ["apps"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+show_error_codes = true
+plugins = ["mypy_django_plugin.main", "pydantic.mypy"]
+exclude = ["migrations/"]
+
+# domain/ and services/ are what the strictness is for. The rest is still checked, but in these
+# two an untyped escape hatch is a defect rather than a shortcut.
+[[tool.mypy.overrides]]
+module = ["apps.*.domain.*", "apps.*.services.*"]
+# disallow_any_explicit is deliberately NOT set here. Subclassing pydantic.BaseModel trips
+# explicit-any on its own, so the flag would reject the one construct rule 10 mandates. The
+# ban on bare Any is enforced by ruff's ANN rules and at review instead.
+disallow_any_generics = true
+
+[[tool.mypy.overrides]]
+module = ["*.migrations.*", "*.tests.*"]
+ignore_errors = true
+
+# Celery and its transport library kombu ship no py.typed marker and have no stub package, so mypy
+# cannot see any of their signatures. Scoped to those two: the rest of the tree stays strict about
+# missing imports.
+[[tool.mypy.overrides]]
+module = ["celery.*", "kombu.*"]
+ignore_missing_imports = true
+
+# Consequence of the above: @shared_task is an untyped decorator, and mypy therefore treats every
+# function it wraps as untyped no matter how completely that function is annotated. The error code
+# is disabled for this one module — the only one that defines Celery tasks — rather than globally,
+# so an untyped decorator anywhere else is still an error. The task bodies keep full annotations.
+[[tool.mypy.overrides]]
+module = ["apps.events.tasks"]
+disable_error_code = ["untyped-decorator"]
+
+[tool.django-stubs]
+django_settings_module = "config.settings"

@@ -1,0 +1,275 @@
+---
+import StaleBanner from "./StaleBanner.astro";
+
+/**
+ * The notes region: a chronological comment list and the small form that appends
+ * to it.
+ *
+ * An interactive region with a colocated script — a de-facto island placed in
+ * `components/project/` because the project-detail island set is fixed.
+ *
+ * The API exposes no `GET` for notes (only `POST /api/v1/projects/{code}/notes`
+ * and the `note.added` topic), so first paint is the named empty state and every
+ * entry on screen arrived live. The form never paints its own note: the POST only
+ * unlocks the input, and the note appears when the `note.added` envelope arrives
+ * (docs/standards/PATTERNS_FRONTEND.md §8). The missing list endpoint is reported.
+ *
+ * The styles are global (`note-*`): rows appended at runtime by
+ * `document.createElement` would not carry Astro's scoped-style attribute.
+ */
+export interface Props {
+  projectCode: string;
+}
+
+const { projectCode } = Astro.props;
+---
+
+<section
+  class="notes-panel"
+  data-notes-panel
+  data-project-code={projectCode}
+  aria-label="Notes"
+>
+  <StaleBanner />
+  <ul class="note-list" data-notes-list></ul>
+  <p class="label note-empty" data-notes-empty>
+    No notes recorded — add the first one below.
+  </p>
+
+  <form class="note-form" data-note-form>
+    <label class="label" for="note-input">ADD NOTE</label>
+    <textarea id="note-input" data-note-input rows="3" required lang="es"
+    ></textarea>
+    <div class="note-form-row">
+      <button type="submit" class="label note-submit" data-note-submit disabled>
+        POST NOTE
+      </button>
+      <span class="label note-pending" data-note-pending hidden>
+        POSTING — AWAITING CONFIRMATION
+      </span>
+    </div>
+    <p class="label note-error" data-note-error hidden role="alert"></p>
+  </form>
+</section>
+
+<script>
+  import { postProjectNote } from "../../lib/api/client";
+  import { onStatus, retry, subscribe } from "../../lib/stream/store";
+
+  const panel = document.querySelector<HTMLElement>("[data-notes-panel]");
+  if (panel !== null) {
+    const root = panel;
+    const projectCode = root.dataset.projectCode ?? "";
+    const list = root.querySelector<HTMLUListElement>("[data-notes-list]");
+    const emptyNote = root.querySelector<HTMLElement>("[data-notes-empty]");
+    const form = root.querySelector<HTMLFormElement>("[data-note-form]");
+    const input = root.querySelector<HTMLTextAreaElement>("[data-note-input]");
+    const submit = root.querySelector<HTMLButtonElement>("[data-note-submit]");
+    const pendingNote = root.querySelector<HTMLElement>("[data-note-pending]");
+    const formError = root.querySelector<HTMLElement>("[data-note-error]");
+    const staleBanner = root.querySelector<HTMLElement>("[data-stale-banner]");
+    const staleRetry =
+      root.querySelector<HTMLButtonElement>("[data-stale-retry]");
+
+    const cleanups: Array<() => void> = [];
+    /** Business codes already rendered; makes a redelivered `note.added` a no-op. */
+    const rendered = new Set<string>();
+
+    function formatInstant(iso: string): string {
+      return `${iso.replace("T", " ").slice(0, 16)} UTC`;
+    }
+
+    function appendNote(
+      code: string,
+      author: string,
+      body: string,
+      taskCode: string | null,
+      occurredAt: string,
+    ): void {
+      if (list === null || rendered.has(code)) return;
+      rendered.add(code);
+      const row = document.createElement("li");
+      row.className = "note-row";
+      row.dataset.noteCode = code;
+      const time = document.createElement("span");
+      time.className = "figure note-time";
+      time.textContent = formatInstant(occurredAt);
+      const actor = document.createElement("span");
+      actor.className = "label note-actor";
+      actor.textContent = author;
+      row.append(time, actor);
+      if (taskCode !== null) {
+        const task = document.createElement("span");
+        task.className = "figure note-task";
+        task.textContent = taskCode;
+        row.append(task);
+      }
+      const text = document.createElement("span");
+      text.className = "body-text note-body";
+      text.lang = "es";
+      text.textContent = body;
+      row.append(text);
+      list.prepend(row);
+      if (emptyNote !== null) emptyNote.hidden = true;
+    }
+
+    input?.addEventListener("input", () => {
+      if (submit !== null) submit.disabled = input.value.trim() === "";
+    });
+
+    form?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (input === null || submit === null) return;
+      const body = input.value.trim();
+      if (body === "") return;
+      submit.disabled = true;
+      if (pendingNote !== null) pendingNote.hidden = false;
+      if (formError !== null) formError.hidden = true;
+      void runPost(body);
+    });
+
+    async function runPost(body: string): Promise<void> {
+      const res = await postProjectNote(projectCode, { body });
+      if (pendingNote !== null) pendingNote.hidden = true;
+      if (!res.ok) {
+        if (submit !== null) submit.disabled = false;
+        if (formError !== null) {
+          formError.textContent =
+            res.error.kind === "network"
+              ? "The API is unreachable — the note was not posted."
+              : "The note was rejected.";
+          formError.hidden = false;
+        }
+        return;
+      }
+      // Not optimistic: the entry renders when note.added arrives on the stream.
+      if (input !== null) input.value = "";
+      if (submit !== null) submit.disabled = true;
+    }
+
+    cleanups.push(
+      subscribe("note.added", (envelope) => {
+        if (envelope.payload["project_code"] !== projectCode) return;
+        const body = envelope.payload["body"];
+        const author = envelope.payload["author_alias"];
+        const taskCode = envelope.payload["task_code"];
+        appendNote(
+          envelope.entity.id,
+          typeof author === "string" ? author : envelope.actor,
+          typeof body === "string" ? body : "",
+          typeof taskCode === "string" ? taskCode : null,
+          envelope.occurred_at,
+        );
+      }),
+      onStatus((status) => {
+        if (staleBanner !== null)
+          staleBanner.hidden = status !== "disconnected";
+      }),
+    );
+
+    staleRetry?.addEventListener("click", () => {
+      retry();
+    });
+
+    document.addEventListener(
+      "astro:before-swap",
+      () => cleanups.forEach((off) => off()),
+      { once: true },
+    );
+  }
+</script>
+
+<style is:global>
+  .note-list {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: var(--space-3);
+  }
+
+  .note-row {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-1) 0;
+    border-bottom: var(--border-width) solid var(--color-rule);
+  }
+
+  .note-empty {
+    padding: var(--space-2) 0;
+    color: var(--color-legend-dim);
+  }
+
+  .note-empty[hidden] {
+    display: none;
+  }
+
+  .note-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .note-form textarea {
+    width: 100%;
+    background: var(--color-plate);
+    border: var(--border-width) solid var(--color-rule);
+    color: var(--color-legend);
+    padding: var(--space-2);
+    resize: vertical;
+  }
+
+  .note-form-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .note-submit {
+    padding: var(--space-1) var(--space-2);
+    background: var(--color-plate);
+    border: var(--border-width) solid var(--color-rule);
+    color: var(--color-legend);
+  }
+
+  .note-submit:hover:not(:disabled) {
+    background: var(--color-panel);
+    border-color: var(--color-plate-edge);
+  }
+
+  .note-submit:disabled {
+    color: var(--color-legend-dim);
+  }
+
+  .note-pending {
+    color: var(--color-legend-dim);
+  }
+
+  .note-pending[hidden] {
+    display: none;
+  }
+
+  .note-error {
+    color: var(--color-nogo);
+  }
+
+  .note-error[hidden] {
+    display: none;
+  }
+
+  .note-time {
+    color: var(--color-legend-dim);
+  }
+
+  .note-actor {
+    color: var(--color-legend);
+  }
+
+  .note-task {
+    color: var(--color-legend-dim);
+  }
+
+  .note-body {
+    flex-basis: 100%;
+  }
+</style>

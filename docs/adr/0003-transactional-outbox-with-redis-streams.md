@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted — 2026-07-28.
+Accepted — 2026-07-28. Amended by [0009](0009-celery-beat-for-scheduling.md), which corrects the
+`transaction.on_commit` and Celery entries below and scopes the rejection of Celery to the bus.
+Amended again by [0010](0010-celery-as-the-bus.md): **the outbox below stands exactly as written,
+the Redis Streams transport under it does not.** Celery tasks now drain the outbox and dispatch to
+a handler registry; there is no relay process, no `aztec.events` stream, no consumer group and no
+DLQ stream. Read the Decision section here for the outbox and 0010 for everything below the commit
+line — including why the reasoning against Celery *as the bus* no longer applies.
 
 ## Context
 
@@ -87,9 +93,14 @@ Cost we accepted:
   commit-without-publish: the hook runs in the same process after the commit, so a crash or a
   Redis outage in that window still loses the event permanently, and now there is no row
   recording that it was ever meant to exist.
-- **Celery with a broker.** Rejected. It moves the dual write rather than removing it — enqueuing
-  a task from inside a transaction has the same failure window — and it adds a worker model,
-  result backend and serialization layer heavier than the three consumer groups we need.
+- **Celery with a broker.** Rejected as the bus. `transaction.on_commit(task.delay)` does close
+  the rollback window — the hook never runs if the transaction rolls back — but it leaves the
+  other one open: the transaction commits, and the broker is unreachable a moment later, so the
+  work is lost with no row recording that it was meant to happen. On top of that, a task queue
+  makes the producer name every consumer, and it adds a worker model, result backend and
+  serialization layer heavier than the three consumer groups we need. Celery was later adopted
+  for scheduling only, per [ADR 0009](0009-celery-beat-for-scheduling.md); the reasoning here
+  concerns the bus.
 - **Postgres `LISTEN/NOTIFY` as the bus.** Rejected. Notifications are fire-and-forget with no
   persistence, no consumer groups and no replay: a consumer that is down during a notification
   never learns it happened. That is the same lost-event problem in a different place.

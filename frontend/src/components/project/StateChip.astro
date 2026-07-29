@@ -1,0 +1,63 @@
+---
+/**
+ * Workflow-state chip: the API's `label` rendered under the state's `category`.
+ *
+ * Colour is never chosen from the state `code`: `data-category` selects the semantic
+ * token, and the API's `color` (set when the operation recolours the taxonomy in the
+ * admin) is bound as `--state-color` on the element, where it wins over the category
+ * default (docs/standards/FRONTEND.md §7). The 2px left edge is the controller's mark
+ * against the line (DESIGN.md, Shapes); the chip never disappears, it only dims.
+ */
+export interface Props {
+  /** State `code`; carried on `data-code` so live patches can report it verbatim. */
+  code: string;
+  /** Operator-editable Spanish label, rendered verbatim. */
+  label: string;
+  /** Workflow category — the only value styling may branch on. */
+  category: string;
+  /** Admin-set taxonomy colour, or null when the operation set none. */
+  color: string | null;
+}
+
+const { code, label, category, color } = Astro.props;
+---
+
+<span
+  class="label state-chip"
+  data-state-chip
+  data-category={category}
+  data-code={code}
+  lang="es"
+  style={color !== null ? `--state-color: ${color}` : undefined}>{label}</span
+>
+
+<style>
+  .state-chip {
+    display: inline-block;
+    padding: var(--space-1) var(--space-2);
+    background: var(--color-plate);
+    border-left: 2px solid
+      var(--state-color, var(--chip-ink, var(--color-rule)));
+    color: var(--state-color, var(--chip-ink, var(--color-legend)));
+  }
+
+  .state-chip[data-category="IN_PROGRESS"] {
+    --chip-ink: var(--color-go);
+  }
+
+  .state-chip[data-category="BLOCKED"] {
+    --chip-ink: var(--color-nogo);
+  }
+
+  .state-chip[data-category="BACKLOG"] {
+    --chip-ink: var(--color-legend-dim);
+  }
+
+  .state-chip[data-category="DONE"] {
+    --chip-ink: var(--color-go);
+  }
+
+  .state-chip[data-category="CANCELLED"] {
+    --chip-ink: var(--color-legend-dim);
+  }
+</style>

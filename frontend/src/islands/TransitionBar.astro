@@ -1,0 +1,529 @@
+---
+import type { Transition } from "../lib/api/domain";
+import StaleBanner from "../components/project/StaleBanner.astro";
+import LoadingBlock from "../components/project/LoadingBlock.astro";
+
+/**
+ * The workflow transition bar of `/projects/{code}` — one button per entry of the
+ * project's `transitions`, the complete and only set of legal moves (docs/API.md
+ * §2.2). Labels come from the API, never from state codes.
+ *
+ * Behaviour (docs/standards/PATTERNS_FRONTEND.md §8, skill: transition buttons):
+ *
+ * - A transition whose `requires_fields` are empty on the project renders visibly
+ *   present and visibly dead: `disabled`, with `aria-describedby` naming the
+ *   missing field (DESIGN.md, Do's).
+ * - `requires_reason` opens a modal `<dialog>` with a required textarea; submit
+ *   stays blocked while the reason is empty.
+ * - A click is a pending state, never an optimistic paint: the bar re-renders when
+ *   the authoritative `project.state_changed` envelope arrives — from the POST
+ *   response's own `transitions` when the event matches the move just made, or
+ *   from a `getProject` resync when the workflow moved elsewhere (another actor)
+ *   or the POST was rejected `transition_not_allowed`.
+ *
+ * The styles are global (`tbar-*`): buttons are rebuilt at runtime and Astro's
+ * scoped styles would not reach them.
+ */
+export interface Props {
+  transitions: readonly Transition[];
+  projectCode: string;
+  /** Aggregate attributes named by `requires_fields` that are currently empty. */
+  emptyFields: readonly string[];
+  /** `updated_at` of the fetch that rendered the bar; the stale-patch guard. */
+  updatedAt: string;
+}
+
+const { transitions, projectCode, emptyFields, updatedAt } = Astro.props;
+---
+
+<section
+  class="tbar"
+  data-transition-bar
+  data-project-code={projectCode}
+  data-updated-at={updatedAt}
+  aria-label="Workflow transitions"
+>
+  <StaleBanner />
+  <LoadingBlock rows={1} />
+
+  <div class="tbar-buttons" data-transition-buttons>
+    {
+      transitions.map((transition, index) => {
+        const missing = transition.requires_fields.filter((field) =>
+          emptyFields.includes(field),
+        );
+        const isDead = missing.length > 0;
+        return (
+          <span class="tbar-item">
+            <button
+              type="button"
+              class="label tbar-button"
+              lang="es"
+              data-transition-button
+              data-to-state={transition.to_state.code}
+              data-requires-reason={
+                transition.requires_reason ? "true" : "false"
+              }
+              data-requires-fields={transition.requires_fields.join(",")}
+              disabled={isDead}
+              aria-describedby={isDead ? `tbar-missing-${index}` : undefined}
+            >
+              {transition.label}
+            </button>
+            {isDead && (
+              <span class="label tbar-missing" id={`tbar-missing-${index}`}>
+                REQUIRES {missing.join(", ")}
+              </span>
+            )}
+          </span>
+        );
+      })
+    }
+    {
+      transitions.length === 0 && (
+        <span class="label tbar-terminal" data-transition-terminal>
+          TERMINAL STATE — NO LEGAL MOVES
+        </span>
+      )
+    }
+  </div>
+
+  <p class="label tbar-error" data-bar-error hidden role="alert"></p>
+
+  <dialog class="tbar-dialog" data-reason-dialog aria-label="Transition reason">
+    <form data-reason-form>
+      <label class="label" for="tbar-reason-input">
+        REASON — REQUIRED FOR THIS TRANSITION
+      </label>
+      <textarea
+        id="tbar-reason-input"
+        data-reason-input
+        rows="4"
+        required
+        lang="es"></textarea>
+      <div class="tbar-dialog-actions">
+        <button type="submit" class="label" data-reason-submit disabled>
+          CONFIRM
+        </button>
+        <button type="button" class="label" data-reason-cancel>CANCEL</button>
+      </div>
+      <p class="label tbar-dialog-error" data-dialog-error hidden role="alert">
+      </p>
+    </form>
+  </dialog>
+</section>
+
+<script>
+  import { getProject, postProjectTransition } from "../lib/api/client";
+  import type { ProjectDetail, Transition } from "../lib/api/domain";
+  import { onReset, onStatus, retry, subscribe } from "../lib/stream/store";
+
+  const bar = document.querySelector<HTMLElement>("[data-transition-bar]");
+  if (bar !== null) {
+    const root = bar;
+    const projectCode = root.dataset.projectCode ?? "";
+    const buttons = root.querySelector<HTMLElement>(
+      "[data-transition-buttons]",
+    );
+    const loading = root.querySelector<HTMLElement>("[data-loading]");
+    const barError = root.querySelector<HTMLElement>("[data-bar-error]");
+    const staleBanner = root.querySelector<HTMLElement>("[data-stale-banner]");
+    const staleRetry =
+      root.querySelector<HTMLButtonElement>("[data-stale-retry]");
+    const dialog = root.querySelector<HTMLDialogElement>(
+      "[data-reason-dialog]",
+    );
+    const form = root.querySelector<HTMLFormElement>("[data-reason-form]");
+    const input = root.querySelector<HTMLTextAreaElement>(
+      "[data-reason-input]",
+    );
+    const submit = root.querySelector<HTMLButtonElement>(
+      "[data-reason-submit]",
+    );
+    const cancel = root.querySelector<HTMLButtonElement>(
+      "[data-reason-cancel]",
+    );
+    const dialogError = root.querySelector<HTMLElement>("[data-dialog-error]");
+
+    const cleanups: Array<() => void> = [];
+
+    /**
+     * The project the last successful POST returned. Held — not rendered — until
+     * the matching `project.state_changed` envelope arrives: its `transitions`
+     * are the new legal moves, which the event payload does not carry.
+     */
+    let pendingDetail: ProjectDetail | null = null;
+    /** The `to_state` the open dialog is collecting a reason for. */
+    let dialogTarget: string | null = null;
+    /** Disambiguates `aria-describedby` ids across bar re-renders. */
+    let renderSerial = 0;
+
+    function isNewer(occurredAt: string): boolean {
+      const current = root.dataset.updatedAt ?? "";
+      if (current === "") return true;
+      return Date.parse(occurredAt) > Date.parse(current);
+    }
+
+    function markUpdatedAt(occurredAt: string): void {
+      const current = root.dataset.updatedAt ?? "";
+      if (current === "" || Date.parse(occurredAt) > Date.parse(current)) {
+        root.dataset.updatedAt = occurredAt;
+      }
+    }
+
+    function showError(message: string): void {
+      if (barError === null) return;
+      barError.textContent = message;
+      barError.hidden = false;
+    }
+
+    function hideError(): void {
+      if (barError === null) return;
+      barError.hidden = true;
+      barError.textContent = "";
+    }
+
+    function setLoading(on: boolean): void {
+      if (loading !== null) loading.hidden = !on;
+      if (buttons !== null) buttons.hidden = on;
+      root.setAttribute("aria-busy", on ? "true" : "false");
+    }
+
+    /**
+     * The aggregate attributes `requires_fields` can name, with their current
+     * emptiness. An unknown field name counts as empty: the button renders dead
+     * and names it, which is the honest answer to a contract that grew.
+     */
+    function collectEmptyFields(detail: ProjectDetail): string[] {
+      const values: Record<string, unknown> = {
+        name: detail.name,
+        summary: detail.summary ?? null,
+        next_step: detail.next_step ?? null,
+        target_date: detail.target_date ?? null,
+        start_date: detail.start_date ?? null,
+        business_value: detail.business_value ?? null,
+        owner: detail.owner ?? null,
+        stage: detail.stage ?? null,
+        project_type: detail.project_type ?? null,
+      };
+      const empty = new Set<string>();
+      for (const transition of detail.transitions) {
+        for (const field of transition.requires_fields) {
+          const value = values[field];
+          if (value === undefined || value === null || value === "") {
+            empty.add(field);
+          }
+        }
+      }
+      return [...empty];
+    }
+
+    /**
+     * Rebuilds the button row from a fresh transition set — the only rendering
+     * the bar ever does after first paint. Buttons come from data alone; an
+     * empty set is the terminal sentence, and an unmet `requires_fields` entry
+     * is a visibly dead button naming the field.
+     */
+    function renderButtons(
+      transitions: readonly Transition[],
+      emptyFields: readonly string[],
+    ): void {
+      if (buttons === null) return;
+      renderSerial += 1;
+      const items: HTMLElement[] = [];
+      transitions.forEach((transition, index) => {
+        const missing = transition.requires_fields.filter((field) =>
+          emptyFields.includes(field),
+        );
+        const isDead = missing.length > 0;
+        const item = document.createElement("span");
+        item.className = "tbar-item";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "label tbar-button";
+        button.lang = "es";
+        button.dataset.transitionButton = "";
+        button.dataset.toState = transition.to_state.code;
+        button.dataset.requiresReason = transition.requires_reason
+          ? "true"
+          : "false";
+        button.dataset.requiresFields = transition.requires_fields.join(",");
+        button.textContent = transition.label;
+        if (isDead) {
+          button.disabled = true;
+          const missingId = `tbar-missing-${renderSerial}-${index}`;
+          button.setAttribute("aria-describedby", missingId);
+          const note = document.createElement("span");
+          note.className = "label tbar-missing";
+          note.id = missingId;
+          note.textContent = `REQUIRES ${missing.join(", ")}`;
+          item.append(button, note);
+        } else {
+          item.append(button);
+        }
+        items.push(item);
+      });
+      if (transitions.length === 0) {
+        const terminal = document.createElement("span");
+        terminal.className = "label tbar-terminal";
+        terminal.dataset.transitionTerminal = "";
+        terminal.textContent = "TERMINAL STATE — NO LEGAL MOVES";
+        items.push(terminal);
+      }
+      buttons.replaceChildren(...items);
+    }
+
+    /**
+     * Resync from the server: the local bar is wrong, not merely stale — a
+     * rejected `transition_not_allowed`, a state change made by somebody else,
+     * or a `stream.reset` (docs/standards/PATTERNS_FRONTEND.md §6).
+     */
+    async function resync(): Promise<void> {
+      setLoading(true);
+      hideError();
+      const res = await getProject(projectCode);
+      setLoading(false);
+      if (!res.ok) {
+        showError("The transition bar could not be refreshed.");
+        return;
+      }
+      pendingDetail = null;
+      renderButtons(res.data.transitions, collectEmptyFields(res.data));
+      markUpdatedAt(res.data.updated_at);
+    }
+
+    async function runTransition(
+      toState: string,
+      reason: string,
+    ): Promise<void> {
+      const button = buttons?.querySelector<HTMLButtonElement>(
+        `[data-to-state="${toState}"]`,
+      );
+      if (button === null || button === undefined) return;
+      button.disabled = true;
+      button.dataset.pending = "true";
+      hideError();
+      const res = await postProjectTransition(projectCode, {
+        to_state: toState,
+        reason,
+      });
+      if (res.ok) {
+        // Held, not painted: the bar re-renders when project.state_changed
+        // arrives — this response supplies the new legal moves.
+        pendingDetail = res.data;
+        return;
+      }
+      button.dataset.pending = "false";
+      button.disabled = false;
+      if (res.error.kind === "transition_not_allowed") {
+        await resync();
+        return;
+      }
+      if (res.error.kind === "validation") {
+        const reasonMessages = res.error.fields["reason"];
+        showError(
+          reasonMessages !== undefined && reasonMessages.length > 0
+            ? `Reason rejected: ${reasonMessages.join(" ")}`
+            : "The transition was rejected as invalid.",
+        );
+        return;
+      }
+      showError(
+        res.error.kind === "network"
+          ? "The API is unreachable — the transition was not executed."
+          : "The transition was rejected.",
+      );
+    }
+
+    // One delegated listener survives button rebuilds.
+    root.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLButtonElement)) return;
+      if (target.dataset.transitionButton === undefined) return;
+      const toState = target.dataset.toState ?? "";
+      if (toState === "") return;
+      if (target.dataset.requiresReason === "true") {
+        dialogTarget = toState;
+        if (input !== null) input.value = "";
+        if (submit !== null) submit.disabled = true;
+        if (dialogError !== null) dialogError.hidden = true;
+        dialog?.showModal();
+        input?.focus();
+        return;
+      }
+      void runTransition(toState, "");
+    });
+
+    input?.addEventListener("input", () => {
+      if (submit !== null) submit.disabled = input.value.trim() === "";
+    });
+
+    cancel?.addEventListener("click", () => {
+      dialogTarget = null;
+      dialog?.close();
+    });
+
+    form?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (dialogTarget === null || input === null) return;
+      const reason = input.value.trim();
+      if (reason === "") return;
+      const toState = dialogTarget;
+      dialogTarget = null;
+      dialog?.close();
+      void runTransition(toState, reason);
+    });
+
+    cleanups.push(
+      subscribe("project.state_changed", (envelope) => {
+        if (envelope.entity.id !== projectCode) return;
+        if (!isNewer(envelope.occurred_at)) return;
+        const to = envelope.payload["to"];
+        if (
+          pendingDetail !== null &&
+          typeof to === "string" &&
+          to === pendingDetail.state.code
+        ) {
+          // Our own move: render from the POST response, which carries the new
+          // legal transitions the envelope does not.
+          renderButtons(
+            pendingDetail.transitions,
+            collectEmptyFields(pendingDetail),
+          );
+          pendingDetail = null;
+          markUpdatedAt(envelope.occurred_at);
+          return;
+        }
+        // Somebody else's move — the local transition set is wrong, not stale.
+        void resync();
+      }),
+      onReset(() => {
+        void resync();
+      }),
+      onStatus((status) => {
+        if (staleBanner !== null)
+          staleBanner.hidden = status !== "disconnected";
+      }),
+    );
+
+    staleRetry?.addEventListener("click", () => {
+      retry();
+    });
+
+    document.addEventListener(
+      "astro:before-swap",
+      () => cleanups.forEach((off) => off()),
+      { once: true },
+    );
+  }
+</script>
+
+<style is:global>
+  .tbar-buttons {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .tbar-buttons[hidden] {
+    display: none;
+  }
+
+  .tbar-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .tbar-button {
+    padding: var(--space-1) var(--space-2);
+    background: var(--color-plate);
+    border: var(--border-width) solid var(--color-go);
+    color: var(--color-go);
+  }
+
+  .tbar-button:hover:not(:disabled) {
+    background: var(--color-panel);
+  }
+
+  /* Visibly present, visibly dead: the workflow's shape stays on screen. */
+  .tbar-button:disabled {
+    border-color: var(--color-rule);
+    color: var(--color-legend-dim);
+  }
+
+  .tbar-button[data-pending="true"] {
+    border-color: var(--color-caution);
+    color: var(--color-caution);
+  }
+
+  .tbar-missing {
+    color: var(--color-legend-dim);
+  }
+
+  .tbar-terminal {
+    color: var(--color-legend-dim);
+  }
+
+  .tbar-error {
+    color: var(--color-nogo);
+    padding: var(--space-2) 0;
+  }
+
+  .tbar-error[hidden] {
+    display: none;
+  }
+
+  .tbar-dialog {
+    background: var(--color-panel);
+    color: var(--color-legend);
+    border: var(--border-width) solid var(--color-rule);
+    border-top-color: var(--color-plate-edge);
+    padding: var(--space-4);
+    max-width: 52ch;
+  }
+
+  .tbar-dialog::backdrop {
+    background: var(--color-plate);
+  }
+
+  .tbar-dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .tbar-dialog textarea {
+    width: 100%;
+    background: var(--color-plate);
+    border: var(--border-width) solid var(--color-rule);
+    color: var(--color-legend);
+    padding: var(--space-2);
+    resize: vertical;
+  }
+
+  .tbar-dialog-actions {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .tbar-dialog-actions button {
+    padding: var(--space-1) var(--space-2);
+    background: var(--color-plate);
+    border: var(--border-width) solid var(--color-rule);
+    color: var(--color-legend);
+  }
+
+  .tbar-dialog-actions button:disabled {
+    color: var(--color-legend-dim);
+  }
+
+  .tbar-dialog-error {
+    color: var(--color-nogo);
+  }
+
+  .tbar-dialog-error[hidden] {
+    display: none;
+  }
+</style>

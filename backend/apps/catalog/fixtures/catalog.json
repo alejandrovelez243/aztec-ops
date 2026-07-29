@@ -1,0 +1,240 @@
+[
+  {
+    "model": "catalog.engagementtype",
+    "pk": 1,
+    "fields": {
+      "code": "proyecto",
+      "label": "Proyecto",
+      "order": 1,
+      "is_active": true,
+      "color": "#2563eb",
+      "weight": "1.00"
+    }
+  },
+  {
+    "model": "catalog.engagementtype",
+    "pk": 2,
+    "fields": {
+      "code": "mantenimiento_recurrente",
+      "label": "Mantenimiento o recurrente",
+      "order": 2,
+      "is_active": true,
+      "color": "#0d9488",
+      "weight": "0.90"
+    }
+  },
+  {
+    "model": "catalog.engagementtype",
+    "pk": 3,
+    "fields": {
+      "code": "diagnostico",
+      "label": "Diagnostico",
+      "order": 3,
+      "is_active": true,
+      "color": "#a855f7",
+      "weight": "1.10"
+    }
+  },
+  {
+    "model": "catalog.projecttype",
+    "pk": 1,
+    "fields": {
+      "code": "automatizacion",
+      "label": "Automatizacion",
+      "order": 1,
+      "is_active": true,
+      "color": "#0891b2"
+    }
+  },
+  {
+    "model": "catalog.projecttype",
+    "pk": 2,
+    "fields": {
+      "code": "consultoria",
+      "label": "Consultoria",
+      "order": 2,
+      "is_active": true,
+      "color": "#7c3aed"
+    }
+  },
+  {
+    "model": "catalog.stage",
+    "pk": 1,
+    "fields": {
+      "code": "descubrimiento",
+      "label": "Descubrimiento",
+      "order": 1,
+      "is_active": true,
+      "color": "#f59e0b"
+    }
+  },
+  {
+    "model": "catalog.stage",
+    "pk": 2,
+    "fields": {
+      "code": "ejecucion",
+      "label": "Ejecucion",
+      "order": 2,
+      "is_active": true,
+      "color": "#2563eb"
+    }
+  },
+  {
+    "model": "catalog.priority",
+    "pk": 1,
+    "fields": {
+      "code": "critica",
+      "label": "Critica",
+      "order": 1,
+      "is_active": true,
+      "color": "#dc2626",
+      "weight": "3.00",
+      "is_urgent": true
+    }
+  },
+  {
+    "model": "catalog.priority",
+    "pk": 2,
+    "fields": {
+      "code": "alta",
+      "label": "Alta",
+      "order": 2,
+      "is_active": true,
+      "color": "#ea580c",
+      "weight": "2.00",
+      "is_urgent": true
+    }
+  },
+  {
+    "model": "catalog.priority",
+    "pk": 3,
+    "fields": {
+      "code": "media",
+      "label": "Media",
+      "order": 3,
+      "is_active": true,
+      "color": "#ca8a04",
+      "weight": "1.00",
+      "is_urgent": false
+    }
+  },
+  {
+    "model": "catalog.priority",
+    "pk": 4,
+    "fields": {
+      "code": "baja",
+      "label": "Baja",
+      "order": 4,
+      "is_active": true,
+      "color": "#65a30d",
+      "weight": "0.50",
+      "is_urgent": false
+    }
+  },
+  {
+    "model": "catalog.role",
+    "pk": 1,
+    "fields": {
+      "code": "delivery",
+      "label": "Delivery",
+      "order": 1,
+      "is_active": true,
+      "color": "#0ea5e9"
+    }
+  },
+  {
+    "model": "catalog.role",
+    "pk": 2,
+    "fields": {
+      "code": "commercial_delivery",
+      "label": "Commercial / Delivery",
+      "order": 2,
+      "is_active": true,
+      "color": "#8b5cf6"
+    }
+  },
+  {
+    "model": "catalog.currency",
+    "pk": 1,
+    "fields": {
+      "code": "USD",
+      "label": "Dolar estadounidense",
+      "order": 1,
+      "is_active": true,
+      "color": "#16a34a",
+      "minor_units": 2
+    }
+  },
+  {
+    "model": "catalog.currency",
+    "pk": 2,
+    "fields": {
+      "code": "MXN",
+      "label": "Peso mexicano",
+      "order": 2,
+      "is_active": true,
+      "color": "#065f46",
+      "minor_units": 2
+    }
+  },
+  {
+    "model": "catalog.currency",
+    "pk": 3,
+    "fields": {
+      "code": "COP",
+      "label": "Peso colombiano",
+      "order": 3,
+      "is_active": true,
+      "color": "#ca8a04",
+      "minor_units": 2
+    }
+  },
+  {
+    "model": "catalog.currency",
+    "pk": 4,
+    "fields": {
+      "code": "CLP",
+      "label": "Peso chileno",
+      "order": 4,
+      "is_active": true,
+      "color": "#b91c1c",
+      "minor_units": 0
+    }
+  },
+  {
+    "model": "catalog.currency",
+    "pk": 5,
+    "fields": {
+      "code": "PEN",
+      "label": "Sol peruano",
+      "order": 5,
+      "is_active": true,
+      "color": "#c2410c",
+      "minor_units": 2
+    }
+  },
+  {
+    "model": "catalog.currency",
+    "pk": 6,
+    "fields": {
+      "code": "ARS",
+      "label": "Peso argentino",
+      "order": 6,
+      "is_active": true,
+      "color": "#0284c7",
+      "minor_units": 2
+    }
+  },
+  {
+    "model": "catalog.currency",
+    "pk": 7,
+    "fields": {
+      "code": "EUR",
+      "label": "Euro",
+      "order": 7,
+      "is_active": true,
+      "color": "#4338ca",
+      "minor_units": 2
+    }
+  }
+]

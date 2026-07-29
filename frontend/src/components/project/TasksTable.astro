@@ -1,0 +1,152 @@
+---
+import { formatCountdown } from "../../lib/format/countdown";
+import type { TaskItem } from "../../lib/api/domain";
+import StateChip from "./StateChip.astro";
+
+/**
+ * The project's tasks as a fixed-column matrix — code, task, assignee, priority,
+ * state, due countdown, last progress. Server-rendered only: the region has no
+ * island, so the table never patches itself; structural changes arrive on reload.
+ *
+ * Column positions are load-bearing (DESIGN.md, Layout): the same fact sits at the
+ * same x-coordinate on every row. Empty cells are forbidden — a missing due date is
+ * the named condition `NO DATE`, an unassigned task reads UNASSIGNED, a task with no
+ * recorded progress reads NO PROGRESS.
+ *
+ * `TaskView` carries no `transitions`, so there are no per-task transition buttons:
+ * the frontend never guesses legality (docs/standards/FRONTEND.md §5 OCP). Adding
+ * them is a backend schema change on `TaskView`, not a local workaround.
+ */
+export interface Props {
+  /** Non-empty when the page renders this component; the empty arm is a view state. */
+  tasks: readonly TaskItem[];
+}
+
+const { tasks } = Astro.props;
+---
+
+<table class="tasks" data-tasks-table>
+  <thead>
+    <tr>
+      <th class="label" scope="col">CODE</th>
+      <th class="label" scope="col">TASK</th>
+      <th class="label" scope="col">ASSIGNEE</th>
+      <th class="label" scope="col">PRIORITY</th>
+      <th class="label" scope="col">STATE</th>
+      <th class="label" scope="col">DUE</th>
+      <th class="label" scope="col">LAST PROGRESS</th>
+    </tr>
+  </thead>
+  <tbody>
+    {
+      tasks.map((task) => {
+        const countdown = formatCountdown(task.due_date ?? null);
+        return (
+          <tr data-task-code={task.code}>
+            <td class="figure code">{task.code}</td>
+            <td class="title task-title">{task.title}</td>
+            <td>
+              {task.assignee !== null && task.assignee !== undefined ? (
+                <span class="body-text">{task.assignee.label}</span>
+              ) : (
+                <span class="label dim">UNASSIGNED</span>
+              )}
+            </td>
+            <td>
+              <span
+                class="label priority"
+                lang="es"
+                style={
+                  task.priority.color !== null &&
+                  task.priority.color !== undefined
+                    ? `--tax-color: ${task.priority.color}`
+                    : undefined
+                }
+              >
+                {task.priority.label}
+              </span>
+            </td>
+            <td>
+              <StateChip
+                code={task.state.code}
+                label={task.state.label}
+                category={task.state.category}
+                color={task.state.color ?? null}
+              />
+            </td>
+            <td>
+              <span class="figure countdown" data-tone={countdown.tone}>
+                {countdown.text}
+              </span>
+            </td>
+            <td>
+              {task.last_progress === "" ? (
+                <span class="label dim">NO PROGRESS</span>
+              ) : (
+                <span class="body-text progress">{task.last_progress}</span>
+              )}
+            </td>
+          </tr>
+        );
+      })
+    }
+  </tbody>
+</table>
+
+<style>
+  .tasks {
+    width: 100%;
+  }
+
+  .tasks th {
+    padding: var(--space-1) var(--space-2) var(--space-1) 0;
+    text-align: left;
+    font-weight: var(--text-label-weight);
+    border-bottom: var(--border-width) solid var(--color-rule);
+  }
+
+  .tasks td {
+    height: var(--size-row);
+    padding: var(--space-1) var(--space-2) var(--space-1) 0;
+    vertical-align: middle;
+    border-bottom: var(--border-width) solid var(--color-rule);
+  }
+
+  .code {
+    color: var(--color-legend-dim);
+    white-space: nowrap;
+  }
+
+  .task-title {
+    max-width: 40ch;
+  }
+
+  .priority {
+    color: var(--tax-color, var(--color-legend));
+  }
+
+  .dim {
+    color: var(--color-legend-dim);
+  }
+
+  .progress {
+    color: var(--color-legend-dim);
+    max-width: 48ch;
+  }
+
+  .countdown[data-tone="go"] {
+    color: var(--color-go);
+  }
+
+  .countdown[data-tone="caution"] {
+    color: var(--color-caution);
+  }
+
+  .countdown[data-tone="nogo"] {
+    color: var(--color-nogo);
+  }
+
+  .countdown[data-tone="dim"] {
+    color: var(--color-legend-dim);
+  }
+</style>

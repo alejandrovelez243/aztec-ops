@@ -1,0 +1,315 @@
+---
+/**
+ * /login — the door of the room (Operate).
+ *
+ * A real credentials form against `POST /auth/token`. Standalone document —
+ * the shell, its guard and its SSE connection belong to signed-in pages only.
+ * The wall motif behind the card (three resting ghost cards) is the world
+ * introducing itself; it carries no data and no interaction.
+ */
+import "../styles/tokens.css";
+import "../styles/base.css";
+import Icon from "../components/ui/Icon.astro";
+import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
+---
+
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script is:inline define:vars={{ key: SESSION_STORAGE_KEY }}>
+      // Inverse guard: an existing session skips the door entirely.
+      try {
+        if (window.localStorage.getItem(key) !== null) {
+          const next = new URLSearchParams(window.location.search).get("next");
+          const safe =
+            next !== null && next.startsWith("/") && !next.startsWith("//")
+              ? next
+              : "/";
+          window.location.replace(safe);
+        }
+      } catch {
+        /* storage disabled: stay on the form */
+      }
+    </script>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Iniciar sesión — Aztec Ops</title>
+  </head>
+  <body>
+    <main class="stage">
+      <div class="wall" aria-hidden="true">
+        <div class="ghost ghost-a"></div>
+        <div class="ghost ghost-b"></div>
+        <div class="ghost ghost-c"></div>
+      </div>
+
+      <section class="card door" aria-labelledby="login-title">
+        <header class="door-head">
+          <span class="brand-mark" aria-hidden="true">
+            <svg width="30" height="30" viewBox="0 0 26 26" fill="none">
+              <rect x="3" y="8.5" width="15" height="11" rx="3" fill="var(--cobalto-papel)"></rect>
+              <rect x="6" y="5.5" width="15" height="11" rx="3" fill="var(--cobalto)" opacity="0.35"></rect>
+              <rect x="9" y="2.5" width="15" height="11" rx="3" fill="var(--cobalto)"></rect>
+            </svg>
+          </span>
+          <p class="label">Aztec Ops</p>
+          <h1 id="login-title" class="h1">Inicia sesión</h1>
+          <p class="small">El tablero del día espera tu decisión.</p>
+        </header>
+
+        <form id="login-form" novalidate>
+          <div class="field">
+            <label class="label" for="login-username">Usuario</label>
+            <input
+              class="input"
+              id="login-username"
+              name="username"
+              type="text"
+              autocomplete="username"
+              required
+              autofocus
+            />
+          </div>
+          <div class="field">
+            <label class="label" for="login-password">Contraseña</label>
+            <div class="password-wrap">
+              <input
+                class="input"
+                id="login-password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+                required
+              />
+              <button
+                class="btn btn-ghost btn-icon reveal"
+                type="button"
+                data-reveal
+                aria-label="Mostrar la contraseña"
+                aria-pressed="false"
+              >
+                <span data-reveal-show><Icon name="eye" /></span>
+                <span data-reveal-hide hidden><Icon name="eye-off" /></span>
+              </button>
+            </div>
+          </div>
+
+          <p class="error-line small" id="login-error" role="alert" hidden></p>
+
+          <button class="btn btn-primary submit" type="submit">Entrar</button>
+        </form>
+
+        <p class="small hint">
+          Entorno local: las credenciales del equipo sembrado están en el README.
+        </p>
+      </section>
+    </main>
+
+    <script>
+      import { shake } from "../lib/motion/spring";
+      import { signIn } from "../lib/auth/session";
+      import type { ApiError } from "../lib/api/errors";
+
+      const form = document.getElementById("login-form");
+      const errorLine = document.getElementById("login-error");
+      const door = document.querySelector<HTMLElement>(".door");
+
+      function safeNext(): string {
+        const next = new URLSearchParams(window.location.search).get("next");
+        return next !== null && next.startsWith("/") && !next.startsWith("//")
+          ? next
+          : "/";
+      }
+
+      function messageFor(error: ApiError): string {
+        if (error.kind === "network") {
+          return "No hay conexión con el servidor. ¿Está corriendo `make up`?";
+        }
+        if (error.kind === "validation") {
+          return "Escribe tu usuario y tu contraseña.";
+        }
+        if (error.kind === "unknown" && error.backendCode === "invalid_credentials") {
+          return "Usuario o contraseña incorrectos, o la cuenta está desactivada.";
+        }
+        return "No se pudo iniciar sesión. Intenta de nuevo.";
+      }
+
+      function showError(text: string): void {
+        if (errorLine === null) return;
+        errorLine.textContent = text;
+        errorLine.hidden = false;
+        if (door !== null) void shake(door);
+      }
+
+      if (form instanceof HTMLFormElement) {
+        form.addEventListener("submit", (event) => {
+          event.preventDefault();
+          const data = new FormData(form);
+          const username = String(data.get("username") ?? "").trim();
+          const password = String(data.get("password") ?? "");
+          if (errorLine !== null) errorLine.hidden = true;
+          if (username === "" || password === "") {
+            showError("Escribe tu usuario y tu contraseña.");
+            return;
+          }
+          const submit = form.querySelector<HTMLButtonElement>(".submit");
+          submit?.classList.add("is-loading");
+          if (submit !== null) submit.disabled = true;
+          void signIn(username, password).then((result) => {
+            if (result.ok) {
+              window.location.replace(safeNext());
+              return;
+            }
+            submit?.classList.remove("is-loading");
+            if (submit !== null) submit.disabled = false;
+            showError(messageFor(result.error));
+          });
+        });
+      }
+
+      const reveal = document.querySelector<HTMLButtonElement>("[data-reveal]");
+      const password = document.getElementById("login-password");
+      if (reveal !== null && password instanceof HTMLInputElement) {
+        reveal.addEventListener("click", () => {
+          const showing = password.type === "text";
+          password.type = showing ? "password" : "text";
+          reveal.setAttribute("aria-pressed", String(!showing));
+          reveal.setAttribute(
+            "aria-label",
+            showing ? "Mostrar la contraseña" : "Ocultar la contraseña",
+          );
+          const show = reveal.querySelector<HTMLElement>("[data-reveal-show]");
+          const hide = reveal.querySelector<HTMLElement>("[data-reveal-hide]");
+          if (show !== null) show.hidden = !showing;
+          if (hide !== null) hide.hidden = showing;
+          password.focus();
+        });
+      }
+    </script>
+
+    <style>
+      .stage {
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: var(--space-5);
+        position: relative;
+        overflow: hidden;
+      }
+
+      /* The wall behind the door: three resting cards, out of reach. */
+      .wall {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      .ghost {
+        position: absolute;
+        width: 220px;
+        height: 132px;
+        background: var(--carta);
+        border: var(--border-width) solid var(--hairline);
+        border-radius: var(--radius-card);
+        box-shadow: var(--shadow-resting);
+        opacity: 0.55;
+      }
+
+      .ghost-a {
+        top: 12%;
+        left: 8%;
+        transform: rotate(-4deg);
+      }
+
+      .ghost-b {
+        top: 62%;
+        left: 14%;
+        transform: rotate(2.5deg);
+        width: 180px;
+        height: 110px;
+      }
+
+      .ghost-c {
+        top: 24%;
+        right: 9%;
+        transform: rotate(3deg);
+        width: 200px;
+        height: 122px;
+      }
+
+      .door {
+        position: relative;
+        width: min(420px, 100%);
+        padding: var(--space-6);
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-5);
+        box-shadow: var(--shadow-raised);
+      }
+
+      .door-head {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2);
+      }
+
+      .door-head .h1 {
+        margin-top: var(--space-1);
+      }
+
+      form {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-4);
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: var(--space-2);
+      }
+
+      .password-wrap {
+        position: relative;
+      }
+
+      .password-wrap .input {
+        padding-right: var(--space-7);
+      }
+
+      .reveal {
+        position: absolute;
+        top: 0;
+        right: 0;
+        height: 100%;
+      }
+
+      .error-line {
+        color: var(--rojo-ink);
+        background: var(--rojo-wash);
+        border-radius: var(--radius-chip);
+        padding: var(--space-2) var(--space-3);
+      }
+
+      .submit {
+        width: 100%;
+      }
+
+      .hint {
+        color: var(--tinta-suave);
+        text-align: center;
+      }
+
+      @media (max-width: 640px) {
+        .ghost {
+          display: none;
+        }
+
+        .door {
+          padding: var(--space-5);
+        }
+      }
+    </style>
+  </body>
+</html>

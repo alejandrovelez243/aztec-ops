@@ -1,0 +1,406 @@
+---
+import type { ActivityEntry } from "../lib/api/domain";
+import TimelineEntryRow from "../components/project/TimelineEntryRow.astro";
+import StaleBanner from "../components/project/StaleBanner.astro";
+import LoadingBlock from "../components/project/LoadingBlock.astro";
+
+/**
+ * The project chronology: the audit trail, newest first (the API's only order),
+ * server-rendered for first paint and grown live by the colocated script.
+ *
+ * The script subscribes to every project-scoped topic, normalizes each envelope
+ * into the same row shape the server rendered, and prepends it — deduplicated by
+ * envelope `id` and guarded by `occurred_at` against the newest rendered row, so
+ * an at-least-once redelivery is a no-op (docs/EVENTS.md §6). On `stream.reset`
+ * it refetches the activity page and rebuilds the list.
+ *
+ * The empty state is a sentence; the list is `aria-live="polite"` so an appended
+ * entry is announced without re-reading the whole trail.
+ */
+export interface Props {
+  /** Newest first; empty renders the named empty state, never a blank region. */
+  entries: readonly ActivityEntry[];
+  projectCode: string;
+  /** Copy for the empty arm, supplied by the page's view-state mapping. */
+  emptyMessage: string;
+}
+
+const { entries, projectCode, emptyMessage } = Astro.props;
+---
+
+<section
+  class="timeline"
+  data-timeline
+  data-project-code={projectCode}
+  aria-label="Chronology"
+>
+  <StaleBanner />
+  <LoadingBlock rows={3} />
+
+  <ol class="timeline-list" data-timeline-list aria-live="polite">
+    {
+      entries.map((entry) => (
+        <TimelineEntryRow
+          occurredAt={entry.occurred_at}
+          actor={entry.actor}
+          verb={entry.verb}
+          context=""
+          fromValue={entry.from_value}
+          toValue={entry.to_value}
+          reason={entry.reason}
+        />
+      ))
+    }
+  </ol>
+  <p
+    class="label timeline-empty"
+    data-timeline-empty
+    hidden={entries.length > 0}
+  >
+    {emptyMessage}
+  </p>
+  <p class="label timeline-error" data-timeline-error hidden role="alert"></p>
+</section>
+
+<script>
+  import { getProjectActivity } from "../lib/api/client";
+  import type { ActivityEntry } from "../lib/api/domain";
+  import { formatScore } from "../lib/format/score";
+  import {
+    onReset,
+    onStatus,
+    retry,
+    subscribe,
+    type Envelope,
+  } from "../lib/stream/store";
+  import type { Topic } from "../lib/stream/topics";
+
+  const timeline = document.querySelector<HTMLElement>("[data-timeline]");
+  if (timeline !== null) {
+    const root = timeline;
+    const projectCode = root.dataset.projectCode ?? "";
+    const list = root.querySelector<HTMLOListElement>("[data-timeline-list]");
+    const emptyNote = root.querySelector<HTMLElement>("[data-timeline-empty]");
+    const errorNote = root.querySelector<HTMLElement>("[data-timeline-error]");
+    const loading = root.querySelector<HTMLElement>("[data-loading]");
+    const staleBanner = root.querySelector<HTMLElement>("[data-stale-banner]");
+    const staleRetry =
+      root.querySelector<HTMLButtonElement>("[data-stale-retry]");
+
+    const cleanups: Array<() => void> = [];
+    /** Envelope ids already rendered; at-least-once delivery makes this mandatory. */
+    const rendered = new Set<string>();
+
+    /** Narrows an unparsed payload member to a plain object; arrays are not records. */
+    function isRecord(value: unknown): value is Record<string, unknown> {
+      return (
+        typeof value === "object" && value !== null && !Array.isArray(value)
+      );
+    }
+
+    function readString(record: Record<string, unknown>, key: string): string {
+      const value = record[key];
+      return typeof value === "string" ? value : "";
+    }
+
+    /** `2026-07-28T09:48:03Z` → `2026-07-28 09:48:03` — mirrors the SSR row. */
+    function formatInstant(iso: string): string {
+      return iso.replace("T", " ").replace("Z", "").slice(0, 19);
+    }
+
+    interface NormalizedEntry {
+      verb: string;
+      context: string;
+      fromValue: string;
+      toValue: string;
+      reason: string;
+    }
+
+    /**
+     * Maps one envelope onto the timeline row shape. Returns null for envelopes
+     * that do not concern this project: project topics address the project in
+     * `entity.id`; task, blocker and note topics name it in `payload.project_code`
+     * (docs/EVENTS.md §1).
+     */
+    function normalize(envelope: Envelope): NormalizedEntry | null {
+      const payload = envelope.payload;
+      const topic: Topic = envelope.topic;
+      const isProjectEvent = envelope.entity.id === projectCode;
+      const isChildEvent = payload["project_code"] === projectCode;
+      if (!isProjectEvent && !isChildEvent) return null;
+
+      switch (topic) {
+        case "project.state_changed":
+          return {
+            verb: "STATE_CHANGED",
+            context: "",
+            fromValue: readString(payload, "from"),
+            toValue: readString(payload, "to"),
+            reason: readString(payload, "reason"),
+          };
+        case "project.updated": {
+          const changes = payload["changes"];
+          return {
+            verb: "UPDATED",
+            context: "",
+            fromValue: "",
+            toValue: "",
+            reason: isRecord(changes) ? Object.keys(changes).join(", ") : "",
+          };
+        }
+        case "project.priority.recalculated": {
+          const value = payload["value"];
+          const previous = payload["previous_value"];
+          return {
+            verb: "PRIORITY_RECALCULATED",
+            context: "",
+            fromValue:
+              typeof previous === "number" ? formatScore(previous) : "",
+            toValue: typeof value === "number" ? formatScore(value) : "",
+            reason: readString(payload, "origin"),
+          };
+        }
+        case "project.risk.changed": {
+          const added = payload["added"];
+          const removed = payload["removed"];
+          const parts: string[] = [];
+          if (Array.isArray(added) && added.length > 0) {
+            parts.push(`raised: ${added.join(", ")}`);
+          }
+          if (Array.isArray(removed) && removed.length > 0) {
+            parts.push(`cleared: ${removed.join(", ")}`);
+          }
+          return {
+            verb: "RISK_CHANGED",
+            context: "",
+            fromValue: readString(payload, "previous_health"),
+            toValue: readString(payload, "health"),
+            reason: parts.join("; "),
+          };
+        }
+        case "task.created":
+          return {
+            verb: "TASK_CREATED",
+            context: envelope.entity.id,
+            fromValue: "",
+            toValue: "",
+            reason: readString(payload, "title"),
+          };
+        case "task.updated": {
+          const changes = payload["changes"];
+          return {
+            verb: "TASK_UPDATED",
+            context: envelope.entity.id,
+            fromValue: "",
+            toValue: "",
+            reason: isRecord(changes) ? Object.keys(changes).join(", ") : "",
+          };
+        }
+        case "task.state_changed":
+          return {
+            verb: "TASK_STATE_CHANGED",
+            context: envelope.entity.id,
+            fromValue: readString(payload, "from"),
+            toValue: readString(payload, "to"),
+            reason: readString(payload, "reason"),
+          };
+        case "blocker.raised":
+          return {
+            verb: "BLOCKER_RAISED",
+            context: envelope.entity.id,
+            fromValue: "",
+            toValue: "",
+            reason: readString(payload, "description"),
+          };
+        case "blocker.resolved":
+          return {
+            verb: "BLOCKER_RESOLVED",
+            context: envelope.entity.id,
+            fromValue: "",
+            toValue: "",
+            reason: readString(payload, "resolution"),
+          };
+        case "note.added":
+          return {
+            verb: "NOTE_ADDED",
+            context: envelope.entity.id,
+            fromValue: "",
+            toValue: "",
+            reason: readString(payload, "body"),
+          };
+        default:
+          return null;
+      }
+    }
+
+    /**
+     * Builds one full timeline row, mirroring the server-rendered
+     * `TimelineEntryRow` markup exactly — the live path and the resync path must
+     * never disagree about shape (docs/standards/PATTERNS_FRONTEND.md §6).
+     */
+    function buildRow(
+      entry: NormalizedEntry,
+      occurredAt: string,
+      actor: string,
+    ): HTMLLIElement {
+      const row = document.createElement("li");
+      row.className = "timeline-entry";
+      row.dataset.occurredAt = occurredAt;
+      const time = document.createElement("span");
+      time.className = "figure timeline-time";
+      time.textContent = formatInstant(occurredAt);
+      const actorEl = document.createElement("span");
+      actorEl.className = "label timeline-actor";
+      actorEl.textContent = actor;
+      const verb = document.createElement("span");
+      verb.className = "label timeline-verb";
+      verb.textContent = entry.verb;
+      row.append(time, actorEl, verb);
+      if (entry.context !== "") {
+        const context = document.createElement("span");
+        context.className = "figure timeline-context";
+        context.textContent = entry.context;
+        row.append(context);
+      }
+      if (entry.fromValue !== "" || entry.toValue !== "") {
+        const move = document.createElement("span");
+        move.className = "figure timeline-move";
+        move.textContent = `${entry.fromValue} → ${entry.toValue}`;
+        row.append(move);
+      }
+      if (entry.reason !== "") {
+        const reason = document.createElement("span");
+        reason.className = "body-text timeline-reason";
+        reason.textContent = entry.reason;
+        row.append(reason);
+      }
+      return row;
+    }
+
+    /**
+     * Prepends one envelope as a row — unless it was already rendered (dedupe on
+     * `id`) or it is not newer than the newest rendered row (redelivery guard).
+     */
+    function append(envelope: Envelope): void {
+      if (list === null || rendered.has(envelope.id)) return;
+      const entry = normalize(envelope);
+      if (entry === null) return;
+      const newest = list.querySelector<HTMLElement>("[data-occurred-at]");
+      if (
+        newest !== null &&
+        Date.parse(envelope.occurred_at) <=
+          Date.parse(newest.dataset.occurredAt ?? "")
+      ) {
+        return;
+      }
+      rendered.add(envelope.id);
+      list.prepend(buildRow(entry, envelope.occurred_at, envelope.actor));
+      if (emptyNote !== null) emptyNote.hidden = true;
+    }
+
+    function makeServerRow(entry: ActivityEntry): HTMLLIElement {
+      return buildRow(
+        {
+          verb: entry.verb,
+          context: "",
+          fromValue: entry.from_value,
+          toValue: entry.to_value,
+          reason: entry.reason,
+        },
+        entry.occurred_at,
+        entry.actor,
+      );
+    }
+
+    function setLoading(on: boolean): void {
+      if (loading !== null) loading.hidden = !on;
+      if (list !== null) list.hidden = on;
+      root.setAttribute("aria-busy", on ? "true" : "false");
+    }
+
+    /** `stream.reset` recovery: refetch the trail rather than trust local state. */
+    async function resync(): Promise<void> {
+      setLoading(true);
+      const res = await getProjectActivity(projectCode);
+      setLoading(false);
+      if (!res.ok) {
+        if (errorNote !== null) {
+          errorNote.textContent = "The chronology could not be refreshed.";
+          errorNote.hidden = false;
+        }
+        return;
+      }
+      if (errorNote !== null) errorNote.hidden = true;
+      if (list !== null) {
+        list.replaceChildren(...res.data.items.map(makeServerRow));
+      }
+      if (emptyNote !== null) emptyNote.hidden = res.data.items.length > 0;
+      rendered.clear();
+    }
+
+    const SUBSCRIBED_TOPICS: readonly Topic[] = [
+      "project.updated",
+      "project.state_changed",
+      "project.priority.recalculated",
+      "project.risk.changed",
+      "task.created",
+      "task.updated",
+      "task.state_changed",
+      "blocker.raised",
+      "blocker.resolved",
+      "note.added",
+    ];
+
+    for (const topic of SUBSCRIBED_TOPICS) {
+      cleanups.push(subscribe(topic, append));
+    }
+    cleanups.push(
+      onReset(() => {
+        void resync();
+      }),
+      onStatus((status) => {
+        if (staleBanner !== null)
+          staleBanner.hidden = status !== "disconnected";
+      }),
+    );
+
+    staleRetry?.addEventListener("click", () => {
+      retry();
+    });
+
+    document.addEventListener(
+      "astro:before-swap",
+      () => cleanups.forEach((off) => off()),
+      { once: true },
+    );
+  }
+</script>
+
+<style is:global>
+  .timeline-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .timeline-list[hidden] {
+    display: none;
+  }
+
+  .timeline-empty {
+    padding: var(--space-2) 0;
+    color: var(--color-legend-dim);
+  }
+
+  .timeline-empty[hidden] {
+    display: none;
+  }
+
+  .timeline-error {
+    color: var(--color-nogo);
+    padding: var(--space-2) 0;
+  }
+
+  .timeline-error[hidden] {
+    display: none;
+  }
+</style>

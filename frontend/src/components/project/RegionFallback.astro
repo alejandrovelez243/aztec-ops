@@ -1,0 +1,88 @@
+---
+/**
+ * The non-data arms of a region's view state, server-rendered: skeleton rows for
+ * `loading`, the named sentence for `empty`, and the failure with its retry for
+ * `error`. The retry of a server-rendered error is a same-URL GET — it re-runs the
+ * exact request that failed, which is the recovery a reload offers without losing
+ * the operator's place.
+ *
+ * `ready` and `disconnected` never reach this component: they render the region
+ * itself (disconnected keeps the data, marked stale, via the region's island).
+ */
+export interface Props {
+  kind: "loading" | "empty" | "error";
+  /** UI copy mapped from the `ApiError` code by the page — never the API's `message`. */
+  message: string;
+  /** Retry target for the error arm; defaults to the current URL. */
+  retryHref?: string;
+}
+
+const { kind, message, retryHref = "" } = Astro.props;
+---
+
+{
+  kind === "loading" ? (
+    <div class="region-loading" aria-busy="true">
+      <span class="label">LOADING</span>
+      <div class="skeleton" />
+      <div class="skeleton" />
+    </div>
+  ) : kind === "empty" ? (
+    <p class="label region-empty">{message}</p>
+  ) : (
+    <div class="region-error" role="alert">
+      <span class="label error-label">ERROR</span>
+      <span class="body-text">{message}</span>
+      <a class="label retry" href={retryHref === "" ? undefined : retryHref}>
+        RETRY
+      </a>
+    </div>
+  )
+}
+
+<style>
+  .region-loading {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .region-loading .label {
+    color: var(--color-legend-dim);
+  }
+
+  .skeleton {
+    height: var(--size-row);
+    background: var(--color-plate);
+    border: var(--border-width) solid var(--color-rule);
+    border-top-color: var(--color-plate-edge);
+  }
+
+  .region-empty {
+    padding: var(--space-2) 0;
+    color: var(--color-legend-dim);
+  }
+
+  .region-error {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border: var(--border-width) solid var(--color-nogo);
+  }
+
+  .error-label {
+    color: var(--color-nogo);
+  }
+
+  .retry {
+    color: var(--color-legend);
+    text-decoration: none;
+    padding: var(--space-1) var(--space-2);
+    border: var(--border-width) solid var(--color-rule);
+  }
+
+  .retry:hover {
+    background: var(--color-plate);
+  }
+</style>

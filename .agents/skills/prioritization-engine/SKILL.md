@@ -1,6 +1,6 @@
 ---
 name: prioritization-engine
-description: Load when working on the ranking in backend/apps/prioritization — adding or changing a priority signal strategy, touching PriorityPolicy weights or policy versions, the PriorityScore breakdown JSONB, PriorityOverride, the risk Specifications (IsBlocked, IsOverdue, HasNoNextStep, HasNoTargetDate, IsStale, OwnerOverloaded) and RiskFlag severity, writing database-free tests for any of them, or answering "why is this project ranked first" from a persisted breakdown.
+description: Load when working on the ranking in backend/apps/prioritization — adding or changing a priority signal strategy, touching PriorityPolicy weights or policy versions, the PriorityScore breakdown JSONB, PriorityOverride, the risk Specifications (IsBlocked, IsOverdue, HasNoNextStep, HasNoTargetDate, IsStale, OwnerOverloaded) and their severities, writing database-free tests for any of them, or answering "why is this project ranked first" from a persisted breakdown.
 ---
 
 # Prioritization engine
@@ -79,11 +79,42 @@ class Blockage:
    the others so the weights sum to 1.0 before modifiers. Move `is_active` to the new version.
    Do not edit the active row: existing `PriorityScore` rows keep their `policy_version` and stay
    reproducible.
-4. Write the pure test in `backend/apps/prioritization/tests/domain/`: no database, no fixtures,
-   table-driven over the boundaries (no blockers, one blocker at day 0, at
-   `AGE_SATURATION_DAYS`, past it), asserting the reason string as well as the number.
+4. Write the pure test in `backend/apps/prioritization/tests/domain/` as a
+   `django.test.SimpleTestCase` class named after the signal and the situation. `SimpleTestCase`
+   forbids database access, so it is the base class that turns "the engine is pure" into a
+   mechanically enforced fact: a strategy that grows an ORM call fails the test instead of passing
+   it. Table-driven over the boundaries (no blockers, one blocker at day 0, at
+   `AGE_SATURATION_DAYS`, past it) with `subTest`, asserting the reason string as well as the
+   number, with unittest assertions.
+
+```python
+# backend/apps/prioritization/tests/domain/test_blockage.py
+from django.test import SimpleTestCase
+
+from apps.prioritization.domain.signals.blockage import AGE_SATURATION_DAYS, Blockage
+
+
+class BlockageAgeSaturationTests(SimpleTestCase):
+    signal = Blockage()
+
+    def test_no_open_blockers_scores_zero(self) -> None:
+        score, reason = self.signal.evaluate(make_input(open_blockers=[]))
+        self.assertEqual(score, 0.0)
+        self.assertIn("No open blockers", reason)
+
+    def test_oldest_blocker_saturates_the_signal(self) -> None:
+        for days, expected in ((0, 0.0), (AGE_SATURATION_DAYS, 1.0), (AGE_SATURATION_DAYS + 7, 1.0)):
+            with self.subTest(days=days):
+                score, reason = self.signal.evaluate(make_input(blocker_age_days=days))
+                self.assertEqual(score, expected)
+                self.assertIn(str(days), reason)
+```
 5. Run `pytest backend/apps/prioritization -k <code>` and `make lint` (mypy strict covers `domain/`).
-6. Run `make recompute` so persisted scores reflect the new policy version.
+6. Recompute so persisted scores reflect the new policy version: the
+   "Recompute priority for selected projects" admin action, or `POST /api/v1/recompute` (an
+   ops-lead capability — the route declares `auth=ops_lead` and answers 403 `ops_lead_required`
+   to anyone else). There is deliberately no Makefile target for it — a command run from a
+   checkout is not an operation.
 
 A signal key present in `weights` with no registered strategy — or the reverse — raises at policy
 load. It is never silently defaulted.
@@ -102,9 +133,13 @@ class HasNoTargetDate(Specification):
         return not data.is_archived and data.target_date is None
 ```
 
-The evaluator returns a list of `RiskFlag`. Project health is **derived** from the flags at read
-time; there is no editable health field, and the dataset's imported `health` column is a
-cross-check only.
+The evaluator returns a list of `RiskFlag` **values**, and nothing persists them (ADR 0011): the
+six conditions are pure functions of rows that already exist, so `evaluate_risk` is called where the
+flags are read — from the write side for a project detail, from the `ProjectSnapshot` row for a
+queue page. Project health is derived from those flags on the same read; there is no editable health
+field, no `health` column and no `RiskFlag` table, and the dataset's imported `health` column is a
+cross-check only. Assemble the inputs once and evaluate in Python: a query per project inside a loop
+over the queue is the N+1 the read model exists to prevent.
 
 ## Manual override
 
@@ -115,7 +150,9 @@ remains reversible. It emits an `ActivityRecord` with verb `PRIORITY_CHANGED` an
 `MANUAL` (engine-driven recomputations use origin `POLICY` and name the signal that moved), and
 the UI labels the row as an override. A forced position with no recorded reason is
 indistinguishable from a bug three weeks later — that is why the reason is a constraint, not a
-convention.
+convention. Writing one is the same ops-lead capability that guards the portfolio recompute: the
+route declares `auth=ops_lead`, anyone else gets 403 `ops_lead_required`, and the frontend renders
+the control from the `is_ops_lead` the sign-in response reports, never by decoding the token.
 
 ## Reading a breakdown out loud
 
@@ -130,6 +167,43 @@ two or three, then the modifiers and flags. For example:
 
 Never justify a rank from the model fields directly. If the breakdown does not explain the
 number, the breakdown is the bug.
+
+## Code standards that bind here
+
+Normative: `docs/standards/BACKEND.md` and `docs/standards/PATTERNS_BACKEND.md` (§4 Strategy +
+Registry, §5 Specification, §9 Value Object). The three rules that bite hardest in this area:
+
+- **A new signal or risk criterion is a class plus a registry line, never a branch.**
+  `PATTERNS_BACKEND.md` §4 and `BACKEND.md` §4 (OCP): the evaluator iterates the registry and never
+  learns a signal's name. Checkable: the diff that adds a signal touches one new file under
+  `domain/signals/` plus one `PriorityPolicy` fixture row — `grep -n "signal_code ==" ` and
+  `grep -n "flag_code ==" ` over `backend/apps/prioritization/` must stay empty.
+- **No number that the operation may want to change lives in code.** `BACKEND.md` §3: weights come
+  from the active `PriorityPolicy.weights`, keyed by registered signal code. Structural thresholds
+  are `Final` named constants in `domain/` (`AGE_SATURATION_DAYS: Final[int] = 21`), never inline
+  literals. Checkable: no float literal outside a constant or a fixture in a strategy body.
+- **`domain/` is pure and strictly typed.** No Django import, no ORM access, no `datetime.now()`,
+  no `dict[str, Any]` crossing into a strategy — the input is the `SignalInput` /
+  `ProjectRiskInput` frozen Pydantic model, `SignalResult` is frozen too
+  (`PATTERNS_BACKEND.md` §9). `BaseModel` rather than a plain container because it is the same
+  type system django-ninja uses, so these objects reach the API without a parallel schema and are
+  validated at construction instead of at the boundary.
+  mypy strict covers `apps.*.domain.*`; a `cast()` here must be justified by a check in the same
+  function (`BACKEND.md` §1). `OwnerOverloaded` reads `subject.owner_load_points`, it does not
+  count tasks.
+
+Docstrings on every strategy and specification state the fact measured and the boundary values
+(`BACKEND.md` §2): "Overdue returns 1.0; a null `target_date` returns 0.5 and raises
+`NO_TARGET_DATE`." Tests in `tests/domain/` are `SimpleTestCase` classes, one per behaviour under
+test, with no factory and no database: the base class refuses database access, so purity is proved
+by the suite rather than asserted in review, and coverage here should be high. Methods keep the
+`test_` prefix, are named after the behaviour rather than the method under test, use the unittest
+assertions (`self.assertEqual`, `self.assertIn`, `self.assertRaises`) and `subTest` for
+table-driven cases, and assert the `reason` / `detail` string as well as the number
+(`BACKEND.md` §7, `CLAUDE.md` rule 15). The database-backed tests of this app — recompute,
+consumer idempotency, policy load — are `TestCase` classes; anything that goes through the outbox
+or `on_commit` is a `TransactionTestCase`, because `TestCase` never commits and such a test would
+pass while proving nothing.
 
 ## Common mistakes
 
@@ -146,13 +220,42 @@ number, the breakdown is the bug.
   Compare against `priority.code` and `workflow_state.category`. Labels are Spanish data and
   are admin-editable.
 - Importing Django or a `Project` model instance into `domain/`. Strategies take a plain
-  dataclass input that already includes `now`.
+  Pydantic input model that already includes `now`.
 - Calling `datetime.now()` inside a strategy, which makes the test non-deterministic and the
   score non-reproducible.
 - Lowering the score for an overloaded owner, or decaying `blockage` with age. Both hide the
   situation the ranking exists to expose.
 - Forgetting to recompute after changing data, a policy or a signal, so the API keeps serving
   stale `PriorityScore` and `ProjectSnapshot` rows. Recomputation is event-driven in normal
-  operation; after a seed or a policy change run `make recompute` explicitly.
+  operation, and the seed that `make up` runs already chains it; after a policy change made outside
+  that path, recompute explicitly — the admin action or `POST /api/v1/recompute`.
 - Writing an override into `PriorityScore.value` "so the sorting is simpler". It destroys the
   audit trail and the UI can no longer label it as an override.
+- An unnamed numeric literal inside a strategy — `21`, `0.5`, `40` written inline. It becomes a
+  `Final` constant in `domain/` when it is structural, or a `PriorityPolicy` weight when the
+  operation must be able to change it (`BACKEND.md` §3).
+- Passing a `dict[str, Any]` into a strategy or specification instead of `SignalInput` /
+  `ProjectRiskInput`, or returning a bare `(float, str)` tuple where a frozen `SignalResult` with
+  its clamping invariant is expected (`BACKEND.md` §1, `PATTERNS_BACKEND.md` §9).
+- A specification that reaches for the ORM to get the fact it needs — `Task.objects.filter(...)`
+  inside `is_satisfied_by`. It breaks composition, LSP and every database-free test
+  (`BACKEND.md` §4). The caller loads the facts; the specification only decides.
+- A docstring on a strategy that paraphrases the signature ("Evaluates the signal.") instead of
+  naming the measured fact and its boundary values (`BACKEND.md` §2). Ruff `D` passes; review does
+  not.
+- Writing a domain test as a loose module-level `def test_...`, or on `TestCase` instead of
+  `SimpleTestCase`, or reaching for a factory to build a `SignalInput`. `TestCase` grants the
+  database, so it lets an impure strategy pass; `SimpleTestCase` is what makes the purity of
+  `domain/` a fact the suite proves. The database belongs to the integration tests: recompute,
+  consumer idempotency, policy load (`BACKEND.md` §7, `PATTERNS_BACKEND.md` §10).
+- Reintroducing `pytest.mark.django_db` or a pytest fixture anywhere in this app. The base class
+  already declares what database access a test gets; a second mechanism for the same decision is
+  how a pure test quietly starts hitting the database (`CLAUDE.md` rule 15).
+- Testing the outbox emission of a recomputation on `TestCase`. It wraps the test in a transaction
+  that never commits, so `on_commit` never fires and the drain's `SELECT ... FOR UPDATE SKIP
+  LOCKED` on another connection cannot see the row — use `TransactionTestCase`.
+- Bare `assert` in a test instead of `self.assertEqual` / `self.assertIn` / `self.assertRaises`,
+  or duplicating a method per boundary value instead of one `subTest` loop.
+- Introducing a `BaseSignalEvaluator` ABC or a second `Protocol` layer over the registry. The
+  registry plus the existing protocol is the abstraction; anything above it is the premature
+  abstraction banned in `PATTERNS_BACKEND.md` §11.

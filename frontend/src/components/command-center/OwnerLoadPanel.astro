@@ -1,0 +1,201 @@
+---
+import type { TeamLoadEntry } from "../../lib/api/domain";
+import type { ViewState } from "../../lib/view-state";
+import { assertNever } from "../../lib/view-state";
+
+/**
+ * Owner load panel: what each person is carrying against their weekly capacity, computed by
+ * the backend from open task rows (`GET /api/v1/team/load`).
+ *
+ * Overloaded rows (`is_overloaded`) are marked with a caution left edge and the utilization in
+ * the caution register — overload is a staffing signal, never a score penalty (ARCHITECTURE
+ * §4.1), so it is drawn as attention, not as failure. Utilization renders as a tabular
+ * percentage; load vs capacity renders as `load / capacity` points.
+ *
+ * All four view states are real markup: the panel is server-rendered, so `loading` is the
+ * skeleton a client-side retry would swap in and `disconnected` keeps the figures with a stale
+ * marker; both exist so the state machine stays exhaustive.
+ */
+export interface Props {
+  state: ViewState<readonly TeamLoadEntry[]>;
+}
+
+const { state } = Astro.props;
+
+/** Formats utilization as a whole-percentage tabular figure (`155%`). */
+function formatUtilization(utilization: number): string {
+  return `${Math.round(utilization * 100)}%`;
+}
+---
+
+<section
+  class="panel"
+  data-panel="owner-load"
+  aria-labelledby="owner-load-title"
+>
+  <h2 class="headline panel-title" id="owner-load-title">Owner load</h2>
+  {
+    (() => {
+      switch (state.kind) {
+        case "loading":
+          return (
+            <div class="panel-loading" aria-busy="true">
+              {[0, 1, 2, 3, 4].map((row) => (
+                <div
+                  class="skeleton-row"
+                  aria-hidden="true"
+                  data-skeleton={row}
+                />
+              ))}
+              <span class="visually-hidden">Loading owner load…</span>
+            </div>
+          );
+        case "empty":
+          return <p class="body-text panel-note">{state.message}</p>;
+        case "error":
+          return (
+            <div class="panel-note" role="alert">
+              <p class="body-text">
+                Owner load could not be fetched ({state.code}).
+              </p>
+              <a class="label retry" href="/">
+                Retry
+              </a>
+            </div>
+          );
+        case "ready":
+        case "disconnected":
+          return (
+            <>
+              {state.kind === "disconnected" && (
+                <p class="label stale-marker" role="status">
+                  Disconnected — figures may be stale
+                  {state.lastEventAt !== null &&
+                    ` · last event ${state.lastEventAt}`}
+                </p>
+              )}
+              <table class="load-table">
+                <thead>
+                  <tr>
+                    <th scope="col" class="label">
+                      Owner
+                    </th>
+                    <th scope="col" class="label">
+                      Load / capacity
+                    </th>
+                    <th scope="col" class="label">
+                      Utilization
+                    </th>
+                    <th scope="col" class="label">
+                      Overdue
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.data.map((entry) => (
+                    <tr
+                      data-overloaded={entry.is_overloaded ? "true" : undefined}
+                    >
+                      <td>
+                        <span class="title owner-label">{entry.label}</span>
+                        <span class="label owner-role">
+                          {entry.role ?? entry.alias}
+                        </span>
+                      </td>
+                      <td class="figure">
+                        {entry.load_points} / {entry.weekly_capacity_points}
+                      </td>
+                      <td class="figure utilization">
+                        {formatUtilization(entry.utilization)}
+                      </td>
+                      <td class="figure">{entry.overdue_tasks}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          );
+        default:
+          return assertNever(state);
+      }
+    })()
+  }
+</section>
+
+<style>
+  .panel {
+    border: 1px solid var(--color-rule);
+    padding: var(--space-3);
+  }
+
+  .panel-title {
+    margin: 0 0 var(--space-3);
+    color: var(--color-legend);
+  }
+
+  .panel-note {
+    color: var(--color-legend-dim);
+    margin: 0;
+  }
+
+  .retry {
+    display: inline-block;
+    margin-top: var(--space-2);
+    color: var(--color-legend);
+    border: 1px solid var(--color-rule);
+    padding: var(--space-1) var(--space-2);
+    text-decoration: none;
+  }
+
+  .retry:hover {
+    background: var(--color-plate);
+  }
+
+  .stale-marker {
+    color: var(--color-caution);
+    margin: 0 0 var(--space-2);
+  }
+
+  .load-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .load-table th {
+    text-align: left;
+    color: var(--color-legend-dim);
+    padding: var(--space-1) var(--space-2) var(--space-1) 0;
+    border-bottom: 1px solid var(--color-rule);
+  }
+
+  .load-table td {
+    padding: var(--space-1) var(--space-2) var(--space-1) 0;
+    border-bottom: 1px solid var(--color-rule);
+    color: var(--color-legend);
+  }
+
+  .load-table tr[data-overloaded] td:first-child {
+    border-inline-start: 2px solid var(--color-caution);
+    padding-inline-start: var(--space-2);
+  }
+
+  .load-table tr[data-overloaded] .utilization {
+    color: var(--color-caution);
+  }
+
+  .owner-label {
+    display: block;
+  }
+
+  .owner-role {
+    display: block;
+    color: var(--color-legend-dim);
+    font-size: 10px;
+  }
+
+  .skeleton-row {
+    height: 40px;
+    border-bottom: 1px solid var(--color-rule);
+    background: var(--color-plate);
+  }
+</style>

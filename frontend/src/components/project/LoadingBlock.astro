@@ -1,0 +1,45 @@
+---
+/**
+ * The loading arm of a region that refetches from the client (resync after a
+ * rejected transition, recovery after `stream.reset`): skeleton rows matching the
+ * final layout height, never a spinner-only screen (skill: the four view states).
+ *
+ * Presentational only: the region's script toggles `hidden` and sets `aria-busy`
+ * on the region root while a client-side fetch is in flight.
+ */
+export interface Props {
+  /** Skeleton row count; match the region's typical content height. */
+  rows?: number;
+}
+
+const { rows = 2 } = Astro.props;
+---
+
+<div class="loading-block" data-loading hidden aria-hidden="true">
+  <span class="label">SYNCING</span>
+  {Array.from({ length: rows }, () => <div class="skeleton" />)}
+</div>
+
+<style>
+  .loading-block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-2) 0;
+  }
+
+  .loading-block[hidden] {
+    display: none;
+  }
+
+  .loading-block .label {
+    color: var(--color-legend-dim);
+  }
+
+  .skeleton {
+    height: var(--size-row);
+    background: var(--color-plate);
+    border: var(--border-width) solid var(--color-rule);
+    border-top-color: var(--color-plate-edge);
+  }
+</style>

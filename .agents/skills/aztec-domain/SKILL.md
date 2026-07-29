@@ -20,7 +20,7 @@ questions every morning (`ARCHITECTURE.md` §1):
 This is the build order and the acceptance test for any feature. Question 1 is the
 prioritization engine plus the `breakdown` shown next to the number. Question 2 is the risk
 specifications and the blockers / no-next-step panels. Question 3 is computed owner load
-against `TeamMember.weekly_capacity_points`. A feature that does not serve one of the three
+against `accounts.User.weekly_capacity_points`. A feature that does not serve one of the three
 belongs in §12 "deliberately out of scope", not in the repo.
 
 ## 2. Engagement type
@@ -47,7 +47,7 @@ Diagnostic can have a shorter lifecycle than a recurring maintenance engagement.
 
 These are the definitions. Do not re-derive them locally in a view or a serializer; they live
 as specifications in `backend/apps/prioritization` / risk domain code (§5) and everything else reads
-the resulting `RiskFlag` list.
+the resulting `RiskFlag` list, which is **computed on every read and never stored** (ADR 0011).
 
 **Blocked** — a project is blocked if **any** of:
 - it has at least one open `Blocker` (`resolved_at IS NULL`), or
@@ -88,7 +88,7 @@ mandatory reason, labeled as an override in the UI (§4.2).
 ## 5. The source dataset
 
 Normalized export: `data/raw/dataset.json`, four sheets — `Projects` (22), `Tasks` (82),
-`Team` (5), `Notas` (junk, ignore). 16 distinct clients, 5 team members.
+`Team` (5), `Notas` (junk, ignore). 16 distinct clients, 5 people.
 
 Traps, all of which `backend/scripts/xlsx_to_fixtures.py` resolves once at fixture-generation time so
 that no runtime code ever sees them:
@@ -128,6 +128,28 @@ that no runtime code ever sees them:
 Task priority in the source: `Critica` 13, `Alta` 38, `Media` 23, `Baja` 8 — these become
 `Priority` rows with numeric `weight`.
 
+## 6. Code standards that bind this vocabulary
+
+Normative: `docs/standards/BACKEND.md` and `docs/standards/PATTERNS_BACKEND.md`. Three rules from
+them decide whether the glossary above survives contact with the code:
+
+1. **Compare `code` or `category`, never a label** (`BACKEND.md` §3, `PATTERNS_BACKEND.md` §6,
+   `CLAUDE.md` rule 1). Taxonomies (`EngagementType`, `Priority`, `Blocker.kind`) are matched on
+   `code`; workflow states on `category`, the closed five-value set. Any string literal in a
+   comparison must be one of those; `"Proyecto"`, `"Bloqueada"`, `"Sano"` appearing in a condition
+   is a defect, not a style preference.
+2. **A domain definition lives in exactly one docstring** (`BACKEND.md` §2). The blocked
+   three-way OR, the "no next step" conjunction and the derivation of `health` are stated in the
+   docstring of the specification or the health function that owns them — with the boundary values
+   — and nowhere else. A docstring that paraphrases the signature does not count as stating the
+   invariant.
+3. **Dataset traps are Pydantic model fields, not dicts or ORM reads**
+   (`BACKEND.md` §1, `PATTERNS_BACKEND.md` §5, §9). Null `target_date`, open blocker counts and
+   owner load reach a signal or a specification through `SignalInput` / `ProjectRiskInput` —
+   `BaseModel`s typed as `date | None` and `int` — never `dict[str, Any]`, never a query inside
+   `is_satisfied_by`. `Optional` is how the null-is-a-signal rule is enforced by mypy, and
+   `BaseModel` is what makes it fail at construction instead of three layers later.
+
 ## Common mistakes
 
 - Comparing against Spanish labels (`if state.label == "Bloqueada"`). Compare `code` for
@@ -146,3 +168,17 @@ Task priority in the source: `Critica` 13, `Alta` 38, `Media` 23, `Baja` 8 — t
 - Dropping an unresolvable `dependency` string instead of keeping it in `raw_label`.
 - Adding a risk condition or a prioritization signal by extending an existing branch instead of
   registering a new class.
+- Restating the blocked / no-next-step / health definitions in a second place — a serializer
+  comment, a consumer, a view — instead of leaving them in the owning specification's docstring.
+  Two copies of a definition is one definition and one future contradiction.
+- Writing a specification or signal docstring that repeats the signature ("Checks if the project
+  is stale") instead of naming the fact and the boundary: `STALE_AFTER_DAYS = 14`, what a null
+  `target_date` scores, what an ownerless project returns.
+- Passing project facts into a signal or specification as `dict[str, Any]` scraped from the ORM.
+  They take `SignalInput` / `ProjectRiskInput`; a `.objects.` call inside `is_satisfied_by` makes
+  the spec impure and untestable without a database.
+- Typing `target_date` or `business_value` as non-optional to avoid a mypy complaint. The null is
+  the `NO_TARGET_DATE` signal; `date | None` is what keeps it from being backfilled downstream.
+- Naming a domain concept `data`, `info`, `prio` or `wf`, or parking a domain helper in a
+  `utils.py`. The glossary words are the identifiers: `engagement_type`, `open_blocker_count`,
+  `owner_load_points`.

@@ -1,0 +1,48 @@
+---
+/**
+ * The SSE-disconnected banner of one live region: the content below it stays on
+ * screen, marked stale, and the control is wired to the store's `retry()` by the
+ * region's own script (docs/standards/FRONTEND.md §4). Never blank the region and
+ * never show stale numbers as if they were live.
+ *
+ * Presentational only: the parent island toggles `hidden` from `onStatus` and
+ * attaches the click handler — this component imports nothing.
+ */
+---
+
+<div class="stale-banner" data-stale-banner hidden role="status">
+  <span class="label stale-text">STREAM DOWN — SHOWING LAST KNOWN DATA</span>
+  <button type="button" class="label stale-retry" data-stale-retry
+    >RECONNECT</button
+  >
+</div>
+
+<style>
+  .stale-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    border: var(--border-width) solid var(--color-nogo);
+    margin-bottom: var(--space-2);
+  }
+
+  .stale-banner[hidden] {
+    display: none;
+  }
+
+  .stale-text {
+    color: var(--color-nogo);
+  }
+
+  .stale-retry {
+    padding: var(--space-1) var(--space-2);
+    background: var(--color-plate);
+    border: var(--border-width) solid var(--color-rule);
+    color: var(--color-legend);
+  }
+
+  .stale-retry:hover {
+    background: var(--color-panel);
+  }
+</style>

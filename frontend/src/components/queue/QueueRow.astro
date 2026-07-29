@@ -1,0 +1,228 @@
+---
+import type { RiskFlag, ScoreBreakdownEntry } from "../../lib/api/domain";
+import { formatCountdown } from "../../lib/format/countdown";
+import { formatScore } from "../../lib/format/score";
+import CountdownCell from "./CountdownCell.astro";
+import RiskLegend from "./RiskLegend.astro";
+import ScoreBreakdown from "./ScoreBreakdown.astro";
+import ScoreCell from "./ScoreCell.astro";
+import VerdictCell from "./VerdictCell.astro";
+
+/**
+ * One row of the command center status matrix: the fixed column sequence (code, project +
+ * client, owner, risk legend, countdown, score, verdict) plus its expandable score breakdown.
+ *
+ * The breakdown lives in a second `<tr>` spanning all columns directly below the row, so the
+ * reasoning reads on the same line as the number it explains (DESIGN.md) — never in a modal.
+ * The expand button toggles it via `aria-expanded`; the queue island wires the behaviour and
+ * patches the marked cells live, comparing each envelope's `occurred_at` against
+ * `data-updated-at` before touching the DOM.
+ *
+ * Row emphasis is a 2px left edge in the workflow state's category colour, bound through
+ * `data-state-category` — the mark a controller makes against a line (DESIGN.md, Shapes).
+ */
+export interface Props {
+  code: string;
+  name: string;
+  /** `QueueItemView.client_alias` — the read model serves the slug only, so the slug renders. */
+  clientAlias: string;
+  /** Owner display label, or `null` when the row is unassigned — absence is a signal. */
+  ownerLabel: string | null;
+  /** `StateRef.category` — selects the row's left-edge colour; never branched on `code`. */
+  stateCategory: string;
+  /** `HealthRef.code` — the derived verdict vocabulary the verdict cell maps onto GO / NO GO. */
+  healthCode: string;
+  /** ISO date or `null`; `null` is the `NO_TARGET_DATE` signal and renders as `NO DATE`. */
+  targetDate: string | null;
+  scoreValue: number;
+  breakdown: readonly ScoreBreakdownEntry[];
+  modifiers: Record<string, number>;
+  policyVersion: string;
+  override: { position: number | null; reason: string } | null;
+  flags: readonly RiskFlag[];
+  /** Fixed legend positions; forwarded to the legend block. */
+  legendOrder: readonly string[];
+  /** `QueueItemView.updated_at` — the staleness cursor live patches are compared against. */
+  updatedAt: string;
+}
+
+const {
+  code,
+  name,
+  clientAlias,
+  ownerLabel,
+  stateCategory,
+  healthCode,
+  targetDate,
+  scoreValue,
+  breakdown,
+  modifiers,
+  policyVersion,
+  override,
+  flags,
+  legendOrder,
+  updatedAt,
+} = Astro.props;
+
+const countdown = formatCountdown(targetDate);
+const breakdownId = `breakdown-${code}`;
+---
+
+<tr
+  class="queue-row"
+  data-entity-id={code}
+  data-updated-at={updatedAt}
+  data-health={healthCode}
+  data-state-category={stateCategory}
+>
+  <td class="code-cell">
+    <button
+      type="button"
+      class="expand-toggle"
+      data-expand
+      aria-expanded="false"
+      aria-controls={breakdownId}
+    >
+      <span class="expand-glyph" aria-hidden="true">▸</span>
+      <span class="visually-hidden">Show score breakdown for {code}</span>
+    </button>
+    <a class="code-link figure" href={`/projects/${code}`}>{code}</a>
+  </td>
+  <td class="project-cell">
+    <span class="title project-name">{name}</span>
+    <span class="label client-alias">{clientAlias}</span>
+  </td>
+  <td class="owner-cell body-text" data-owner>{ownerLabel ?? "—"}</td>
+  <RiskLegend flags={flags} legendOrder={legendOrder} live />
+  <CountdownCell text={countdown.text} tone={countdown.tone} live />
+  <ScoreCell scoreText={formatScore(scoreValue)} override={override} live />
+  <VerdictCell healthCode={healthCode} live />
+</tr>
+<tr class="breakdown-row" id={breakdownId} data-breakdown-row hidden>
+  <td colspan="7">
+    <ScoreBreakdown
+      entries={breakdown}
+      modifiers={modifiers}
+      policyVersion={policyVersion}
+    />
+  </td>
+</tr>
+
+<!-- Global: the queue island rebuilds this markup client-side on stream reset, and Astro's
+     scoped styles would not match DOM it creates. -->
+<style is:global>
+  .queue-row {
+    height: 40px;
+  }
+
+  .queue-row td {
+    border-bottom: 1px solid var(--color-rule);
+    vertical-align: middle;
+  }
+
+  /* The controller's mark: a 2px left edge in the state category's colour. */
+  .queue-row td:first-child {
+    border-inline-start: 2px solid var(--color-rule);
+  }
+
+  .queue-row[data-state-category="IN_PROGRESS"] td:first-child {
+    border-inline-start-color: var(--color-go);
+  }
+
+  .queue-row[data-state-category="BLOCKED"] td:first-child {
+    border-inline-start-color: var(--color-nogo);
+  }
+
+  .queue-row[data-state-category="BACKLOG"] td:first-child,
+  .queue-row[data-state-category="DONE"] td:first-child,
+  .queue-row[data-state-category="CANCELLED"] td:first-child {
+    border-inline-start-color: var(--color-legend-dim);
+  }
+
+  .code-cell {
+    padding: var(--space-1) var(--space-2);
+    white-space: nowrap;
+  }
+
+  .expand-toggle {
+    appearance: none;
+    background: none;
+    border: 1px solid transparent;
+    padding: var(--space-1);
+    margin: 0;
+    cursor: pointer;
+    color: var(--color-legend-dim);
+    font: inherit;
+    line-height: 1;
+  }
+
+  .expand-toggle:hover {
+    color: var(--color-legend);
+    border-color: var(--color-rule);
+  }
+
+  .expand-toggle:focus-visible {
+    outline: 1px solid var(--color-legend);
+    outline-offset: 0;
+  }
+
+  .expand-toggle[aria-expanded="true"] .expand-glyph {
+    display: inline-block;
+    transform: rotate(90deg);
+  }
+
+  .code-link {
+    color: var(--color-legend);
+    text-decoration: none;
+    margin-inline-start: var(--space-1);
+  }
+
+  .code-link:hover {
+    text-decoration: underline;
+  }
+
+  .project-cell {
+    padding: var(--space-1) var(--space-3);
+    min-width: 0;
+  }
+
+  .project-name {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 38ch;
+  }
+
+  .client-alias {
+    display: block;
+    color: var(--color-legend-dim);
+    font-size: 10px;
+  }
+
+  .owner-cell {
+    padding: var(--space-1) var(--space-3);
+    white-space: nowrap;
+    color: var(--color-legend);
+    font-size: 13px;
+  }
+
+  .breakdown-row td {
+    border-bottom: 1px solid var(--color-rule);
+    background: var(--color-plate);
+    padding: 0;
+  }
+
+  /* Below 1024px the matrix sheds columns in the DESIGN.md order: client, owner, countdown. */
+  @media (max-width: 1024px) {
+    .client-alias {
+      display: none;
+    }
+  }
+
+  @media (max-width: 900px) {
+    .owner-cell {
+      display: none;
+    }
+  }
+</style>

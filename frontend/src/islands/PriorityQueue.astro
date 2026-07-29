@@ -1,0 +1,678 @@
+---
+import type { QueueItem } from "../lib/api/domain";
+import QueueRow from "../components/queue/QueueRow.astro";
+
+/**
+ * Live body of the command center status matrix.
+ *
+ * Server-renders one `<tbody>` of queue rows from the page's frontmatter fetch — the island
+ * never refetches to populate itself — then a colocated module script keeps the rows live:
+ *
+ * - `project.priority.recalculated` patches the score plate and rebuilds the inline breakdown;
+ * - `project.risk.changed` rebuilds the legend block and re-maps the verdict from the payload's
+ *   derived `health`;
+ * - `project.state_changed` moves the row's category edge (`to_category`, never `to`).
+ *
+ * Every patch is field-level against the affected row only, filtered by `entity.id`, and is
+ * discarded unless the envelope's `occurred_at` is strictly newer than the row's rendered
+ * `data-updated-at` — SSE is at-least-once and replay must not resurrect stale figures.
+ *
+ * On `stream.reset` (`last_event_id_expired`) the island refetches the whole queue through the
+ * typed client and rebuilds the rows, because local state can no longer be trusted; while the
+ * stream is down the rows stay on screen under a stale banner with a reconnect control wired
+ * to the store's `retry()`.
+ */
+export interface Props {
+  items: readonly QueueItem[];
+  /** Fixed legend positions for every row's risk block (Ghost Legend Rule). */
+  legendOrder: readonly string[];
+}
+
+const { items, legendOrder } = Astro.props;
+---
+
+<tbody data-priority-queue data-legend-order={legendOrder.join(",")}>
+  <tr class="stale-row" data-stale-row hidden>
+    <td colspan="7">
+      <span class="label">Stream disconnected — rows may be stale.</span>
+      <button type="button" class="label stale-reconnect" data-reconnect
+        >Reconnect</button
+      >
+    </td>
+  </tr>
+  {
+    items.map((item) => (
+      <QueueRow
+        code={item.code}
+        name={item.name}
+        clientAlias={item.client_alias}
+        ownerLabel={item.owner?.label ?? null}
+        stateCategory={item.state.category}
+        healthCode={item.health.code}
+        targetDate={item.target_date ?? null}
+        scoreValue={item.score.value}
+        breakdown={item.score.breakdown}
+        modifiers={item.score.modifiers ?? {}}
+        policyVersion={item.score.policy_version}
+        override={
+          item.override
+            ? {
+                position: item.override.position ?? null,
+                reason: item.override.reason,
+              }
+            : null
+        }
+        flags={item.risk_flags}
+        legendOrder={legendOrder}
+        updatedAt={item.updated_at}
+      />
+    ))
+  }
+</tbody>
+<template data-queue-skeleton>
+  {
+    [0, 1, 2, 3, 4, 5, 6, 7].map((row) => (
+      <tr class="skeleton-row" data-skeleton={row}>
+        <td colspan="7">
+          <div class="skeleton-bar" />
+        </td>
+      </tr>
+    ))
+  }
+</template>
+
+<!-- Global: the refetch/reset path rebuilds rows and error markup client-side, and Astro's
+     scoped styles would not match DOM it creates. -->
+<style is:global>
+  .stale-row td {
+    padding: var(--space-2) var(--space-3);
+    border-bottom: 1px solid var(--color-rule);
+    color: var(--color-caution);
+  }
+
+  .stale-reconnect {
+    appearance: none;
+    background: none;
+    border: 1px solid var(--color-caution);
+    color: var(--color-caution);
+    padding: var(--space-1) var(--space-2);
+    margin-inline-start: var(--space-3);
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  .stale-reconnect:hover {
+    background: var(--color-plate);
+  }
+
+  .stale-reconnect:focus-visible {
+    outline: 1px solid var(--color-legend);
+    outline-offset: 0;
+  }
+
+  .refetch-error-row td {
+    padding: var(--space-3);
+    border-bottom: 1px solid var(--color-rule);
+    color: var(--color-nogo);
+  }
+
+  .skeleton-row {
+    height: 40px;
+  }
+
+  .skeleton-row td {
+    border-bottom: 1px solid var(--color-rule);
+    padding: var(--space-1) var(--space-3);
+  }
+
+  .skeleton-bar {
+    height: 20px;
+    background: var(--color-plate);
+    border: 1px solid var(--color-rule);
+  }
+</style>
+
+<script>
+  import { getQueue } from "../lib/api/client";
+  import type { QueueItem } from "../lib/api/domain";
+  import { formatCountdown } from "../lib/format/countdown";
+  import { formatScore } from "../lib/format/score";
+  import { onReset, onStatus, retry, subscribe } from "../lib/stream/store";
+  import type { Envelope } from "../lib/stream/store";
+
+  /**
+   * Wire shape of `project.priority.recalculated` payloads (docs/EVENTS.md §4). The envelope's
+   * `payload` arrives as `unknown`; these narrowers are the single boundary where it is parsed.
+   */
+  interface BreakdownLine {
+    code: string;
+    raw: number;
+    weight: number;
+    contribution: number;
+    reason: string;
+  }
+
+  interface PriorityPayload {
+    value: number;
+    policyVersion: string;
+    breakdown: BreakdownLine[];
+    modifiers: Record<string, number>;
+  }
+
+  interface RiskFlagLine {
+    code: string;
+    severity: string;
+    reason: string;
+  }
+
+  interface RiskPayload {
+    flags: RiskFlagLine[];
+    health: string;
+  }
+
+  interface StatePayload {
+    toCategory: string;
+  }
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+  }
+
+  function asBreakdownLine(value: unknown): BreakdownLine | null {
+    if (!isRecord(value)) return null;
+    const { code, raw, weight, contribution, reason } = value;
+    if (
+      typeof code === "string" &&
+      typeof raw === "number" &&
+      typeof weight === "number" &&
+      typeof contribution === "number" &&
+      typeof reason === "string"
+    ) {
+      return { code, raw, weight, contribution, reason };
+    }
+    return null;
+  }
+
+  function asPriorityPayload(payload: unknown): PriorityPayload | null {
+    if (!isRecord(payload)) return null;
+    const { value, policy_version, breakdown, modifiers } = payload;
+    if (
+      typeof value !== "number" ||
+      typeof policy_version !== "string" ||
+      !Array.isArray(breakdown)
+    ) {
+      return null;
+    }
+    const lines: BreakdownLine[] = [];
+    for (const entry of breakdown) {
+      const line = asBreakdownLine(entry);
+      if (line === null) return null;
+      lines.push(line);
+    }
+    const parsedModifiers: Record<string, number> = {};
+    if (isRecord(modifiers)) {
+      for (const [key, modifier] of Object.entries(modifiers)) {
+        if (typeof modifier === "number") parsedModifiers[key] = modifier;
+      }
+    }
+    return {
+      value,
+      policyVersion: policy_version,
+      breakdown: lines,
+      modifiers: parsedModifiers,
+    };
+  }
+
+  function asRiskFlagLine(value: unknown): RiskFlagLine | null {
+    if (!isRecord(value)) return null;
+    const { code, severity, reason } = value;
+    if (
+      typeof code === "string" &&
+      typeof severity === "string" &&
+      typeof reason === "string"
+    ) {
+      return { code, severity, reason };
+    }
+    return null;
+  }
+
+  function asRiskPayload(payload: unknown): RiskPayload | null {
+    if (!isRecord(payload)) return null;
+    const { flags, health } = payload;
+    if (!Array.isArray(flags) || typeof health !== "string") return null;
+    const lines: RiskFlagLine[] = [];
+    for (const entry of flags) {
+      const line = asRiskFlagLine(entry);
+      if (line === null) return null;
+      lines.push(line);
+    }
+    return { flags: lines, health };
+  }
+
+  function asStatePayload(payload: unknown): StatePayload | null {
+    if (!isRecord(payload)) return null;
+    const { to_category } = payload;
+    if (typeof to_category !== "string") return null;
+    return { toCategory: to_category };
+  }
+
+  /** Creates one element with a class list and optional text, keeping builders terse. */
+  function el<K extends keyof HTMLElementTagNameMap>(
+    tag: K,
+    className: string,
+    text?: string,
+  ): HTMLElementTagNameMap[K] {
+    const node = document.createElement(tag);
+    node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  const queueBody = document.querySelector("tbody[data-priority-queue]");
+  if (queueBody instanceof HTMLTableSectionElement) {
+    /* A non-null alias: function declarations below are hoisted, so the instanceof narrowing
+       does not propagate into them — a fresh const with a non-nullable type does. */
+    const tbody: HTMLTableSectionElement = queueBody;
+    const legendOrder = (tbody.dataset.legendOrder ?? "")
+      .split(",")
+      .filter((code) => code !== "");
+
+    /** Finds the main row for a project code, or `null` when the row is not on this page. */
+    function findRow(code: string): HTMLTableRowElement | null {
+      const row = tbody.querySelector(
+        `tr[data-entity-id="${CSS.escape(code)}"]`,
+      );
+      return row instanceof HTMLTableRowElement ? row : null;
+    }
+
+    /**
+     * The staleness guard: a patch applies only when the envelope is strictly newer than the
+     * row's rendered `updated_at`. ISO-8601 UTC timestamps compare lexicographically.
+     */
+    function isNewer(row: HTMLTableRowElement, occurredAt: string): boolean {
+      const rendered = row.dataset.updatedAt ?? "";
+      return occurredAt > rendered;
+    }
+
+    function touch(row: HTMLTableRowElement, occurredAt: string): void {
+      row.dataset.updatedAt = occurredAt;
+    }
+
+    /** Rebuilds one legend block from a full flag set; mirrors `RiskLegend.astro`. */
+    function renderLegend(
+      cell: HTMLElement,
+      flags: readonly RiskFlagLine[],
+    ): void {
+      const block = cell.querySelector(".legend-block");
+      if (!(block instanceof HTMLElement)) return;
+      block.replaceChildren();
+      const byCode = new Map(flags.map((flag) => [flag.code, flag]));
+      const ordered = legendOrder.map((code) => ({
+        code,
+        flag: byCode.get(code),
+      }));
+      const extras = flags.filter((flag) => !legendOrder.includes(flag.code));
+      for (const { code, flag } of ordered) {
+        block.append(buildLegendCell(code, flag ?? null));
+      }
+      for (const flag of extras) {
+        block.append(buildLegendCell(flag.code, flag));
+      }
+    }
+
+    function buildLegendCell(
+      code: string,
+      flag: RiskFlagLine | null,
+    ): HTMLElement {
+      const cell = el("span", "legend-cell", flag === null ? code : flag.code);
+      if (flag === null) {
+        cell.dataset.flag = code;
+        cell.setAttribute("aria-disabled", "true");
+      } else {
+        cell.dataset.flag = flag.code;
+        cell.dataset.severity = flag.severity;
+        cell.tabIndex = 0;
+        cell.title = flag.reason;
+      }
+      return cell;
+    }
+
+    /** Rebuilds the inline score breakdown; mirrors `ScoreBreakdown.astro`. */
+    function renderBreakdown(
+      row: HTMLTableRowElement,
+      payload: PriorityPayload,
+    ): void {
+      const toggle = row.querySelector("[data-expand]");
+      const controls = toggle?.getAttribute("aria-controls");
+      if (typeof controls !== "string") return;
+      const breakdownRow = document.getElementById(controls);
+      const container = breakdownRow?.querySelector("[data-breakdown]");
+      if (!(container instanceof HTMLElement)) return;
+      container.replaceChildren();
+      container.append(
+        el(
+          "span",
+          "label breakdown-title",
+          `Score breakdown · ${payload.policyVersion}`,
+        ),
+      );
+      if (payload.breakdown.length === 0) {
+        container.append(
+          el(
+            "p",
+            "body-text breakdown-empty",
+            "No computed breakdown on record for this score.",
+          ),
+        );
+      } else {
+        const list = el("ol", "breakdown-list");
+        for (const line of payload.breakdown) {
+          const item = el("li", "breakdown-entry");
+          item.dataset.signal = line.code;
+          item.append(
+            el("span", "label signal-code", line.code),
+            el("span", "figure signal-weight", `w ${line.weight}`),
+            el(
+              "span",
+              "figure signal-contribution",
+              formatScore(line.contribution),
+            ),
+            el("span", "body-text signal-reason", line.reason),
+          );
+          list.append(item);
+        }
+        container.append(list);
+      }
+      const modifierEntries = Object.entries(payload.modifiers);
+      if (modifierEntries.length > 0) {
+        const modifiers = el("p", "breakdown-modifiers");
+        modifiers.append(el("span", "label", "Modifiers"));
+        for (const [code, value] of modifierEntries) {
+          modifiers.append(el("span", "figure modifier", `${code} ×${value}`));
+        }
+        container.append(modifiers);
+      }
+    }
+
+    function handlePriority(envelope: Envelope): void {
+      if (envelope.entity.type !== "project") return;
+      const row = findRow(envelope.entity.id);
+      if (row === null || !isNewer(row, envelope.occurred_at)) return;
+      const payload = asPriorityPayload(envelope.payload);
+      if (payload === null) return;
+      const value = row.querySelector("[data-score-value]");
+      if (value instanceof HTMLElement)
+        value.textContent = formatScore(payload.value);
+      renderBreakdown(row, payload);
+      touch(row, envelope.occurred_at);
+    }
+
+    function handleRisk(envelope: Envelope): void {
+      if (envelope.entity.type !== "project") return;
+      const row = findRow(envelope.entity.id);
+      if (row === null || !isNewer(row, envelope.occurred_at)) return;
+      const payload = asRiskPayload(envelope.payload);
+      if (payload === null) return;
+      const legend = row.querySelector("[data-legend]");
+      if (legend instanceof HTMLElement) renderLegend(legend, payload.flags);
+      const verdict = row.querySelector("[data-verdict]");
+      if (verdict instanceof HTMLElement) {
+        verdict.dataset.health = payload.health;
+        const word = verdict.querySelector(".label");
+        if (word instanceof HTMLElement) {
+          word.textContent = payload.health === "BLOCKED" ? "NO GO" : "GO";
+        }
+      }
+      row.dataset.health = payload.health;
+      touch(row, envelope.occurred_at);
+    }
+
+    function handleState(envelope: Envelope): void {
+      if (envelope.entity.type !== "project") return;
+      const row = findRow(envelope.entity.id);
+      if (row === null || !isNewer(row, envelope.occurred_at)) return;
+      const payload = asStatePayload(envelope.payload);
+      if (payload === null) return;
+      row.dataset.stateCategory = payload.toCategory;
+      touch(row, envelope.occurred_at);
+    }
+
+    /* --- Row expansion: reasoning unfolds inline, under the number it defends. --- */
+
+    tbody.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const toggle = target.closest("[data-expand]");
+      if (toggle instanceof HTMLButtonElement) {
+        const controls = toggle.getAttribute("aria-controls");
+        const breakdownRow =
+          typeof controls === "string"
+            ? document.getElementById(controls)
+            : null;
+        if (breakdownRow instanceof HTMLTableRowElement) {
+          const expanded = toggle.getAttribute("aria-expanded") === "true";
+          toggle.setAttribute("aria-expanded", expanded ? "false" : "true");
+          breakdownRow.hidden = expanded;
+        }
+        return;
+      }
+      if (target.closest("[data-reconnect]") !== null) {
+        retry();
+        return;
+      }
+      if (target.closest("[data-retry-refetch]") !== null) {
+        void refetchQueue();
+      }
+    });
+
+    /* --- Stream status: rows stay visible under a stale banner, never blank. --- */
+
+    function setStale(stale: boolean): void {
+      const banner = tbody.querySelector("[data-stale-row]");
+      if (banner instanceof HTMLTableRowElement) banner.hidden = !stale;
+    }
+
+    /* --- Stream reset: local state is untrusted; refetch and rebuild the body. --- */
+
+    function showSkeleton(): void {
+      const template = document.querySelector("template[data-queue-skeleton]");
+      if (!(template instanceof HTMLTemplateElement)) return;
+      const banner = tbody.querySelector("[data-stale-row]");
+      tbody.replaceChildren();
+      if (banner instanceof HTMLTableRowElement) tbody.append(banner);
+      tbody.append(template.content.cloneNode(true));
+    }
+
+    function showRefetchError(message: string): void {
+      const row = el("tr", "refetch-error-row");
+      const cell = document.createElement("td");
+      cell.colSpan = 7;
+      cell.append(
+        el("span", "body-text", `Queue refresh failed (${message}). `),
+      );
+      const button = el("button", "label stale-reconnect", "Retry");
+      button.setAttribute("type", "button");
+      button.dataset.retryRefetch = "";
+      cell.append(button);
+      row.append(cell);
+      tbody.replaceChildren(row);
+    }
+
+    /** Maps a queue item onto the verdict word; mirrors `VerdictCell.astro`. */
+    function verdictWord(healthCode: string): string {
+      return healthCode === "BLOCKED" ? "NO GO" : "GO";
+    }
+
+    /** Rebuilds one matrix row plus its breakdown row; mirrors `QueueRow.astro`. */
+    function buildRow(
+      item: QueueItem,
+    ): [HTMLTableRowElement, HTMLTableRowElement] {
+      const row = el("tr", "queue-row");
+      row.dataset.entityId = item.code;
+      row.dataset.updatedAt = item.updated_at;
+      row.dataset.health = item.health.code;
+      row.dataset.stateCategory = item.state.category;
+
+      const breakdownId = `breakdown-${item.code}`;
+
+      const codeCell = document.createElement("td");
+      codeCell.className = "code-cell";
+      const toggle = el("button", "expand-toggle");
+      toggle.type = "button";
+      toggle.dataset.expand = "";
+      toggle.setAttribute("aria-expanded", "false");
+      toggle.setAttribute("aria-controls", breakdownId);
+      toggle.append(el("span", "expand-glyph", "▸"));
+      const hiddenLabel = el(
+        "span",
+        "visually-hidden",
+        `Show score breakdown for ${item.code}`,
+      );
+      toggle.append(hiddenLabel);
+      const link = el("a", "code-link figure", item.code);
+      link.setAttribute("href", `/projects/${item.code}`);
+      codeCell.append(toggle, link);
+
+      const projectCell = document.createElement("td");
+      projectCell.className = "project-cell";
+      projectCell.append(
+        el("span", "title project-name", item.name),
+        el("span", "label client-alias", item.client_alias),
+      );
+
+      const ownerCell = el(
+        "td",
+        "owner-cell body-text",
+        item.owner?.label ?? "—",
+      );
+      ownerCell.dataset.owner = "";
+
+      const legendCell = el("td", "legend-cell-wrap");
+      legendCell.dataset.legend = "";
+      legendCell.setAttribute("aria-live", "polite");
+      const legendBlock = el("span", "legend-block");
+      legendBlock.setAttribute("role", "group");
+      legendBlock.setAttribute("aria-label", "Risk legend");
+      legendCell.append(legendBlock);
+
+      const countdown = formatCountdown(item.target_date ?? null);
+      const countdownCell = el("td", "countdown-cell");
+      countdownCell.dataset.countdown = "";
+      countdownCell.dataset.tone = countdown.tone;
+      countdownCell.setAttribute("aria-live", "polite");
+      countdownCell.append(el("span", "plate figure", countdown.text));
+
+      const scoreCell = el("td", "score-cell");
+      scoreCell.dataset.scoreCell = "";
+      const scoreValue = el(
+        "span",
+        "plate figure score-value",
+        formatScore(item.score.value),
+      );
+      scoreValue.dataset.scoreValue = "";
+      scoreValue.setAttribute("aria-live", "polite");
+      scoreCell.append(scoreValue);
+      if (item.override) {
+        const override = el("span", "override");
+        override.append(el("span", "label override-tag", "Manual override"));
+        const position = item.override.position ?? null;
+        if (position !== null) {
+          override.append(
+            el("span", "figure override-position", `#${position}`),
+          );
+        }
+        const reason = el("span", "override-reason", item.override.reason);
+        reason.title = item.override.reason;
+        override.append(reason);
+        scoreCell.append(override);
+      }
+
+      const verdictCell = el("td", "verdict-cell");
+      verdictCell.dataset.verdict = "";
+      verdictCell.dataset.health = item.health.code;
+      verdictCell.setAttribute("aria-live", "polite");
+      verdictCell.append(el("span", "label", verdictWord(item.health.code)));
+
+      row.append(
+        codeCell,
+        projectCell,
+        ownerCell,
+        legendCell,
+        countdownCell,
+        scoreCell,
+        verdictCell,
+      );
+      const legendTd = row.querySelector("[data-legend]");
+      if (legendTd instanceof HTMLElement) {
+        renderLegend(
+          legendTd,
+          item.risk_flags.map((flag) => ({
+            code: flag.code,
+            severity: flag.severity,
+            reason: flag.reason,
+          })),
+        );
+      }
+
+      const breakdownRow = el("tr", "breakdown-row");
+      breakdownRow.id = breakdownId;
+      breakdownRow.dataset.breakdownRow = "";
+      breakdownRow.hidden = true;
+      const breakdownCell = document.createElement("td");
+      breakdownCell.colSpan = 7;
+      const breakdownContainer = el("div", "breakdown");
+      breakdownContainer.dataset.breakdown = "";
+      breakdownCell.append(breakdownContainer);
+      breakdownRow.append(breakdownCell);
+
+      return [row, breakdownRow];
+    }
+
+    async function refetchQueue(): Promise<void> {
+      showSkeleton();
+      const result = await getQueue();
+      if (!result.ok) {
+        showRefetchError(result.error.kind);
+        return;
+      }
+      const banner = tbody.querySelector("[data-stale-row]");
+      tbody.replaceChildren();
+      if (banner instanceof HTMLTableRowElement) tbody.append(banner);
+      for (const item of result.data.items) {
+        const [row, breakdownRow] = buildRow(item);
+        tbody.append(row, breakdownRow);
+        renderBreakdown(row, {
+          value: item.score.value,
+          policyVersion: item.score.policy_version,
+          breakdown: item.score.breakdown.map((line) => ({
+            code: line.code,
+            raw: line.raw,
+            weight: line.weight,
+            contribution: line.contribution,
+            reason: line.reason,
+          })),
+          modifiers: item.score.modifiers ?? {},
+        });
+      }
+    }
+
+    const cleanups = [
+      subscribe("project.priority.recalculated", handlePriority),
+      subscribe("project.risk.changed", handleRisk),
+      subscribe("project.state_changed", handleState),
+      onStatus((status) => setStale(status === "disconnected")),
+      onReset(() => {
+        void refetchQueue();
+      }),
+    ];
+
+    /* A detached island must not keep patching rows or holding the shared connection. */
+    document.addEventListener(
+      "astro:before-swap",
+      () => {
+        for (const off of cleanups) off();
+      },
+      { once: true },
+    );
+  }
+</script>

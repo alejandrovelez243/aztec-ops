@@ -1,0 +1,420 @@
+[
+  {
+    "model": "activity.activityrecord",
+    "pk": 1,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-01",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-13T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 2,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-02",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-12T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 3,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-03",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-11T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 4,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-04",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-10T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 5,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-05",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-09T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 6,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-06",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-08T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 7,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-07",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-07T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 8,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-08",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-06T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 9,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-09",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-05T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 10,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-10",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-04T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 11,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-11",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-03T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 12,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-12",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-02T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 13,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-13",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-13T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 14,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-14",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-12T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 15,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-15",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-11T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 16,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-16",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-10T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 17,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-17",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-09T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 18,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-18",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-08T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 19,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-19",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-07T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 20,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-20",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-06T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 21,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-21",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-05T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  },
+  {
+    "model": "activity.activityrecord",
+    "pk": 22,
+    "fields": {
+      "entity_type": "project",
+      "entity_id": "PRJ-22",
+      "verb": "SEEDED",
+      "origin": "SYSTEM",
+      "actor": "system",
+      "from_value": "",
+      "to_value": "",
+      "reason": "Imported from the operational spreadsheet.",
+      "metadata": {
+        "source": "dataset.json"
+      },
+      "occurred_at": "2026-07-04T12:00:00+00:00",
+      "correlation_id": "aca7d229-6ffa-5c50-ad94-040a94246165"
+    }
+  }
+]
