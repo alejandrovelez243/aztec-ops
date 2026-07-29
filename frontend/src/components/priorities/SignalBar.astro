@@ -87,13 +87,22 @@ const { code, label, points, reason, ratio } = Astro.props;
    * quantity — the score, decomposed — so they speak with one voice. This is not a
    * chart series and never encodes a state (DESIGN.md, The One-Voice Rule).
    */
+  /*
+   * The bar grows with a transform, not with `width`. Both look identical; only
+   * one of them re-lays-out the panel on every frame, and a recalculated score
+   * animates several bars at once. `scaleX` from a left origin runs on the
+   * compositor, and the fill carries no text that a horizontal scale could
+   * distort.
+   */
   .fill {
     display: block;
     height: 100%;
-    width: calc(var(--bar, 0) * 100%);
+    width: 100%;
+    transform: scaleX(var(--bar, 0));
+    transform-origin: left center;
     border-radius: var(--radius-full);
     background-color: var(--cobalto);
-    transition: width var(--motion-carta-duration) var(--motion-carta-ease);
+    transition: transform var(--motion-carta-duration) var(--motion-carta-ease);
   }
 
   .reason {

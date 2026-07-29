@@ -233,6 +233,12 @@ class ActivityRecord(models.Model):
         # renaming or retiring one changes what half the product means; the trail is what makes
         # that editable from the product at all rather than only from the admin.
         ROLE = "role", "Role"
+        # The lifecycle itself, addressed by ``Workflow.code``. Its states and its edges are
+        # recorded under the graph rather than under themselves, because a state ``code`` is unique
+        # only inside its workflow: ``bloqueada`` is not an identifier the trail could address, and
+        # a reader asking "what happened to this lifecycle" wants the nodes, the arrows and the
+        # renames on one timeline anyway.
+        WORKFLOW = "workflow", "Workflow"
 
     class Verb(models.TextChoices):
         """The closed set of facts the trail can state (DATA_MODEL §5).
@@ -262,6 +268,18 @@ class ActivityRecord(models.Model):
         # ``from_value``, no ``to_value``, no hash. The trail answers "who reset whose credential
         # and when", which is the only question an audit can legitimately ask of this row.
         PASSWORD_RESET = "PASSWORD_RESET", "Password reset"
+        # Authoring a lifecycle: the six facts an operator can state about the shape of a graph.
+        # ``STATE_CHANGED`` is not one of them and must never be reused for one — it means "a record
+        # moved", and a verb that meant both would make "how often did work get blocked" unanswerable.
+        # A node's label, category, colour and order collapse into one ``STATE_EDITED`` on purpose:
+        # they are one act of authoring performed in one form, and four verbs would report four
+        # decisions where an operator made one. Which of them moved is in ``metadata.changed``.
+        STATE_ADDED = "STATE_ADDED", "State added"
+        STATE_EDITED = "STATE_EDITED", "State edited"
+        STATE_RETIRED = "STATE_RETIRED", "State retired"
+        TRANSITION_ADDED = "TRANSITION_ADDED", "Transition added"
+        TRANSITION_EDITED = "TRANSITION_EDITED", "Transition edited"
+        TRANSITION_RETIRED = "TRANSITION_RETIRED", "Transition retired"
 
     class Origin(models.TextChoices):
         """Who or what caused the fact, which is what makes a score movement arguable."""

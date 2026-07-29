@@ -18,7 +18,12 @@
   },
   "dependencies": {
     "@astrojs/node": "^11.0.3",
-    "astro": "^7.1.5"
+    "@tiptap/core": "^3.29.2",
+    "@tiptap/pm": "^3.29.2",
+    "@tiptap/starter-kit": "^3.29.2",
+    "@tiptap/suggestion": "^3.29.2",
+    "astro": "^7.1.5",
+    "tiptap-markdown": "^0.9.0"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",

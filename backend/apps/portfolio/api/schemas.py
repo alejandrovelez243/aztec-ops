@@ -79,6 +79,7 @@ class ProjectUpdateIn(Schema):
     business_value: Decimal | None = Field(default=None, ge=0)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     summary: str | None = None
+    description: str | None = None
     next_step: str | None = Field(default=None, max_length=255)
     is_archived: bool | None = None
 

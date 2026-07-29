@@ -60,59 +60,86 @@ const SKELETON_CARDS = [0, 1];
       </p>
     </div>
 
-    <div class="tb-project" data-tb-project hidden={selected === null}>
-      <span class="chip chip-code" data-tb-code>
-        {selected === null ? "" : selected.card.code}
-      </span>
-      <span
-        class:list={[
-          "chip",
-          selected === null ? "tone-piedra" : selected.tone.className,
-        ]}
-        style={selected === null ? null : selected.tone.style}
-        data-tb-state
-        lang="es"
-      >
-        <span data-card-state-text>
-          {selected === null ? "" : selected.card.stateLabel}
-        </span>
-      </span>
-      <span class="tb-owner" data-tb-owner>
-        {
-          selected !== null && selected.card.owner !== null && (
-            <span
-              class="avatar tb-avatar"
-              style={`--avatar-h: ${selected.card.owner.hue}`}
-              title={selected.card.owner.label}
-              aria-label={`Responsable: ${selected.card.owner.label}`}
-              role="img"
-            >
-              {selected.card.owner.initials}
-            </span>
-          )
-        }
-      </span>
-      <a
-        class="btn btn-secondary tb-link"
-        data-tb-link
-        href={selected === null
-          ? "/projects"
-          : `/projects/${selected.card.code}`}
-        lang="es"
-      >
-        Ver proyecto
-        <Icon name="chevron-right" size={16} />
-      </a>
+    <div class="tb-actions">
+      {
+        /* The board does not own a creation dialog: it sends the operator to the project
+          detail, where the one "Crear tarea" flow lives. One creation flow, reached from two
+          places — a second copy here would be a second set of validation, of copy and of
+          failure modes for the same act, drifting apart the first time either is touched. */
+      }
       <button
         type="button"
-        class="btn btn-ghost btn-icon"
-        data-tb-close
-        hidden={selected === null}
-        aria-label="Quitar la selección de proyecto"
-        title="Quitar la selección"
+        class="btn btn-primary tb-create"
+        data-tb-create
+        disabled={selected === null}
+        aria-describedby={selected === null ? "tb-create-reason" : undefined}
+        lang="es"
       >
-        <Icon name="close" size={18} />
+        <Icon name="plus" size={16} />
+        Crear tarea
       </button>
+      {
+        /* Named, never hidden: a control that disappears leaves the operator looking for a
+          door instead of reading why it is shut. */
+      }
+      <span class="visually-hidden" id="tb-create-reason" lang="es">
+        Elige un proyecto en el carril para poder crear una tarea.
+      </span>
+
+      <div class="tb-project" data-tb-project hidden={selected === null}>
+        <span class="chip chip-code" data-tb-code>
+          {selected === null ? "" : selected.card.code}
+        </span>
+        <span
+          class:list={[
+            "chip",
+            selected === null ? "tone-piedra" : selected.tone.className,
+          ]}
+          style={selected === null ? null : selected.tone.style}
+          data-tb-state
+          lang="es"
+        >
+          <span data-card-state-text>
+            {selected === null ? "" : selected.card.stateLabel}
+          </span>
+        </span>
+        <span class="tb-owner" data-tb-owner>
+          {
+            selected !== null && selected.card.owner !== null && (
+              <span
+                class="avatar tb-avatar"
+                style={`--avatar-h: ${selected.card.owner.hue}`}
+                title={selected.card.owner.label}
+                aria-label={`Responsable: ${selected.card.owner.label}`}
+                role="img"
+              >
+                {selected.card.owner.initials}
+              </span>
+            )
+          }
+        </span>
+        <a
+          class="btn btn-secondary tb-link"
+          data-tb-link
+          href={selected === null
+            ? "/projects"
+            : `/projects/${selected.card.code}`}
+          lang="es"
+        >
+          Ver proyecto
+          <Icon name="chevron-right" size={16} />
+        </a>
+        <button
+          type="button"
+          class="btn btn-ghost btn-icon"
+          data-tb-close
+          hidden={selected === null}
+          aria-label="Quitar la selección de proyecto"
+          title="Quitar la selección"
+        >
+          <Icon name="close" size={18} />
+        </button>
+      </div>
     </div>
   </header>
 
@@ -287,6 +314,9 @@ const SKELETON_CARDS = [0, 1];
     min-width: 0;
     padding: var(--space-4) 0 0;
     background-color: var(--carta);
+
+    /* The tallest an idle or empty arm may grow. See `.tb-idle`. */
+    --tb-arm-band: calc(var(--space-8) * 6);
   }
 
   .tb-head {
@@ -301,12 +331,22 @@ const SKELETON_CARDS = [0, 1];
     min-width: 0;
   }
 
+  /* The head's right-hand side. It holds the auto margin rather than `.tb-project`, so the
+     create button stays where it was when the selection — and with it the project chips —
+     goes away. */
+  .tb-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-left: auto;
+  }
+
   .tb-project {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
-    margin-left: auto;
   }
 
   .tb-project[hidden] {
@@ -329,12 +369,25 @@ const SKELETON_CARDS = [0, 1];
 
   /* --- The four arms --- */
 
+  /*
+   * The invitation is centred inside a band, never inside the region.
+   *
+   * This board shares a grid row with the rail beside it, so the region is as
+   * tall as the whole portfolio's worth of project cards — 1208px on a window
+   * 959px high. Stretched to that (`flex: 1`) and centred in it, the
+   * illustration landed at y=828: the first paint of /board was a blank white
+   * field with the only thing to read below the fold. The arm now takes the
+   * band and no more, so it opens where the columns would have started and is
+   * read in the same place whatever the rail beside it is holding. `min-height`
+   * rather than `max-height`, so a message that needs more lines gets them
+   * instead of being clipped.
+   */
   .tb-idle,
   .tb-empty {
     display: grid;
     place-items: center;
-    flex: 1;
-    min-height: 0;
+    flex: 0 1 auto;
+    min-height: var(--tb-arm-band);
     padding-inline: var(--space-5);
   }
 
@@ -734,7 +787,7 @@ const SKELETON_CARDS = [0, 1];
       scroll-snap-type: x mandatory;
     }
 
-    .tb-project {
+    .tb-actions {
       margin-left: 0;
     }
   }

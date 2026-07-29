@@ -556,9 +556,15 @@ export async function postMemberPassword(
  * in, so an empty "Bloqueado" has no column — which means the board cannot say
  * nothing is blocked, and a card has nowhere to be dropped.
  *
- * It carries no transitions, deliberately. Legality still comes from a project's
- * own `transitions`; this answers "which states exist, in which order", never
- * "which move is allowed" (`docs/API.md` §2.18).
+ * It also carries `transitions`: the arrows an operator drew between those
+ * states, which is what `/workflows` draws the graph from. They are a
+ * description of the **configuration**, never a permission — whether the record
+ * on screen may take one is computed per record against the state it is in, the
+ * transition's guard and its `requires_fields`, and stays on the project's or
+ * task's own `transitions` (`docs/API.md` §2.2). Acting on an edge published
+ * here without asking earns a typed 409 carrying the moves the record may
+ * actually take, which is the same failure mode as a stale button
+ * (`docs/API.md` §2.18).
  */
 export async function getWorkflows(): Promise<Result<WorkflowCatalog>> {
   return request<WorkflowCatalog>("/api/v1/workflows", { method: "GET" });

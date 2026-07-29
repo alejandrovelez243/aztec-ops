@@ -43,6 +43,8 @@ import {
 import type { Topic } from "../../lib/stream/topics";
 import { toast } from "../../lib/toast";
 import { toViewState } from "../../lib/view-state";
+import { applyTone } from "../projects/dom";
+import { stateTone } from "../projects/tone";
 import {
   CARD_COPY,
   failureText,
@@ -56,7 +58,6 @@ import {
   renderQueueRegion,
   renderTeamRegion,
   rankText,
-  toneChoice,
   type RegionKey,
 } from "./markup";
 import { QUEUE_PAGE_SIZE, toBars, zoneOfRank } from "./model";
@@ -346,7 +347,13 @@ async function applyState(
   card.dataset["ovStateColor"] = known.color ?? "";
   const chip = card.querySelector<HTMLElement>(SELECTOR.stateChip);
   if (chip !== null) chip.textContent = known.label;
-  applyTone(card, known.color);
+  // The category travels in the payload, so the patched card resolves its tone
+  // from exactly what the first paint resolved it from — a colour when the
+  // operator set one, the category's semantic tone otherwise.
+  applyTone(
+    card,
+    stateTone({ category: payload.toCategory, color: known.color }),
+  );
 
   announce(card, `${actorLabel(envelope.actor)} → ${known.label}`);
   flash(card);
@@ -446,17 +453,6 @@ function flash(card: HTMLElement): void {
   window.setTimeout(() => {
     card.classList.remove("is-flashing");
   }, FLASH_MS);
-}
-
-function applyTone(card: HTMLElement, color: string | null): void {
-  const choice = toneChoice(color);
-  card.classList.remove("tone-data", "tone-piedra");
-  card.classList.add(choice.className);
-  if (choice.solid === null) {
-    card.style.removeProperty("--tone-solid");
-    return;
-  }
-  card.style.setProperty("--tone-solid", choice.solid);
 }
 
 function cardFor(root: HTMLElement, code: string): HTMLElement | null {

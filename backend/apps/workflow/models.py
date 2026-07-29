@@ -11,6 +11,7 @@ that decides whether a proposed move is legal stays in `services/transition.py`:
 say which edges exist, never whether a guard passes.
 """
 
+from collections.abc import Mapping
 from typing import ClassVar, Self
 
 from django.core.exceptions import ValidationError
@@ -22,6 +23,7 @@ from apps.workflow.domain.errors import WorkflowNotConfigured
 from apps.workflow.domain.views import (
     TransitionOption,
     WorkflowEdgeView,
+    WorkflowNodeView,
     WorkflowShapeView,
     required_field_names,
 )
@@ -75,6 +77,15 @@ class WorkflowQuerySet(models.QuerySet["Workflow"]):
     def default(self) -> Self:
         """The fallback graph of its kind: at most one per `applies_to`, by unique constraint."""
         return self.filter(is_default=True)
+
+    def locked(self) -> Self:
+        """Take the row lock the authoring use cases hold while they reshape a graph.
+
+        Every write in the authoring surface starts here. Two operators adding a state to the same
+        workflow at the same moment would otherwise both read "the last order is 3" and both append
+        at 4, and the arrangement an operator sees is not something a unique constraint can defend.
+        """
+        return self.select_for_update()
 
     def with_shape(self) -> Self:
         """Load what :meth:`Workflow.to_shape` reads, in three extra queries for the whole chain.
@@ -181,7 +192,7 @@ class Workflow(models.Model):
         """Name and entity kind, which is what disambiguates two graphs in an admin picker."""
         return f"{self.name} ({self.applies_to})"
 
-    def to_shape(self) -> WorkflowShapeView:
+    def to_shape(self, *, occupancy: Mapping[int, int]) -> WorkflowShapeView:
         """Describe this graph as an operator configured it: every node, and every active edge.
 
         Publishes the nodes no aggregate currently occupies — which is the whole point of a column
@@ -198,6 +209,14 @@ class Workflow(models.Model):
         unprefetched call has to describe the same graph, and for the edges that is the load-bearing
         half — a withdrawn move must never surface as an arrow just because nobody chained the
         narrowed prefetch.
+
+        Args:
+            occupancy: How many records sit on each node, keyed by ``WorkflowState`` primary key, as
+                :func:`~apps.workflow.repositories.records_on_states` answers it. A node missing from
+                the mapping is unoccupied. Required rather than defaulted, because the plausible
+                default — an empty mapping — would publish ``can_retire: true`` for every node of a
+                fully occupied graph, and a projection is not allowed to guess an answer that a
+                query owns.
 
         Returns:
             The graph as an immutable
@@ -216,7 +235,10 @@ class Workflow(models.Model):
                 for binding in self.bindings.all()
                 if binding.is_active and binding.engagement_type is not None
             ),
-            states=tuple(state.to_ref() for state in self.states.all()),
+            states=tuple(
+                state.to_node(record_count=occupancy.get(state.pk, 0))
+                for state in self.states.all()
+            ),
             transitions=tuple(
                 transition.to_edge()
                 for transition in self.transitions.all()
@@ -232,9 +254,27 @@ class WorkflowStateQuerySet(models.QuerySet["WorkflowState"]):
         """The nodes of one graph, in the operator's order (`Meta.ordering`)."""
         return self.filter(workflow_id=workflow_id)
 
+    def active(self) -> Self:
+        """The nodes still part of the graph; retirement is `is_active = False`, never a delete."""
+        return self.filter(is_active=True)
+
     def initial(self) -> Self:
         """The entry nodes; a partial unique constraint allows at most one per workflow."""
         return self.filter(is_initial=True)
+
+    def next_order(self) -> int:
+        """The ``order`` a node appended to the selected set would take. Materialises.
+
+        Ends the chain: it answers with a number, so nothing downstream can narrow the set the
+        answer was computed over. Chain :meth:`for_workflow` first — appending to *every* graph in
+        the database is never the question, and the caller holds the row lock that makes the answer
+        still true by the time the insert happens.
+
+        Returns:
+            One past the highest ``order`` in the selected set, or ``0`` when it is empty.
+        """
+        highest = self.aggregate(models.Max("order"))["order__max"]
+        return 0 if highest is None else int(highest) + 1
 
     def entry_state(self, *, workflow_id: int) -> "WorkflowState":
         """The node a brand new aggregate of this workflow starts on.
@@ -243,16 +283,20 @@ class WorkflowStateQuerySet(models.QuerySet["WorkflowState"]):
         node cannot place a new aggregate anywhere, and silently picking the lowest `order` would
         hide a broken graph behind a plausible state. Materialises: it ends the chain.
 
+        The entry node must also be **in service**. A retired node is out of the graph, so starting
+        new work on it would place a project in a column no board draws and no arrow leaves; a
+        workflow whose entry node was retired refuses new aggregates loudly instead.
+
         Args:
             workflow_id: `Workflow` primary key.
 
         Returns:
-            The single state flagged `is_initial`.
+            The single active state flagged `is_initial`.
 
         Raises:
-            WorkflowNotConfigured: The workflow has no entry node.
+            WorkflowNotConfigured: The workflow has no entry node, or its entry node is retired.
         """
-        state = self.for_workflow(workflow_id).initial().first()
+        state = self.for_workflow(workflow_id).active().initial().first()
         if state is None:
             raise WorkflowNotConfigured(f"workflow:{workflow_id}")
         return state
@@ -264,6 +308,12 @@ class WorkflowState(models.Model):
     `code` is identity and is unique inside its workflow only; `category` is the semantics every
     other context queries. Exactly one state per workflow carries `is_initial`, which is what a
     creation service uses to place a brand new aggregate without hardcoding a slug.
+
+    A node leaves the graph through `is_active = False` and never through a delete. Projects and
+    tasks `PROTECT` the row they sit on, so a delete would fail against a constraint; retirement is
+    refused while any record occupies it (`WorkflowStateInUse`), which is the product rule the
+    database cannot state — a record parked on a node the graph no longer contains has no column to
+    be drawn in and no move to make.
     """
 
     workflow = models.ForeignKey(Workflow, on_delete=models.PROTECT, related_name="states")
@@ -272,6 +322,7 @@ class WorkflowState(models.Model):
     category = models.CharField(max_length=16, choices=StateCategory)
     is_initial = models.BooleanField(default=False)
     is_terminal = models.BooleanField(default=False)
+    is_active = models.BooleanField(default=True)
     order = models.SmallIntegerField(default=0)
     color = models.CharField(max_length=7, default="", blank=True)
 
@@ -313,6 +364,34 @@ class WorkflowState(models.Model):
             label=self.label,
             category=self.category,
             color=self.color,
+        )
+
+    def to_node(self, *, record_count: int) -> WorkflowNodeView:
+        """Describe this node as the graph document publishes it, editor facts included.
+
+        The superset of :meth:`to_ref`: the same four rendered values plus the arrangement, the
+        entry/terminal flags and whether the node is still in service — everything an operator needs
+        to *shape* the column, none of which a client can derive from the reference alone.
+
+        Issues no query. ``record_count`` is handed in because the answer spans two other contexts
+        (`apps.workflow.repositories`), and a projection that queried would make one board load cost
+        a round trip per column.
+
+        Args:
+            record_count: Projects plus tasks currently sitting on this node, as
+                :func:`~apps.workflow.repositories.records_on_states` counted them.
+
+        Returns:
+            The node as an immutable :class:`~apps.workflow.domain.views.WorkflowNodeView`, with
+            ``can_retire`` derived from the count and from ``is_active``.
+        """
+        return WorkflowNodeView.of(
+            self.to_ref(),
+            order=self.order,
+            is_initial=self.is_initial,
+            is_terminal=self.is_terminal,
+            is_active=self.is_active,
+            record_count=record_count,
         )
 
 
@@ -358,6 +437,32 @@ class WorkflowTransitionQuerySet(models.QuerySet["WorkflowTransition"]):
     def for_workflow(self, workflow_id: int) -> Self:
         """Every edge of one graph, read off the denormalized `workflow` column without a join."""
         return self.filter(workflow_id=workflow_id)
+
+    def touching(self, state_id: int) -> Self:
+        """The edges with this node at either end — what leaves it, and what lands on it.
+
+        The set retiring a node has to withdraw. An arrow into a node that is no longer part of the
+        graph is a move nothing may take, and an arrow out of it is a move nothing can be standing
+        on to take; leaving either behind would publish a lifecycle whose diagram contradicts its
+        own column set.
+
+        Args:
+            state_id: `WorkflowState` primary key being retired.
+        """
+        return self.filter(Q(from_state_id=state_id) | Q(to_state_id=state_id))
+
+    def next_order(self) -> int:
+        """The ``order`` an edge appended to the selected set would take. Materialises.
+
+        Ends the chain, exactly as :meth:`WorkflowStateQuerySet.next_order` does, and for the same
+        reason: a new button belongs after the ones already on the screen. Chain :meth:`from_state`
+        first — the arrangement is per source node, since that is the list a client renders.
+
+        Returns:
+            One past the highest ``order`` in the selected set, or ``0`` when it is empty.
+        """
+        highest = self.aggregate(models.Max("order"))["order__max"]
+        return 0 if highest is None else int(highest) + 1
 
     def with_states(self) -> Self:
         """Load both endpoints and the workflow, for callers that read the labels off each edge."""

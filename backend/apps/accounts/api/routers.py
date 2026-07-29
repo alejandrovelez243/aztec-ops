@@ -126,22 +126,22 @@ def post_logout(request: HttpRequest, response: HttpResponse) -> Status[None]:
 def post_member(request: HttpRequest, payload: MemberCreateIn) -> Status[MemberView]:
     """Register a person on the roster.
 
-    ``code`` is chosen by the caller and is permanent: it is what every event, activity record and
-    project payload will name this person by, so there is no rename. A duplicate is
-    ``409 conflicting_state``, not a silent second account.
+    ``code`` is **not** accepted: it is derived from ``label`` — ``"Alejandro Vélez"`` becomes
+    ``alejandro.velez``, a second person of that name ``alejandro.velez2`` — and allocated inside
+    the creating transaction, so a rollback frees it. The slug is permanent and there is no rename,
+    which is precisely why an operator does not get to typo one into a form. The response carries
+    the code that was assigned.
 
     Omitting ``password`` is normal — the person is immediately assignable and cannot sign in until
     a credential is set through ``POST /team/members/{code}/password``.
 
-    Errors: ``409 conflicting_state`` (code taken), ``422 validation_error`` (unknown ``role``, a
-    capacity outside the accepted range, a password the configured validators refuse),
-    ``403 permission_denied``.
+    Errors: ``422 validation_error`` (unknown ``role``, a capacity outside the accepted range, a
+    password the configured validators refuse), ``403 permission_denied``.
     """
     return Status(
         201,
         create_member(
             CreateMemberCommand(
-                code=payload.code,
                 label=payload.label,
                 role_code=payload.role,
                 weekly_capacity_points=payload.weekly_capacity_points,

@@ -80,7 +80,12 @@ const { facets, total } = Astro.props;
       </ul>
     </div>
 
-    <div class="view-toggle" role="group" aria-label="Forma de ver la lista">
+    <div
+      class="view-toggle"
+      role="group"
+      aria-label="Forma de ver la lista"
+      data-view-toggle
+    >
       <button
         class="btn btn-ghost"
         type="button"
@@ -402,6 +407,15 @@ const { facets, total } = Astro.props;
   }
 
   @media (max-width: 767px) {
+    /*
+     * The phone renders the card form whichever view is remembered
+     * (`pages/projects/index.astro`), so the switch has nothing to switch.
+     *
+     * This is the state before the island runs; `list-island.ts` then takes the
+     * group out of the document entirely. Hiding alone left two buttons at 0×0
+     * — no size, no meaning, and still two nodes in the tree — and detaching
+     * alone would flash the control on a phone until the script arrived.
+     */
     .view-toggle {
       display: none;
     }

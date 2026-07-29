@@ -22,6 +22,8 @@ import { setPending } from "./dom";
 import { failureCopy } from "./messages";
 import { mountOwnerMenus } from "./owner-menu";
 import { applyProjectDetail, hasRisk } from "./project-paint";
+import { mountDateFields } from "../ui/date-field";
+import { dayLongLabel, parseISODay } from "../../lib/ui/calendar";
 import { invalidateRoster } from "../../lib/team/roster";
 
 /**
@@ -190,8 +192,37 @@ export function mountHeaderControls(header: HTMLElement): () => void {
     });
   });
 
+  const offDates = mountDateFields(header, async (_control, value) => {
+    const result = await patchProject(code, { target_date: value });
+    if (!result.ok) {
+      const copy = failureCopy(result.error);
+      toast({ kind: "error", title: copy.title, detail: copy.detail });
+      return;
+    }
+    // Painted from the whole read, not just the date: moving a target date can
+    // raise or cure `OVERDUE` and `NO_TARGET_DATE`, and the risk list is where
+    // an island that repainted only its own field would leave a stale flag.
+    applyProjectDetail(result.data);
+    const landed = result.data.target_date ?? null;
+    toast({
+      kind: "success",
+      title: "Fecha objetivo actualizada",
+      detail:
+        landed === null
+          ? "El proyecto quedó sin fecha objetivo."
+          : `El proyecto apunta al ${longDay(landed)}.`,
+    });
+  });
+
   return () => {
     controller.abort();
     offOwner();
+    offDates();
   };
+}
+
+/** "28 de julio de 2026", for the sentence a save confirms itself with. */
+function longDay(iso: string): string {
+  const day = parseISODay(iso);
+  return day === null ? iso : dayLongLabel(day);
 }

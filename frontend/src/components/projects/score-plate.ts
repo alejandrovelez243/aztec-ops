@@ -309,7 +309,10 @@ function patchBreakdown(
     setField(row, "reason", entry.reason);
     const bar = row.querySelector<HTMLElement>("[data-field='bar']");
     if (bar !== null) {
-      bar.style.width = `${barWidth(entry.contribution, total)}%`;
+      bar.style.setProperty(
+        "--bar",
+        String(barWidth(entry.contribution, total) / 100),
+      );
     }
   }
 

@@ -8,6 +8,15 @@
  * is the link — a card you can only open by hitting a 14px title is a card the
  * operator will miss on a laptop trackpad.
  *
+ * The score never renders alone. Twenty-two of them are on screen at once, so
+ * the argument is folded into the figure rather than drawn beside it: `title`
+ * carries the engine's own sentences for a pointer, and the sentence a screen
+ * reader announces replaces the bare number, exactly as the board's card does
+ * it. An expand-in-place is deliberately *not* offered here — the card is a
+ * single `<a>`, and a control nested inside a link is invalid markup and
+ * unreachable by keyboard; the plate on `/projects/{code}` is the drawn-out
+ * version, one click away.
+ *
  * `transition:name` on the title is what makes this card morph into the detail
  * header instead of the page cutting to it.
  */
@@ -16,6 +25,7 @@ import OwnerBadge from "./OwnerBadge.astro";
 import StateChip from "./StateChip.astro";
 import { formatScore } from "./format";
 import { healthTone } from "./tone";
+import { scoreArgument, scoreSummary } from "./presentation";
 import type { ProjectPresentation } from "./presentation";
 
 export interface Props {
@@ -25,6 +35,8 @@ export interface Props {
 
 const { project } = Astro.props;
 const rail = healthTone(project.healthCode);
+const argument = scoreArgument(project.score, project.scoreReasons);
+const summary = scoreSummary(project.score, project.scoreReasons);
 ---
 
 <a
@@ -61,11 +73,12 @@ const rail = healthTone(project.healthCode);
   </div>
 
   <div class="foot">
-    <span class="score">
-      <span class="label">Prioridad</span>
-      <span class="figure value" data-field="score"
+    <span class="score" title={argument} data-score-slot>
+      <span class="label" aria-hidden="true">Prioridad</span>
+      <span class="figure value" data-field="score" aria-hidden="true"
         >{formatScore(project.score)}</span
       >
+      <span class="visually-hidden" data-field="score-note">{summary}</span>
     </span>
     <span class="marks">
       {

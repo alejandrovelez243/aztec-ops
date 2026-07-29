@@ -173,6 +173,80 @@ def _required_field_details(exc: Exception) -> dict[str, JsonValue]:
     return {"fields": {getattr(exc, "field_name", "unknown"): [str(exc)]}}
 
 
+def _workflow_part_details(
+    entity: str, current: str = ""
+) -> Callable[[Exception], dict[str, JsonValue]]:
+    """Build the details renderer for an authoring error about a graph, a node or an edge.
+
+    ``id`` is the part that was addressed and ``workflow`` is the graph it belongs to, always both:
+    a state code is unique only inside its workflow, so an error naming ``bloqueada`` and nothing
+    else would not tell an editor which board to reopen. ``current`` is only set for a conflict,
+    where the client's next move depends on *why* — ``exists`` means restore it instead of creating
+    a second one, ``occupied`` means move the records first.
+    """
+
+    def render(exc: Exception) -> dict[str, JsonValue]:
+        details: dict[str, JsonValue] = {
+            "entity": entity,
+            "id": _workflow_part_id(exc),
+            "workflow": str(getattr(exc, "workflow_code", "")),
+        }
+        if current:
+            details["current"] = current
+        return details
+
+    return render
+
+
+def _workflow_part_id(exc: Exception) -> str:
+    """The part an authoring error is about: a state code, an edge's pair, or the graph itself."""
+    state_code = getattr(exc, "state_code", None)
+    if state_code is not None:
+        return str(state_code)
+    from_state = getattr(exc, "from_state", None)
+    to_state = getattr(exc, "to_state", None)
+    if from_state is not None and to_state is not None:
+        return f"{from_state}->{to_state}"
+    return str(getattr(exc, "workflow_code", ""))
+
+
+def _state_in_use_details(exc: Exception) -> dict[str, JsonValue]:
+    """Render the counts that say *why* a state may not be retired, split by what has to move.
+
+    An operator told "3 proyectos y 1 tarea" knows which two screens to open; an operator told
+    "conflicting state" knows only that the button did not work. The breakdown is read off the error
+    because the service counted it while it still held the graph's row lock.
+    """
+    details = _workflow_part_details("workflow_state", "occupied")(exc)
+    details["records"] = int(getattr(exc, "records", 0))
+    details["projects"] = int(getattr(exc, "projects", 0))
+    details["tasks"] = int(getattr(exc, "tasks", 0))
+    return details
+
+
+def _binding_taken_details(exc: Exception) -> dict[str, JsonValue]:
+    """Render which graph already answers for an engagement type, so the client can go and edit it."""
+    return {
+        "entity": "engagement_type",
+        "id": str(getattr(exc, "engagement_type_code", "")),
+        "current": "bound",
+        "workflow": str(getattr(exc, "workflow_code", "")),
+    }
+
+
+def _vocabulary_details(exc: Exception) -> dict[str, JsonValue]:
+    """Name the offending field *and* the closed set it had to come from.
+
+    The allowlist travels with the rejection for the same reason ``UnknownOrdering`` ships one: a
+    form that only learns what is wrong makes the operator guess what would be right.
+    """
+    field_name = str(getattr(exc, "field", "value"))
+    return {
+        "fields": {field_name: [str(exc)]},
+        "allowed": list(getattr(exc, "allowed", ())),
+    }
+
+
 def _cycle_details(exc: Exception) -> dict[str, JsonValue]:
     """Render the dependency chain that would have closed, so the operator can break it."""
     return {"fields": {"depends_on": [str(exc)]}, "cycle": list(getattr(exc, "cycle", ()))}
@@ -202,6 +276,21 @@ _DESCRIPTORS: Final[
     # a code it read is a broken contract, while a client editing a row somebody deleted has
     # simply addressed something that is not there.
     catalog_errors.TaxonomyRowNotFound: (404, CODE_NOT_FOUND, _taxonomy_not_found),
+    # Authoring addresses a graph, a node inside it or an edge between two of its nodes. All three
+    # are 404 for the same reason: the client named a resource, and it is not there. "A state of
+    # another workflow" lands here too — a state code is unique only inside its graph, so that is
+    # not a different failure, it is the same one.
+    workflow_errors.WorkflowNotFound: (404, CODE_NOT_FOUND, _workflow_part_details("workflow")),
+    workflow_errors.WorkflowStateNotFound: (
+        404,
+        CODE_NOT_FOUND,
+        _workflow_part_details("workflow_state"),
+    ),
+    workflow_errors.TransitionNotFound: (
+        404,
+        CODE_NOT_FOUND,
+        _workflow_part_details("workflow_transition"),
+    ),
     # --- 401 / 403: who is asking, and whether they may -------------------------------------
     # Three distinct 401 codes rather than one, because the client's next move differs: no
     # credential means "sign in", a refused token means "refresh first", and bad credentials mean
@@ -252,6 +341,29 @@ _DESCRIPTORS: Final[
         CODE_CONFLICTING_STATE,
         _taxonomy_conflict,
     ),
+    # Authoring conflicts. ``exists`` says "the row is there, restore it"; ``occupied`` says "move
+    # what is standing on it first" and carries the counts, because those are different next moves.
+    workflow_errors.DuplicateWorkflowCode: (
+        409,
+        CODE_CONFLICTING_STATE,
+        _workflow_part_details("workflow", "exists"),
+    ),
+    workflow_errors.DuplicateStateCode: (
+        409,
+        CODE_CONFLICTING_STATE,
+        _workflow_part_details("workflow_state", "exists"),
+    ),
+    workflow_errors.DuplicateTransition: (
+        409,
+        CODE_CONFLICTING_STATE,
+        _workflow_part_details("workflow_transition", "exists"),
+    ),
+    workflow_errors.WorkflowStateInUse: (409, CODE_CONFLICTING_STATE, _state_in_use_details),
+    workflow_errors.EngagementTypeAlreadyBound: (
+        409,
+        CODE_CONFLICTING_STATE,
+        _binding_taken_details,
+    ),
     # --- 422: the request is well-formed and the domain refuses it ---------------------------
     workflow_errors.ReasonRequired: (422, CODE_VALIDATION_ERROR, _field("reason")),
     workflow_errors.RequiredFieldMissing: (
@@ -260,7 +372,15 @@ _DESCRIPTORS: Final[
         _required_field_details,
     ),
     workflow_errors.WorkflowNotConfigured: (422, CODE_VALIDATION_ERROR, _no_details),
-    workflow_errors.GuardNotRegistered: (422, CODE_VALIDATION_ERROR, _no_details),
+    # ``fields.guard`` rather than a bare message: the same error is now raised while *authoring* an
+    # edge, where the offending input is a field of a form somebody is filling in.
+    workflow_errors.GuardNotRegistered: (422, CODE_VALIDATION_ERROR, _field("guard")),
+    workflow_errors.ValueOutsideVocabulary: (422, CODE_VALIDATION_ERROR, _vocabulary_details),
+    workflow_errors.EngagementTypeNotFound: (
+        422,
+        CODE_VALIDATION_ERROR,
+        _field("engagement_types"),
+    ),
     portfolio_errors.ClientNotFound: (422, CODE_VALIDATION_ERROR, _field("client")),
     portfolio_errors.OwnerNotFound: (422, CODE_VALIDATION_ERROR, _field("owner")),
     portfolio_errors.EngagementTypeNotFound: (

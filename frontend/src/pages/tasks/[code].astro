@@ -28,6 +28,7 @@ import {
 } from "../../components/projects/messages";
 import CommentsPanel from "../../components/tasks/CommentsPanel.astro";
 import TaskHeader from "../../components/tasks/TaskHeader.astro";
+import RichText from "../../components/ui/RichText.astro";
 import {
   emptyTaskFields,
   projectCodeOf,
@@ -161,6 +162,15 @@ const title = task === null ? "Tarea no encontrada" : task.title;
             emptyFields={emptyTaskFields(plan.task)}
             updatedAt={plan.task.updated_at}
           />
+
+          <div class="card">
+            <RichText
+              scope="task"
+              code={plan.task.code}
+              value={plan.task.description}
+              label="Descripción"
+            />
+          </div>
 
           <CommentsPanel
             taskCode={plan.task.code}

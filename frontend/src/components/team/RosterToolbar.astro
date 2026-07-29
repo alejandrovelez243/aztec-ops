@@ -180,6 +180,11 @@ const overloadedValue =
 
     .tools {
       width: 100%;
+      /* Two buttons whose labels cannot shrink: `flex: 1` sizes them to the
+         room they have but never below their own text, so on a 360px phone the
+         pair ran past the card and the *page* scrolled sideways. Wrapping puts
+         the second one on its own line instead. */
+      flex-wrap: wrap;
     }
 
     .tools .btn {

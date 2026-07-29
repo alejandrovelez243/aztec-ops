@@ -186,10 +186,17 @@ export type PortfolioActivityQuery =
 
 // --- Workflows ---------------------------------------------------------------
 
-/** Every configured workflow with its ordered states; no transitions, by design. */
+/** Every configured workflow, with its ordered states and the edges between them. */
 export type WorkflowCatalog = Schemas["WorkflowCatalogView"];
 
-/** One workflow graph: which states exist, in the order an operator arranged them. */
+/**
+ * One workflow graph: which states exist, in the order an operator arranged
+ * them, and which moves join them.
+ *
+ * `transitions` here is the *configuration* — a sibling of `states`, naming both
+ * endpoints of every arrow. It is not the per-record `transitions` of a project
+ * or a task, which names only a target and means "legal right now".
+ */
 export type WorkflowShape = Schemas["WorkflowShapeView"];
 
 // --- Authentication ----------------------------------------------------------

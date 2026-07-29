@@ -12,9 +12,10 @@
  *
  * Security invariant: **every** interpolated value passes through
  * {@link escapeHtml}, and the one value that lands in a `style` attribute — a
- * taxonomy colour an administrator typed — additionally has to match
- * {@link HEX_COLOR} or it is dropped. A colour that does not parse falls back
- * to the neutral tone instead of being trusted into a CSS declaration.
+ * taxonomy colour an administrator typed — is additionally bounded by
+ * `components/projects/tone.ts`, which drops anything able to close the
+ * declaration. A colour that does not parse falls back to a semantic tone
+ * instead of being trusted into a CSS declaration.
  *
  * Density invariant: every card in every zone renders the **same** DOM. The
  * zone's class decides how much of it is visible, which is what lets a card
@@ -26,6 +27,7 @@ import { formatScore } from "../../lib/format/score";
 import type { QueuePage, TeamLoad, TeamLoadEntry } from "../../lib/api/domain";
 import { avatarHue, initials } from "../../lib/auth/session";
 import { assertNever, type ViewState } from "../../lib/view-state";
+import { stateTone, toneStyle } from "../projects/tone";
 import {
   toRows,
   zoneOfRank,
@@ -46,9 +48,6 @@ import {
   TEAM_COPY,
   ZONES,
 } from "./copy";
-
-/** The only colour shape an API taxonomy value may inject into a style attribute. */
-const HEX_COLOR = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 
 /** Skeleton counts per zone: the loading state has the geometry it will become. */
 const SKELETON_ROWS: Readonly<Record<ZoneKey, number>> = {
@@ -207,7 +206,7 @@ function renderZoneSection(
  * patch reads to find the Spanish label its payload does not carry.
  */
 function renderCard(row: OverviewRow): string {
-  const tone = toneAttributes(row.state.color);
+  const tone = toneAttributes(row.state);
   const overrideAttrs =
     row.overrideReason === null
       ? ""
@@ -388,42 +387,35 @@ export function rankText(rank: number): string {
   return String(rank).padStart(2, "0");
 }
 
-/** A tone resolved from data: the class to set, and the solid to set with it. */
-export interface ToneChoice {
-  readonly className: string;
-  /** `null` when the taxonomy carries no usable colour and the neutral tone wins. */
-  readonly solid: string | null;
-}
-
-/** The same choice, pre-rendered as the attributes a string template needs. */
+/** A tone pre-rendered as the attributes a string template needs. */
 export interface ToneAttributes {
   readonly className: string;
   readonly styleAttr: string;
 }
 
 /**
- * Maps an API taxonomy colour onto the tone system.
+ * The tone of one workflow state, ready to interpolate.
  *
- * A valid colour becomes `.tone-data` with `--tone-solid` set on the element,
- * from which base.css derives a readable ink and a wash — so a state recoloured
- * in the admin renders correctly with zero frontend changes (Data-Owns-Color
- * Rule). A missing or unparseable colour falls back to the neutral tone rather
- * than pushing an untrusted string into a style declaration.
+ * The resolution itself is `stateTone` in `components/projects/tone.ts` and is
+ * imported rather than restated: `GET /api/v1/queue` leaves `state.color` unset
+ * for every seeded state, so a rule that only looked at the colour sent this
+ * whole surface to the neutral tone while `/projects` — which falls back to the
+ * state's `category` — painted the same state cielo. One resolution is the only
+ * way the same state cannot render two colours on two screens.
+ *
+ * `toneStyle` returns `--tone-solid: <colour>` only for a colour that passed the
+ * shared guard, and it is escaped again on the way into the attribute because
+ * this renderer emits strings rather than DOM (see the module docstring).
  */
-export function toneChoice(color: string | null): ToneChoice {
-  if (color !== null && HEX_COLOR.test(color)) {
-    return { className: "tone-data", solid: color };
-  }
-  return { className: "tone-piedra", solid: null };
-}
-
-/** {@link toneChoice} rendered for a string template. */
-export function toneAttributes(color: string | null): ToneAttributes {
-  const choice = toneChoice(color);
+export function toneAttributes(state: {
+  readonly category: string;
+  readonly color: string | null;
+}): ToneAttributes {
+  const tone = stateTone(state);
+  const style = toneStyle(tone);
   return {
-    className: choice.className,
-    styleAttr:
-      choice.solid === null ? "" : `style="--tone-solid:${choice.solid}"`,
+    className: tone.className,
+    styleAttr: style === null ? "" : `style="${escapeHtml(style)}"`,
   };
 }
 

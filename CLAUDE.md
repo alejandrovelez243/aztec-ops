@@ -59,14 +59,24 @@ so the lockfile can never drift from `pyproject.toml`. Install the hooks once, b
 1. **No business enums in code.** States, priorities, types and transitions live in the
    database and are edited from the admin. Code compares against `code` or `category`,
    never against labels.
-   One taxonomy is also editable from the product: **roles**, through
-   `POST`/`PATCH /api/v1/catalog/roles`, behind the ops-lead check and writing an `ActivityRecord`
-   for every change. The exception is narrow on purpose — a role is the one vocabulary somebody
-   needs *while doing something else*, registering a person who does a job nobody has typed yet,
-   and a trip to `/admin/` mid-form is how that person gets filed under the wrong role
-   permanently. An engagement type or a workflow stage is a decision about how the business works
-   and is still made deliberately, in the admin. Adding a second writable taxonomy is a decision,
-   not a precedent.
+   Two things are also editable from the product, each behind the ops-lead check and each
+   writing an `ActivityRecord`:
+   - **Roles**, through `POST`/`PATCH /api/v1/catalog/roles`. A role is the one vocabulary
+     somebody needs *while doing something else* — registering a person who does a job nobody
+     has typed yet — and a trip to `/admin/` mid-form is how that person gets filed under the
+     wrong role permanently.
+   - **Workflows**: the graphs themselves, their states and their transitions, plus which
+     workflow a given project or task follows. Decided 2026-07-29, superseding the earlier
+     "workflows are edited in the admin". The reason is the product's own claim: the operation
+     can change without a deploy. A lifecycle that can only be reshaped by someone with a
+     Django admin account is not configurable by the operation, it is configurable by
+     engineering — and the moment two clients need different lifecycles, the person who knows
+     that is the operations lead, not the person with admin rights.
+
+   What did **not** change: code still compares `code` and `category`, never labels; a state
+   change still goes through the transition service; and enforcement still reads
+   `WorkflowTransition` rows for the record's *resolved* workflow. Authoring a graph and
+   obeying it stay separate concerns. The admin remains as a second door, not the only one.
 2. **State changes only through transitions.** No API route assigns `workflow_state`
    directly. Everything goes through the transition service, which validates against
    `WorkflowTransition`.

@@ -16,7 +16,6 @@
 
 import { applyTone, cloneTemplate, pulse, setField } from "./dom";
 import { renderDateControl } from "../ui/date-field";
-import { dueState } from "./format";
 import { joinFields, riskLabel } from "./messages";
 import { renderOwnerControl } from "./owner-menu";
 import { emptyAggregateFields } from "./presentation";

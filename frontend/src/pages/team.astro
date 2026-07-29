@@ -207,9 +207,25 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
 </Shell>
 
 <style>
+  /*
+   * The single track is stated as `minmax(0, 1fr)` and every arm carries
+   * `min-width: 0`.
+   *
+   * The roster is a 900px table inside its own horizontal scroller
+   * (`styles/table.css`), and a scroller only scrolls when its ancestors are
+   * allowed to be narrower than its content: an implicit `auto` track is
+   * floored by its item's min-content, and a grid item's `min-width: auto` is
+   * floored by its own, so the page grew to the table's width and *the body*
+   * scrolled sideways at every viewport — worst on a phone.
+   */
   .team {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-5);
+  }
+
+  .team > * {
+    min-width: 0;
   }
 
   .head {

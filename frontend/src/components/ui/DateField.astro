@@ -79,7 +79,13 @@ const reasonId = isDisabled ? `date-off-${scope}-${code}` : undefined;
     )
   }
 
-  <div class="panel card" role="dialog" aria-label={label} data-menu-panel hidden>
+  <div
+    class="panel card"
+    role="dialog"
+    aria-label={label}
+    data-menu-panel
+    hidden
+  >
     {
       /* The typed path is not a convenience, it is the accessible path: stating
         a date must not require walking a grid of forty-two buttons. */

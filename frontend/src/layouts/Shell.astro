@@ -37,7 +37,13 @@ export interface Crumb {
  * are English, the labels beside them Spanish (CLAUDE.md §Language).
  */
 export type NavKey =
-  "overview" | "priorities" | "projects" | "board" | "team" | "activity";
+  | "overview"
+  | "priorities"
+  | "projects"
+  | "board"
+  | "team"
+  | "activity"
+  | "workflows";
 
 export interface Props {
   /** Document title, rendered as `<title>{title} — Aztec Ops</title>`. */
@@ -81,6 +87,7 @@ const NAV: ReadonlyArray<{
   { key: "board", label: "Tablero", href: "/board", icon: "board" },
   { key: "team", label: "Equipo", href: "/team", icon: "users" },
   { key: "activity", label: "Actividad", href: "/activity", icon: "pulse" },
+  { key: "workflows", label: "Flujos", href: "/workflows", icon: "flow" },
 ];
 
 /** Where the back button goes when the tab has no history: the parent crumb. */
@@ -109,14 +116,27 @@ const appGuard = appGuardScript(
     <script is:inline set:html={appGuard} />
     <script is:inline>
       // Sidebar state, before paint, so the rail never flashes open.
-      try {
-        document.documentElement.dataset.sidebar =
-          window.localStorage.getItem("aztec.ui.sidebar") === "rail"
-            ? "rail"
-            : "open";
-      } catch {
-        document.documentElement.dataset.sidebar = "open";
-      }
+      //
+      // 1024–1439 is the icon rail by contract (DESIGN.md §Layout), which the
+      // stored preference cannot override: below 1024 the sidebar is the
+      // drawer, and only from 1440 is there room for the operator to choose.
+      // The same rule lives in the module script below, applied again whenever
+      // the viewport crosses the band.
+      (function () {
+        var pref = "open";
+        try {
+          pref =
+            window.localStorage.getItem("aztec.ui.sidebar") === "rail"
+              ? "rail"
+              : "open";
+        } catch {
+          /* storage disabled: the panel is the default */
+        }
+        var band = window.matchMedia(
+          "(min-width: 1024px) and (max-width: 1439px)",
+        );
+        document.documentElement.dataset.sidebar = band.matches ? "rail" : pref;
+      })();
     </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
@@ -201,6 +221,9 @@ const appGuard = appGuardScript(
             type="button"
             data-action="open-drawer"
             aria-label="Abrir el menú"
+            aria-controls="sidebar"
+            aria-expanded="false"
+            data-drawer-trigger
           >
             <Icon name="menu" />
           </button>
@@ -265,23 +288,64 @@ const appGuard = appGuardScript(
 
       const SIDEBAR_PREF_KEY = "aztec.ui.sidebar";
 
+      /**
+       * The band in which the sidebar is the icon rail whatever the operator
+       * prefers (DESIGN.md §Layout: <1024 drawer, 1024–1439 rail, ≥1440 panel).
+       * Duplicated once in the pre-paint inline script, which cannot import.
+       */
+      const railBand = window.matchMedia(
+        "(min-width: 1024px) and (max-width: 1439px)",
+      );
+
+      /**
+       * Opens or closes the drawer, and tells assistive tech that it did.
+       *
+       * The trigger owns `aria-expanded`: the drawer is also closed by the
+       * scrim and by Escape, so a state written only where the button is
+       * clicked would leave a screen reader announcing an open navigation over
+       * a closed one.
+       */
       function setDrawer(open: boolean): void {
         if (open) {
           document.documentElement.dataset.drawer = "open";
         } else {
           delete document.documentElement.dataset.drawer;
         }
+        document
+          .querySelector("[data-drawer-trigger]")
+          ?.setAttribute("aria-expanded", String(open));
+      }
+
+      /** The stored choice; `open` whenever storage refuses to answer. */
+      function storedSidebar(): "rail" | "open" {
+        try {
+          return window.localStorage.getItem(SIDEBAR_PREF_KEY) === "rail"
+            ? "rail"
+            : "open";
+        } catch {
+          return "open";
+        }
+      }
+
+      /**
+       * Applies the effective sidebar mode: the rail band wins over the
+       * preference, so widening past 1440 restores the operator's choice and
+       * narrowing back into the band collapses to the rail again.
+       */
+      function applySidebarMode(): void {
+        document.documentElement.dataset.sidebar = railBand.matches
+          ? "rail"
+          : storedSidebar();
       }
 
       function toggleSidebar(): void {
-        const next =
-          document.documentElement.dataset.sidebar === "rail" ? "open" : "rail";
-        document.documentElement.dataset.sidebar = next;
+        const next = storedSidebar() === "rail" ? "open" : "rail";
         try {
           window.localStorage.setItem(SIDEBAR_PREF_KEY, next);
         } catch {
           /* preference simply not persisted */
         }
+        applySidebarMode();
       }
 
       function goBack(control: HTMLElement): void {
@@ -368,6 +432,8 @@ const appGuard = appGuardScript(
         if (event.key === "Escape") setDrawer(false);
       });
 
+      railBand.addEventListener("change", applySidebarMode);
+
       window.addEventListener(SESSION_EXPIRED_EVENT, () => {
         toast({
           kind: "error",
@@ -382,6 +448,7 @@ const appGuard = appGuardScript(
       document.addEventListener("astro:page-load", () => {
         if (!guardAppPage()) return;
         setDrawer(false);
+        applySidebarMode();
         markActiveNav();
         fillOperatorCard();
       });
@@ -426,6 +493,15 @@ const appGuard = appGuardScript(
         background: var(--carta);
         border-right: var(--border-width) solid var(--hairline);
         padding: var(--space-4) var(--space-3);
+        /*
+         * The one width animation kept on purpose. A transform would slide the
+         * rail over the content or leave a gap beside it — the point of
+         * collapsing is that the content *reclaims* the space, which is a
+         * layout change by definition. It runs once per deliberate click, on a
+         * grid track, not per frame of a data update, so the reflow it costs is
+         * bounded and paid for. Everything that animates on data uses transform
+         * (see the bars in SignalBar, ScorePlate and MemberRow).
+         */
         transition: width var(--motion-panel-duration) var(--motion-panel-ease);
         z-index: var(--z-sidebar);
         overflow: hidden;
@@ -635,6 +711,17 @@ const appGuard = appGuardScript(
         flex-direction: column;
       }
 
+      /*
+       * Below 1440 the collapse control has nothing to say: 1024–1439 is the
+       * rail and below 1024 the drawer, both fixed by DESIGN.md §Layout. A
+       * visible toggle there would write a preference the layout then ignores.
+       */
+      @media (max-width: 1439px) {
+        .collapse-btn {
+          display: none;
+        }
+      }
+
       /* --- Drawer (< 1024px) --- */
 
       .scrim {
@@ -700,10 +787,6 @@ const appGuard = appGuardScript(
 
         :global(html[data-drawer="open"]) .scrim {
           display: block;
-        }
-
-        .collapse-btn {
-          display: none;
         }
 
         .menu-btn {

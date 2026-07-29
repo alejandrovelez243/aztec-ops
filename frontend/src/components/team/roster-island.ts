@@ -213,7 +213,11 @@ export function mountRoster(root: HTMLElement): () => void {
     setText(row, "status", formatStatus(entry));
 
     const bar = row.querySelector<HTMLElement>('[data-field="bar"]');
-    if (bar !== null) bar.style.width = `${barPercent(entry.utilization)}%`;
+    if (bar !== null)
+      bar.style.setProperty(
+        "--bar",
+        String(barPercent(entry.utilization) / 100),
+      );
 
     const load = row.querySelector<HTMLElement>(".load");
     if (load !== null) setTone(load, loadTone(entry.is_overloaded));
@@ -487,7 +491,12 @@ export function mountRoster(root: HTMLElement): () => void {
       '[data-field="dialog-title"]',
     );
     const lead = form.querySelector<HTMLElement>('[data-field="dialog-lead"]');
-    const code = form.elements.namedItem("code");
+    const codeLine = form.querySelector<HTMLElement>(
+      '[data-field="code-line"]',
+    );
+    const codeValue = form.querySelector<HTMLElement>(
+      '[data-field="code-value"]',
+    );
     const passwordField = form.querySelector<HTMLElement>(
       '[data-field="password-field"]',
     );
@@ -496,12 +505,10 @@ export function mountRoster(root: HTMLElement): () => void {
       if (title !== null) title.textContent = "Añadir persona";
       if (lead !== null) {
         lead.textContent =
-          "El código identifica a esta persona en todo el sistema y no se puede cambiar después.";
+          "El código con el que entra al sistema se genera solo, a partir del nombre.";
       }
-      if (code instanceof HTMLInputElement) {
-        code.value = "";
-        code.disabled = false;
-      }
+      // Nothing to show yet: the server mints the code from the name when it saves.
+      if (codeLine !== null) codeLine.hidden = true;
       // A password is offered on registration and never on an edit: replacing a credential is
       // its own action, with its own record and its own dialog.
       if (passwordField !== null) passwordField.hidden = false;
@@ -517,10 +524,8 @@ export function mountRoster(root: HTMLElement): () => void {
       lead.textContent =
         "El código no cambia: es lo que nombra a esta persona en cada evento y en la bitácora.";
     }
-    if (code instanceof HTMLInputElement) {
-      code.value = mode.alias;
-      code.disabled = true;
-    }
+    if (codeValue !== null) codeValue.textContent = mode.alias;
+    if (codeLine !== null) codeLine.hidden = false;
     const label = form.elements.namedItem("label");
     if (label instanceof HTMLInputElement) {
       label.value = row?.dataset.label ?? "";
@@ -557,7 +562,6 @@ export function mountRoster(root: HTMLElement): () => void {
     const result: Result<Member> =
       dialogMode.kind === "create"
         ? await postMember({
-            code: String(data.get("code") ?? "").trim(),
             label,
             role: role === "" ? null : role,
             weekly_capacity_points: capacity,
@@ -580,7 +584,9 @@ export function mountRoster(root: HTMLElement): () => void {
       kind: "success",
       title:
         dialogMode.kind === "create"
-          ? `${result.data.label} ya está en el equipo`
+          ? // The assigned code is announced here: it is the one thing the operator did not
+            // choose and will need, because it is how they find this person in a payload.
+            `${result.data.label} ya está en el equipo como ${result.data.alias}`
           : `${result.data.label} actualizada`,
     });
     void fetchAndRender();

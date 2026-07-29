@@ -23,21 +23,31 @@
  * (`raw_label`): 61 of the 82 source tasks describe their prerequisite in prose,
  * so an unresolved reference is the normal case, not a defect.
  */
+import CreateTaskDialog from "./CreateTaskDialog.astro";
 import DateField from "../ui/DateField.astro";
+import Icon from "../ui/Icon.astro";
 import OwnerMenu from "./OwnerMenu.astro";
 import TaskMoveMenu from "./TaskMoveMenu.astro";
 import { taskMoves } from "./task-moves";
 import { taxonomyTone, toneStyle } from "./tone";
-import type { TaskItem } from "../../lib/api/domain";
+import type {
+  TaskItem,
+  TaxonomyRef,
+  TeamLoadEntry,
+} from "../../lib/api/domain";
 
 export interface Props {
   projectCode: string;
   tasks: readonly TaskItem[];
   /** The project read's `updated_at`; the floor for live patches on the rows. */
   updatedAt: string;
+  /** Priorities the create dialog offers; empty when the catalog read failed. */
+  priorities: readonly TaxonomyRef[];
+  /** The roster the create dialog offers; empty when that read failed. */
+  members: readonly TeamLoadEntry[];
 }
 
-const { projectCode, tasks, updatedAt } = Astro.props;
+const { projectCode, tasks, updatedAt, priorities, members } = Astro.props;
 
 /** Where a task's own screen lives; built here so the row and the island agree. */
 function taskHref(code: string): string {
@@ -46,6 +56,24 @@ function taskHref(code: string): string {
 ---
 
 <div class="tasks" data-tasks data-project-code={projectCode}>
+  {
+    /* Creation is a button here and a form in a modal: the five fields it asks
+      for do not earn permanent room above a table, and the act has its own
+      beginning and end. The button sits inside `[data-tasks]` so the island owns
+      it by delegation, and above the table so it survives the empty arm — which
+      is the arm that most needs it. */
+  }
+  <div class="lead">
+    <button
+      class="btn btn-primary"
+      type="button"
+      data-action="open-create-task"
+    >
+      <Icon name="plus" size={18} />
+      Crear tarea
+    </button>
+  </div>
+
   <p class="empty small" data-tasks-empty hidden={tasks.length > 0}>
     Este proyecto todavía no tiene tareas registradas.
   </p>
@@ -87,7 +115,10 @@ function taskHref(code: string): string {
               </td>
               <td>
                 <span
-                  class:list={["chip", taxonomyTone(task.priority.color).className]}
+                  class:list={[
+                    "chip",
+                    taxonomyTone(task.priority.color).className,
+                  ]}
                   style={toneStyle(taxonomyTone(task.priority.color))}
                   data-priority-chip
                 >
@@ -182,6 +213,21 @@ function taskHref(code: string): string {
   </template>
 </div>
 
+{
+  /* Outside `[data-tasks]` on purpose. The island mounts `mountDateFields` over
+    its own root to make every row's due date editable, and that mount is
+    delegated: a `DateField` living inside the root would have its clicks
+    answered by the row writer as well as by the dialog's local one, and a task
+    that does not exist yet would be PATCHed. A `<dialog>` is drawn in the top
+    layer regardless of where it sits, so nothing is lost by putting it here. */
+}
+<CreateTaskDialog
+  projectCode={projectCode}
+  priorities={priorities}
+  members={members}
+  tasks={tasks}
+/>
+
 <script>
   import { onPage } from "./island";
   import { mountTasks } from "./tasks";
@@ -190,6 +236,19 @@ function taskHref(code: string): string {
 </script>
 
 <style>
+  /* The templates and the two hidden arms are `display: none`, so a flex column
+     puts a gap only between what is actually on screen. */
+  .tasks {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .lead {
+    display: flex;
+    justify-content: flex-end;
+  }
+
   .table-wrap {
     /* Still the row scroller. The menus are positioned in viewport coordinates
       by `menu.ts` precisely so this container cannot clip them. */

@@ -55,7 +55,6 @@ class MemberCreationTestCase(TestCase):
 
     def _create(self, **overrides: Any) -> Any:
         payload = {
-            "code": "nadia.perez",
             "label": "Nadia Perez",
             "role": "delivery",
             "weekly_capacity_points": 18,
@@ -64,6 +63,40 @@ class MemberCreationTestCase(TestCase):
         return self.client.post(
             MEMBERS_URL, data=payload, content_type="application/json", **self.auth
         )
+
+    def test_the_code_is_derived_from_the_name_and_never_typed(self) -> None:
+        response = self._create(label="Alejandro Vélez")
+
+        self.assertEqual(response.status_code, 201)
+        # Accents stripped, first and last token, joined the way the seeded roster already is.
+        self.assertEqual(response.json()["alias"], "alejandro.velez")
+
+    def test_a_middle_name_is_dropped_rather_than_concatenated(self) -> None:
+        # The code is an identifier, not a full legal name.
+        self.assertEqual(
+            self._create(label="María de los Ángeles Pérez").json()["alias"],
+            "maria.perez",
+        )
+
+    def test_a_second_person_of_the_same_name_gets_the_next_free_code(self) -> None:
+        first = self._create(label="Alejandro Vélez").json()["alias"]
+
+        second = self._create(label="Alejandro Velez").json()["alias"]
+
+        # Two people genuinely share a name; refusing to register the second is not an option,
+        # and the first keeps the unadorned code they were already registered under.
+        self.assertEqual((first, second), ("alejandro.velez", "alejandro.velez2"))
+
+    def test_a_name_that_slugifies_to_nothing_still_produces_a_code(self) -> None:
+        # A person with no identifier cannot be saved at all, so the fallback is not optional.
+        self.assertEqual(self._create(label="!!!").json()["alias"], "persona")
+
+    def test_the_code_cannot_be_chosen_by_the_caller(self) -> None:
+        body = self._create(label="Nadia Perez", code="admin").json()
+
+        # The field is not part of the schema, so a client sending one is ignored rather than
+        # obeyed — this is the route that decides who somebody is in the audit trail.
+        self.assertEqual(body["alias"], "nadia.perez")
 
     def test_a_registered_person_comes_back_with_the_role_reference_a_form_can_resend(self) -> None:
         response = self._create()
@@ -106,15 +139,6 @@ class MemberCreationTestCase(TestCase):
         # people work around by choosing something worse.
         self.assertGreater(len(body["details"]["fields"]["password"]), 1)
         self.assertFalse(User.objects.filter(code="nadia.perez").exists())
-
-    def test_a_duplicate_code_is_a_conflict_and_not_a_second_account(self) -> None:
-        self._create()
-
-        response = self._create(label="Somebody Else")
-
-        self.assertEqual(response.status_code, 409)
-        self.assertEqual(response.json()["code"], "conflicting_state")
-        self.assertEqual(User.objects.filter(code="nadia.perez").count(), 1)
 
     def test_an_unknown_role_names_the_field_rather_than_answering_not_found(self) -> None:
         response = self._create(role="architecture")

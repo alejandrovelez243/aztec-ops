@@ -142,7 +142,12 @@ export function dueState(
       days,
     };
   }
-  return { kind: "scheduled", label: title, tone: "tone-piedra", title };
+  return {
+    kind: "scheduled",
+    label: `Vence el ${title}`,
+    tone: "tone-piedra",
+    title,
+  };
 }
 
 /**

@@ -31,25 +31,21 @@ const { roles } = Astro.props;
       Añadir persona
     </h2>
     <p class="small lead" data-field="dialog-lead">
-      El código identifica a esta persona en todo el sistema y no se puede
-      cambiar después.
+      El código con el que entra al sistema se genera solo, a partir del nombre.
     </p>
 
-    <label class="field">
+    {
+      /*
+       * On an edit the code is shown, read-only, because it is what identifies this person in
+       * every event and in the bitácora and the operator may need to read it. On a create there
+       * is nothing to show: the server mints it, and a preview rendered here would be this
+       * screen's own second opinion about a rule that lives in one place.
+       */
+    }
+    <p class="field" data-field="code-line" hidden>
       <span class="label">Código</span>
-      <input
-        class="input"
-        name="code"
-        maxlength="32"
-        required
-        autocomplete="off"
-        placeholder="nombre.apellido"
-      />
-      <span class="small hint" data-field="code-hint">
-        Minúsculas, sin espacios. Es también su usuario para entrar.
-      </span>
-      <span class="small error" data-error="code" hidden></span>
-    </label>
+      <code class="small code-value" data-field="code-value"></code>
+    </p>
 
     <label class="field">
       <span class="label">Nombre</span>
@@ -168,6 +164,11 @@ const { roles } = Astro.props;
 
   .hint {
     color: var(--tinta-media);
+  }
+
+  .code-value {
+    color: var(--tinta-media);
+    font-variant-numeric: tabular-nums;
   }
 
   .error {

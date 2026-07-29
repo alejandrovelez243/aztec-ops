@@ -214,6 +214,15 @@ class WorkflowShapeDocumentTestCase(TestCase):
                 "label": "Bloqueado",
                 "category": StateCategory.BLOCKED,
                 "color": "#dc2626",
+                # Published so an editor can say why a node may not be retired.
+                # Nothing sits on this state in the fixture, hence zero.
+                "record_count": 0,
+                # Nothing stands on it, so retiring it would strand no record.
+                "can_retire": True,
+                "is_active": True,
+                "order": 3,
+                "is_initial": False,
+                "is_terminal": False,
             },
         )
 
@@ -364,7 +373,7 @@ class WithdrawnEdgeTestCase(TestCase):
         """
         workflow = Workflow.objects.get(code="test-project-flow")
 
-        labels = [edge.label for edge in workflow.to_shape().transitions]
+        labels = [edge.label for edge in workflow.to_shape(occupancy={}).transitions]
 
         self.assertNotIn("Reanudar", labels)
 

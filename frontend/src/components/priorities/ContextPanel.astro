@@ -2,7 +2,7 @@
 /**
  * The pinned context panel: the defence of one row's position.
  *
- * Above 1024px this sits in the board's right column, pinned while the queue
+ * Above 1280px this sits in the board's right column, pinned while the queue
  * scrolls. Below it, the very same node expands in place under its row — one DOM
  * node, one set of ids, so the accordion and the panel can never disagree about what
  * they show.
@@ -310,7 +310,8 @@ const trimmedNextStep = nextStep === null ? "" : nextStep.trim();
     gap: var(--space-2);
   }
 
-  @media (min-width: 1024px) {
+  /* The master–detail frame; the number is argued in `pages/priorities.astro`. */
+  @media (min-width: 1280px) {
     .detail {
       /*
        * Column two of the board's grid, spanning every row track so `sticky` has
@@ -326,7 +327,7 @@ const trimmedNextStep = nextStep === null ? "" : nextStep.trim();
     }
   }
 
-  @media (max-width: 1023px) {
+  @media (max-width: 1279px) {
     .detail {
       margin-top: var(--space-2);
     }

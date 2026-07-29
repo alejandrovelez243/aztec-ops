@@ -20,9 +20,8 @@
 import { applyTone, cloneTemplate, pulse, setField } from "../projects/dom";
 import { renderOwnerControl } from "../projects/owner-menu";
 import { renderDateControl } from "../ui/date-field";
-import { dueState } from "../projects/format";
 import { joinFields } from "../projects/messages";
-import { semanticTone, stateTone, taxonomyTone } from "../projects/tone";
+import { stateTone, taxonomyTone } from "../projects/tone";
 import {
   dependencyLabel,
   dependencyTitle,

@@ -11,7 +11,7 @@
  * the backend documents as acceptable.
  */
 
-import { postLogout, postToken } from "../api/client";
+import { ensureFreshAccess, postLogout, postToken } from "../api/client";
 import type { ApiError } from "../api/errors";
 import {
   clearSession,
@@ -71,6 +71,38 @@ export async function signOut(): Promise<void> {
     clearSession();
     window.location.assign(LOGIN_PATH);
   }
+}
+
+/**
+ * Tries to bring a session back from the refresh token alone.
+ *
+ * The access token — and with it the mirror cookie the server guard reads —
+ * lives for minutes, while the refresh token lives for days. Without this, an
+ * operator who leaves the tab open over lunch comes back to a login screen
+ * despite holding a perfectly good credential: the guard sees no cookie and
+ * redirects before any script can renew. Being signed out on a schedule is the
+ * fastest way to make a daily tool feel hostile.
+ *
+ * Called by the login screen before it renders its form, so an expiry becomes a
+ * blink rather than a logout.
+ *
+ * @returns `true` when the session is live again and the cookie is set; `false`
+ *   when there was nothing to restore or the refresh token itself was refused —
+ *   in which case the stale local session has been cleared.
+ */
+export async function restoreSession(): Promise<boolean> {
+  const stored = loadSession();
+  if (stored === null) return false;
+  const access = await ensureFreshAccess();
+  if (access === null) {
+    clearSession();
+    return false;
+  }
+  // Re-persist even when the stored token was still fresh: this is reached
+  // precisely when the cookie is missing, and saving is what writes it.
+  const current = loadSession();
+  if (current !== null) saveSession(current);
+  return true;
 }
 
 /** The signed-in operator, or `null`. */

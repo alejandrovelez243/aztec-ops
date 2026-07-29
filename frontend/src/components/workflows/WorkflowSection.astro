@@ -110,9 +110,19 @@ const moveCount = workflow.rows.length;
 </section>
 
 <style>
+  /*
+   * The track is stated rather than left to default to `auto`, and the section
+   * declares its own `min-width: 0` because Astro scopes styles per component:
+   * the page's grid cannot reach in here to say it, and the figure below says
+   * it for itself. Without the pair, the column grew to the diagram's ~1500px
+   * and the page scrolled sideways instead of the figure (see
+   * `pages/workflows.astro`).
+   */
   .workflow {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-4);
+    min-width: 0;
   }
 
   .head {

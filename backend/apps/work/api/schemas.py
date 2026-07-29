@@ -31,6 +31,7 @@ class TaskCreateIn(Schema):
     title: str = Field(min_length=1, max_length=200)
     priority: str = Field(min_length=1, max_length=32)
     detail: str = ""
+    description: str = ""
     assignee: str | None = None
     due_date: date | None = None
     last_progress: str = Field(default="", max_length=255)
@@ -59,6 +60,7 @@ class TaskUpdateIn(Schema):
 
     title: str = Field(default="", min_length=1, max_length=200)
     detail: str = ""
+    description: str = ""
     last_progress: str = Field(default="", max_length=255)
     priority: str = Field(default="", min_length=1, max_length=32)
     assignee: str | None = None

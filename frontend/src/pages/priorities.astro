@@ -266,14 +266,26 @@ const renderedAt = new Date().toISOString();
     color: var(--tinta-media);
   }
 
-  /* Phone and tablet: one column, and the selected row expands under itself. */
+  /*
+   * Phone, tablet and small laptop: one column, and the selected row expands
+   * under itself — the approved fallback (comp A) recorded in
+   * `.impeccable/surfaces/frontend-src-pages-priorities-astro.md`.
+   *
+   * THE MASTER–DETAIL BREAKPOINT IS 1280, NOT 1024. The panel's own floor is
+   * 320px and a queue row needs ~404px of fixed tracks before its name gets a
+   * pixel; at 1024 the two together left the name track computing to exactly
+   * 0px, so every project on the surface lost its name while the scores stayed.
+   * A composition that cannot hold both halves is not the composition — it
+   * collapses to the one that fits. The same number is repeated by `QueueRow`,
+   * `ContextPanel` and `QueueSkeleton`, which must switch on the same frame.
+   */
   .board {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
   }
 
-  @media (min-width: 1024px) {
+  @media (min-width: 1280px) {
     .board {
       /* Panel column: 5–6.5 rhythm units, so the queue keeps roughly 60%. */
       --panel-min: calc(var(--space-8) * 5);
@@ -297,7 +309,7 @@ const renderedAt = new Date().toISOString();
 
     /*
      * The entry keeps a row and its panel together in the DOM — which is what lets
-     * the accordion below 1024px reuse the very same node — while `contents` hands
+     * the accordion below 1280px reuse the very same node — while `contents` hands
      * both to the board's grid so the panel can sit in column two.
      */
     .entry {

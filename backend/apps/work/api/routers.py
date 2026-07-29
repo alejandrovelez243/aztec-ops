@@ -111,7 +111,7 @@ def post_project_task(
             due_date=payload.due_date,
             detail=payload.detail,
             last_progress=payload.last_progress,
-            dependencies=tuple(DependencySpec(depends_on_code=code) for code in payload.depends_on),
+            dependencies=tuple(DependencySpec.from_text(text) for text in payload.depends_on),
             actor=actor_code_of(request),
             correlation_id=uuid4(),
             now=now,

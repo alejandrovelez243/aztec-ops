@@ -387,6 +387,10 @@ class Project(models.Model):
         related_name="projects",
     )
     summary = models.TextField(blank=True, default="")
+    #: The long-form description, Markdown as the operator wrote it. ``summary``
+    #: stays the one-line subtitle every project card and list renders; this is
+    #: the document behind it. Same split as ``work.Task.detail``/``description``.
+    description = models.TextField(blank=True, default="")
     next_step = models.CharField(max_length=255, blank=True, default="")
     is_archived = models.BooleanField(default=False)
     imported_health = models.CharField(max_length=16, blank=True, default="")
@@ -467,6 +471,7 @@ class Project(models.Model):
             business_value=self.business_value,
             currency=self.currency.code,
             summary=self.summary,
+            description=self.description,
             next_step=self.next_step,
             is_archived=self.is_archived,
         )

@@ -20,15 +20,18 @@ import { getProject } from "../../lib/api/client";
 import { countUp, flip } from "../../lib/motion/spring";
 import { onReset, subscribe, type Envelope } from "../../lib/stream/store";
 import type { Topic } from "../../lib/stream/topics";
-import {
-  applyTone,
-  isFresher,
-  pulse,
-  readNumber,
-  readString,
-  setField,
-} from "./dom";
+// The narrower for this topic's payload lives with the Resumen, which patches
+// from the same frame; a second reader written here is how two surfaces start
+// disagreeing about one event (`docs/standards/FRONTEND.md` §6).
+import { parsePriorityRecalculated } from "../overview/envelope";
+import { applyTone, isFresher, pulse, readString, setField } from "./dom";
 import { dueState, formatScore } from "./format";
+import {
+  scoreArgument,
+  scoreSummary,
+  toScoreReasons,
+  type ScoreReason,
+} from "./presentation";
 import { COMPARATORS, sortLabel, toSortMode, type SortMode } from "./sort";
 import { markEvent } from "./stale";
 import { semanticTone, stateTone } from "./tone";
@@ -41,6 +44,13 @@ const SORT_KEY = "aztec.ui.projects-sort";
 
 /** The two shapes of the same rows. */
 type ViewMode = "grid" | "table";
+
+/**
+ * Below this width the surface renders the card form whichever view is
+ * remembered, so the grid ↔ table switch cannot act. Matches the breakpoint in
+ * `pages/projects/index.astro` and `ProjectsToolbar.astro`.
+ */
+const CARD_ONLY_QUERY = "(max-width: 767px)";
 
 /** Topics that can change something a project row shows. */
 const WATCHED: readonly Topic[] = [
@@ -78,6 +88,8 @@ export function mountProjectsList(root: HTMLElement): () => void {
   applyView(root, storedView());
   const controller = new AbortController();
   const { signal } = controller;
+
+  bindViewToggle(root, signal);
 
   // The server rendered the rows by name, so the stored order is only replayed
   // when it is a different one — re-sorting into the order already on screen
@@ -196,6 +208,40 @@ export function mountProjectsList(root: HTMLElement): () => void {
     controller.abort();
     for (const off of offs) off();
   };
+}
+
+/**
+ * Takes the grid ↔ table switch out of the document while the card-only form is
+ * in force, and puts it back where it was when it is not.
+ *
+ * Below 768px both remembered views render as cards, so the control cannot act.
+ * Hiding it in CSS is the right first paint but not the whole answer: it leaves
+ * two buttons in the document at 0×0 — no size, no meaning, and still two nodes
+ * that a keyboard audit, a screen reader and the next reader of this markup each
+ * have to decide about. Detaching answers it once and in one place.
+ *
+ * The comment node holds the position, so widening the viewport rebuilds the
+ * toolbar in its original order rather than appending the switch at the end.
+ *
+ * Failure mode if the listener is never released: a detached toolbar keeps a
+ * media-query subscription alive across view transitions. The caller's
+ * `AbortSignal` is what prevents it.
+ */
+function bindViewToggle(root: HTMLElement, signal: AbortSignal): void {
+  const toggle = root.querySelector<HTMLElement>("[data-view-toggle]");
+  if (toggle === null) return;
+
+  const anchor = document.createComment("view-toggle");
+  toggle.before(anchor);
+  const cardOnly = window.matchMedia(CARD_ONLY_QUERY);
+
+  const sync = (): void => {
+    if (cardOnly.matches) toggle.remove();
+    else anchor.after(toggle);
+  };
+
+  sync();
+  cardOnly.addEventListener("change", sync, { signal });
 }
 
 /** The remembered view, defaulting to the card grid on a first visit. */
@@ -450,10 +496,19 @@ function handleEnvelope(root: HTMLElement, envelope: Envelope): void {
   if (elements.length === 0) return;
 
   if (envelope.topic === "project.priority.recalculated") {
-    const value = readNumber(envelope.payload, "value");
-    if (value !== null) {
-      patchScore(elements, value, envelope.occurred_at);
-      return;
+    const patch = parsePriorityRecalculated(envelope.payload);
+    if (patch !== null) {
+      patchScore(elements, patch.value, envelope.occurred_at);
+      if (patch.breakdown.length > 0) {
+        const reasons = toScoreReasons(patch.breakdown);
+        for (const element of elements) {
+          paintScoreArgument(element, patch.value, reasons);
+        }
+        return;
+      }
+      // The frame carried the number but nothing behind it. The reasons on
+      // screen defend the *previous* ranking, so they are not left standing and
+      // not replaced by a guess either: the read below is what settles them.
     }
   }
   // Everything else changes labels, colours or derived risk, none of which the
@@ -479,6 +534,21 @@ function patchScore(
   }
 }
 
+/**
+ * Writes the two renderings of one argument onto a row: the sentences a pointer
+ * reads in `title`, and the summary a screen reader announces in place of the
+ * bare figure. Both come from the same call, so they cannot disagree.
+ */
+function paintScoreArgument(
+  element: HTMLElement,
+  value: number,
+  reasons: readonly ScoreReason[],
+): void {
+  const slot = element.querySelector<HTMLElement>("[data-score-slot]");
+  if (slot !== null) slot.title = scoreArgument(value, reasons);
+  setField(element, "score-note", scoreSummary(value, reasons));
+}
+
 /** Codes with a read already in flight, so one burst is one request. */
 const refreshing = new Set<string>();
 
@@ -502,6 +572,8 @@ async function refreshRows(
     const project = result.data;
     const due = dueState(project.target_date ?? null);
     const risks = project.risk_flags.length;
+    const score = project.score ?? null;
+    const reasons = toScoreReasons(score?.breakdown ?? []);
 
     for (const element of elements) {
       const chip = element.querySelector<HTMLElement>("[data-state-chip]");
@@ -533,6 +605,11 @@ async function refreshRows(
           : String(risks);
         riskChip.hidden = spellOut && risks === 0;
       }
+
+      // The figure is left to `patchScore` and its count-up; this read is the
+      // authority on the argument behind it, and the only path that can replace
+      // reasons an envelope did not carry.
+      if (score !== null) paintScoreArgument(element, score.value, reasons);
 
       element.dataset.category = project.state.category;
       element.dataset.health = project.health.code;

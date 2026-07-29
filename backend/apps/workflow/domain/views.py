@@ -1,6 +1,6 @@
 """What the workflow context publishes to a read surface: the shape of a graph, and its legal moves.
 
-Three projections answering two different questions, and the split between the questions is the
+Four projections answering two different questions, and the split between the questions is the
 point.
 
 :class:`TransitionOption` answers **"what may this aggregate do next"**. It is the load-bearing
@@ -9,8 +9,8 @@ buttons, so the frontend holds no list of state codes, guesses no legality and r
 arrives there — adding ``en_espera_cliente`` from the admin is a row and zero frontend changes
 (CLAUDE.md rule 14).
 
-:class:`WorkflowShapeView` and :class:`WorkflowEdgeView` answer **"what did the operator
-configure"**. Together they are the graph as it stands in the admin: every node, occupied or not,
+:class:`WorkflowShapeView`, :class:`WorkflowNodeView` and :class:`WorkflowEdgeView` answer **"what
+did the operator configure"**. Together they are the graph as it stands in the admin: every node, occupied or not,
 and every edge an operator declared between them. That is a description of configuration, and it is
 not a permission. A configured edge can still be refused for the record in front of you — a guard
 rejects it (:class:`~apps.workflow.domain.errors.GuardRejected`), a required field on *that* record
@@ -23,6 +23,8 @@ same typed 409.
 Pure Pydantic over the shared kernel — no Django — so a router, a consumer or a test can build one
 without a database.
 """
+
+from typing import Self
 
 from pydantic import BaseModel, ConfigDict
 
@@ -120,6 +122,103 @@ class WorkflowEdgeView(BaseModel):
     requires_fields: tuple[str, ...] = ()
 
 
+class WorkflowNodeView(BaseModel):
+    """One node of a graph: the reference every payload renders, plus what shaping it needs.
+
+    A superset of :class:`~apps.shared.refs.StateRef` on the wire — ``code``, ``label``,
+    ``category`` and ``color`` keep their names and their meaning, so every client that already
+    reads a column header keeps working — carrying the four facts an *editor* cannot render without
+    and cannot derive: where the operator put the column, whether it is the entry node, whether it
+    is still part of the graph, and whether it can be taken out of it.
+
+    The fields are repeated rather than inherited from ``StateRef``. Subclassing would also inherit
+    ``StateRef.of``, a constructor that cannot build this shape, and a classmethod that type-checks
+    and raises is worse than four lines of field declarations. :meth:`of` takes the reference
+    instead, so the colour is normalized in exactly one place.
+
+    Attributes:
+        code: Node slug, unique inside this graph only.
+        label: Operator-editable Spanish.
+        category: The closed vocabulary every other context branches on.
+        color: ``#RRGGBB``, or ``null`` when the operator set none.
+        order: The operator's arrangement. Published as a number, not merely implied by the array,
+            because the authoring API accepts ``order`` and an editor that could not show the
+            current value could only ever guess at the next one.
+        is_initial: The entry node a brand new aggregate is placed on. At most one per graph, by
+            partial unique constraint.
+        is_terminal: The operator marked this node as an end of the lifecycle. Descriptive: what
+            actually ends a lifecycle is having no active move out, which is a fact about the edges.
+        is_active: ``False`` means retired — out of the graph for new work, still resolving for
+            anything already on it. A retired node is **published, not omitted**, and that is the
+            deliberate difference from a withdrawn edge: an edge is a move, and advertising a move
+            nothing can take is a lie, while a node is a *place*, and a record may still be standing
+            in it. A board that could not draw the column would lose those records from the screen
+            entirely — the same reason a retired graph is still served. Clients must not offer a
+            retired node as a drop target or in a picker.
+        record_count: How many projects and tasks currently sit on this node. The **explanation**
+            behind ``can_retire``: an editor says "3 registros en este estado" instead of greying a
+            button out for no visible reason.
+        can_retire: Whether ``DELETE`` on this node would succeed right now — it is in service and
+            nothing occupies it. The server answers it rather than letting the client derive it, for
+            the same reason transition buttons are served rather than computed: the rule has one
+            home, and a client that got it wrong would offer an action the API then refuses.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+    label: str
+    category: str
+    color: str | None = None
+    order: int = 0
+    is_initial: bool = False
+    is_terminal: bool = False
+    is_active: bool = True
+    record_count: int = 0
+    can_retire: bool = False
+
+    @classmethod
+    def of(
+        cls,
+        ref: StateRef,
+        *,
+        order: int,
+        is_initial: bool,
+        is_terminal: bool,
+        is_active: bool,
+        record_count: int,
+    ) -> Self:
+        """Build a node view from the shared reference and the authoring facts around it.
+
+        ``can_retire`` is computed here rather than passed in, so the one definition of "this node
+        may leave the graph" lives beside the counts it is derived from and cannot disagree with
+        them inside a single response.
+
+        Args:
+            ref: The state as every payload renders it, colour already normalized.
+            order: The operator's arrangement.
+            is_initial: Whether new aggregates start here.
+            is_terminal: Whether the operator marked this node as an end.
+            is_active: Whether the node is still part of the graph.
+            record_count: Projects plus tasks currently sitting on the node.
+
+        Returns:
+            The node, with ``can_retire`` derived.
+        """
+        return cls(
+            code=ref.code,
+            label=ref.label,
+            category=ref.category,
+            color=ref.color,
+            order=order,
+            is_initial=is_initial,
+            is_terminal=is_terminal,
+            is_active=is_active,
+            record_count=record_count,
+            can_retire=is_active and record_count == 0,
+        )
+
+
 class WorkflowShapeView(BaseModel):
     """One state graph as a board sees it: its columns, in the operator's order.
 
@@ -159,9 +258,11 @@ class WorkflowShapeView(BaseModel):
             common case and means no engagement type names it specifically: it is reached as the
             per-kind default. Plural because the binding table permits many types per graph — a
             single nullable field would silently drop rows.
-        states: Every node, ordered by the ``order`` an operator arranged in the admin, ``code``
-            breaking ties. Empty is a legitimate answer — a graph whose states nobody has
-            configured yet — and the board renders no columns rather than treating it as a failure.
+        states: Every node, ordered by the ``order`` an operator arranged, ``code`` breaking ties,
+            including the retired ones flagged ``is_active: false`` — see
+            :class:`WorkflowNodeView`. Empty is a legitimate answer — a graph whose states nobody
+            has configured yet — and the board renders no columns rather than treating it as a
+            failure.
         transitions: Every **active** edge of the graph, grouped by the source node in the same
             column order as ``states`` and then by the operator's own ``order`` within it. A
             deactivated edge is absent rather than flagged: ``is_active = False`` is how an operator
@@ -179,7 +280,7 @@ class WorkflowShapeView(BaseModel):
     is_default: bool = False
     is_active: bool = True
     engagement_types: tuple[TaxonomyRef, ...] = ()
-    states: tuple[StateRef, ...] = ()
+    states: tuple[WorkflowNodeView, ...] = ()
     transitions: tuple[WorkflowEdgeView, ...] = ()
 
 

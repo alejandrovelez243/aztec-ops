@@ -70,11 +70,23 @@ const CRUMBS = [
   { label: "Flujos de trabajo" },
 ];
 
+/**
+ * Where the graph is actually edited.
+ *
+ * Creating a workflow is deliberately not a product surface: states and
+ * transitions are configuration an operator changes rarely and carefully, and
+ * CLAUDE.md rule 1 keeps that vocabulary in the database, edited from the
+ * admin, so the operation can change without a deploy. This screen is the
+ * read-only view of that configuration — naming where to go is what keeps it
+ * from being a dead end.
+ */
+const adminUrl = `${import.meta.env.PUBLIC_API_URL ?? "http://localhost:8000"}/admin/workflow/workflow/`;
+
 /** Skeleton rows shown while a retry is in flight. */
 const SKELETON_ROWS = [0, 1, 2, 3, 4];
 ---
 
-<Shell title="Flujos de trabajo" crumbs={CRUMBS}>
+<Shell title="Flujos de trabajo" active="workflows" crumbs={CRUMBS}>
   <section class="workflows" data-workflows-region data-view={state.kind}>
     <header class="head">
       <h1 class="h1">Flujos de trabajo</h1>
@@ -83,6 +95,12 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
         panel de administración: esto es cómo están configurados ahora mismo. Si
         un movimiento fue rechazado, la razón se ve aquí — entre dos estados sin
         flecha no hay paso posible.
+      </p>
+      <p class="small edit-note">
+        Para crear un flujo, añadir un estado o abrir un movimiento nuevo, ve al
+        <a class="edit-link" href={adminUrl} target="_blank" rel="noreferrer"
+          >panel de administración</a
+        >. Los cambios aparecen aquí en cuanto se guardan, sin desplegar nada.
       </p>
     </header>
 
@@ -153,14 +171,41 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
 </Shell>
 
 <style>
+  /*
+   * Every grid on this page states `minmax(0, 1fr)` rather than letting the
+   * single implicit track default to `auto`, and every child of one carries
+   * `min-width: 0`.
+   *
+   * The diagram is ~1500px of fixed geometry inside its own scroller, and a
+   * scroller only scrolls if something upstream is allowed to be narrower than
+   * it: an `auto` track is floored by its item's min-content, and a grid item's
+   * `min-width: auto` is floored by its own, so without both the whole column
+   * grew to the drawing's width and the page — not the figure — scrolled
+   * sideways at every viewport.
+   */
   .workflows {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-6);
+  }
+
+  .workflows > * {
+    min-width: 0;
   }
 
   .head {
     display: grid;
     gap: var(--space-2);
+  }
+
+  .edit-note {
+    color: var(--tinta-media);
+    max-width: var(--text-body-max);
+  }
+
+  .edit-link {
+    color: var(--cobalto);
+    font-weight: var(--text-title-weight);
   }
 
   .lead {
@@ -169,6 +214,7 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
 
   .graphs {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-8);
   }
 

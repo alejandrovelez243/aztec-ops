@@ -296,9 +296,17 @@ const CRUMBS = [
 </Shell>
 
 <style>
+  /* Same shape as the roster (`pages/team.astro`), because it is the same
+     grammar: a wide table inside its own scroller only scrolls if the track and
+     the arm above it are allowed to be narrower than it. */
   .activity {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: var(--space-5);
+  }
+
+  .activity > * {
+    min-width: 0;
   }
 
   .lead {

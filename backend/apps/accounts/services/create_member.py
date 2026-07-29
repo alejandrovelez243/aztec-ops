@@ -28,6 +28,13 @@ def create_member(
 ) -> MemberView:
     """Register a person, with or without a credential.
 
+    **The code is derived from the name, not typed.** It is the person's username, the ``actor``
+    of every activity record they cause and the ``entity.id`` of every event about them, so a typo
+    made once in a form is a typo the audit trail carries forever — and the field is permanent, so
+    there is no correcting it afterwards. ``"Alejandro Vélez"`` becomes ``alejandro.velez``, and a
+    second person of that name becomes ``alejandro.velez2``. A caller that pins its own code — the
+    fixtures — keeps it.
+
     ``username`` is set to ``code`` and never diverges from it. Django's authentication machinery
     addresses an account by ``username`` while every payload in this system addresses a person by
     ``code``; letting the two drift would mean an operator signs in as one identifier and appears
@@ -54,17 +61,21 @@ def create_member(
         The registered person as a frozen projection.
 
     Raises:
-        DuplicateMemberCode: The code already belongs to somebody.
+        DuplicateMemberCode: A caller pinned a code that already belongs to somebody. A
+            derived code cannot raise this — allocation skips what is taken.
         RoleNotFound: ``role_code`` matches no role.
         PasswordRejected: A password was supplied and did not survive Django's validators.
     """
-    if User.objects.by_code(command.code).exists():
-        raise DuplicateMemberCode(command.code)
+    # An empty code means "derive one": the HTTP API never accepts a code from a client, while a
+    # fixture pins its own. Minted inside this transaction, so a rollback frees it.
+    code = command.code or User.objects.allocate_code(command.label)
+    if User.objects.by_code(code).exists():
+        raise DuplicateMemberCode(code)
 
     role = resolve_role(command.role_code)
     member = User(
-        code=command.code,
-        username=command.code,
+        code=code,
+        username=code,
         alias=command.label,
         role=role,
         weekly_capacity_points=command.weekly_capacity_points,

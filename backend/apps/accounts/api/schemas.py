@@ -16,7 +16,6 @@ audit record, and neither accepts ``is_ops_lead`` — that flag is ``is_staff``,
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.accounts.domain.commands import (
-    CODE_MAX_LENGTH,
     LABEL_MAX_LENGTH,
     MAX_WEEKLY_CAPACITY_POINTS,
     MIN_WEEKLY_CAPACITY_POINTS,
@@ -52,6 +51,13 @@ class RefreshIn(BaseModel):
 class MemberCreateIn(BaseModel):
     """Body of ``POST /api/v1/team/members``.
 
+    ``code`` is absent by design, exactly as it is from ``ProjectCreateIn``: the service derives it
+    from ``label`` inside the creating transaction. The slug is permanent — it is the person's
+    username, the ``actor`` of every activity record they cause and the ``entity.id`` of every
+    event about them — so a typo typed once into a form is a typo the audit trail carries forever,
+    with nothing to correct it afterwards. A name is something an operator can be trusted to
+    spell; an identifier is not something they should have to invent.
+
     ``weekly_capacity_points`` is required rather than defaulted here even though the column has a
     default. A capacity is the divisor of owner load and therefore decides who shows as
     overloaded; a form that could omit it would quietly staff everybody at the same number, and the
@@ -64,7 +70,6 @@ class MemberCreateIn(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    code: str = Field(min_length=1, max_length=CODE_MAX_LENGTH)
     label: str = Field(min_length=1, max_length=LABEL_MAX_LENGTH)
     role: str | None = None
     weekly_capacity_points: int = Field(

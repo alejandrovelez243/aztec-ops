@@ -157,8 +157,21 @@ const reasonId = isDisabled ? `owner-off-${scope}-${code}` : undefined;
     color: var(--tinta);
   }
 
+  /*
+   * A dense row's owner wraps; it is never cut.
+   *
+   * `11ch` with the inherited `nowrap` rendered "Mateo Rui…" in a cell two
+   * pixels narrower than "Mateo Ruiz" — at every viewport, because the cap was
+   * never what bound it: the table's column distribution was, and an ellipsis
+   * that eats one letter reads as a bug rather than as a truncation. The cap
+   * stays, on the spacing scale and wide enough for the names this operation
+   * has, so the column asks for a width the name actually needs; past it the
+   * name takes a second line instead of losing a letter.
+   */
   .owner-control[data-compact="true"] .who {
-    max-width: 11ch;
+    max-width: calc(var(--space-8) * 2);
+    white-space: normal;
+    overflow-wrap: break-word;
   }
 
   /* Anchored in viewport coordinates by `menu.ts`: the task table is a

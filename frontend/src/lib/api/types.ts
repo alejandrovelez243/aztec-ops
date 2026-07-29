@@ -108,16 +108,17 @@ export interface paths {
          * Post Member
          * @description Register a person on the roster.
          *
-         *     ``code`` is chosen by the caller and is permanent: it is what every event, activity record and
-         *     project payload will name this person by, so there is no rename. A duplicate is
-         *     ``409 conflicting_state``, not a silent second account.
+         *     ``code`` is **not** accepted: it is derived from ``label`` — ``"Alejandro Vélez"`` becomes
+         *     ``alejandro.velez``, a second person of that name ``alejandro.velez2`` — and allocated inside
+         *     the creating transaction, so a rollback frees it. The slug is permanent and there is no rename,
+         *     which is precisely why an operator does not get to typo one into a form. The response carries
+         *     the code that was assigned.
          *
          *     Omitting ``password`` is normal — the person is immediately assignable and cannot sign in until
          *     a credential is set through ``POST /team/members/{code}/password``.
          *
-         *     Errors: ``409 conflicting_state`` (code taken), ``422 validation_error`` (unknown ``role``, a
-         *     capacity outside the accepted range, a password the configured validators refuse),
-         *     ``403 permission_denied``.
+         *     Errors: ``422 validation_error`` (unknown ``role``, a capacity outside the accepted range, a
+         *     password the configured validators refuse), ``403 permission_denied``.
          */
         post: operations["apps_accounts_api_routers_post_member"];
         delete?: never;
@@ -1041,6 +1042,13 @@ export interface components {
          * MemberCreateIn
          * @description Body of ``POST /api/v1/team/members``.
          *
+         *     ``code`` is absent by design, exactly as it is from ``ProjectCreateIn``: the service derives it
+         *     from ``label`` inside the creating transaction. The slug is permanent — it is the person's
+         *     username, the ``actor`` of every activity record they cause and the ``entity.id`` of every
+         *     event about them — so a typo typed once into a form is a typo the audit trail carries forever,
+         *     with nothing to correct it afterwards. A name is something an operator can be trusted to
+         *     spell; an identifier is not something they should have to invent.
+         *
          *     ``weekly_capacity_points`` is required rather than defaulted here even though the column has a
          *     default. A capacity is the divisor of owner load and therefore decides who shows as
          *     overloaded; a form that could omit it would quietly staff everybody at the same number, and the
@@ -1051,8 +1059,6 @@ export interface components {
          *     is already in.
          */
         MemberCreateIn: {
-            /** Code */
-            code: string;
             /** Label */
             label: string;
             /** Role */
@@ -1744,6 +1750,11 @@ export interface components {
             name: string;
             /** Summary */
             summary?: string | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
             client: components["schemas"]["TaxonomyRef"];
             owner?: components["schemas"]["ActorRef"] | null;
             engagement_type: components["schemas"]["TaxonomyRef"];
@@ -1913,6 +1924,8 @@ export interface components {
             currency?: string | null;
             /** Summary */
             summary?: string | null;
+            /** Description */
+            description?: string | null;
             /** Next Step */
             next_step?: string | null;
             /** Is Archived */
@@ -2181,6 +2194,11 @@ export interface components {
              * @default
              */
             detail: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
             /** Assignee */
             assignee?: string | null;
             /** Due Date */
@@ -2256,6 +2274,11 @@ export interface components {
              * @default
              */
             detail: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
             project: components["schemas"]["TaskProjectRef"];
             assignee?: components["schemas"]["ActorRef"] | null;
             priority: components["schemas"]["TaxonomyRef"];
@@ -2347,6 +2370,11 @@ export interface components {
              * @default
              */
             detail: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
             /**
              * Last Progress
              * @default

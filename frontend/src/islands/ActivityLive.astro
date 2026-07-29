@@ -55,10 +55,15 @@ import { FEED_COPY } from "../components/activity/copy";
 </script>
 
 <style>
+  /* The feed's table is a horizontal scroller; as a grid item of the page this
+     root is otherwise floored by that table's min-content and the *page*
+     carries the overflow. Astro scopes styles per component, so the arm has to
+     say it here rather than the page saying it for its slot. */
   .live {
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
+    min-width: 0;
   }
 
   .stale {

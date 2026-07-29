@@ -149,6 +149,8 @@ class ProjectDetailView(BaseModel):
     code: str
     name: str
     summary: str | None = None
+    #: Long-form Markdown; ``""`` when nobody wrote one.
+    description: str = ""
     client: TaxonomyRef
     owner: ActorRef | None = None
     engagement_type: TaxonomyRef

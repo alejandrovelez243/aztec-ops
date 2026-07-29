@@ -18,8 +18,15 @@ import type {
   Override,
   ProjectDetail,
   QueueItem,
+  ScoreBreakdownEntry,
 } from "../../lib/api/domain";
-import { formatInstant, relativeTime } from "./format";
+import {
+  formatContribution,
+  formatInstant,
+  formatScore,
+  relativeTime,
+} from "./format";
+import { signalLabel } from "./messages";
 import { categoryLabel } from "./tone";
 
 /**
@@ -28,6 +35,23 @@ import { categoryLabel } from "./tone";
  * timeline's call sites keep one import.
  */
 export { activityChange };
+
+/**
+ * One line of the argument behind a score, phrased for a list surface.
+ *
+ * The engine persists the whole document that defends a ranking; a card has no
+ * room to draw it, but it may not print the number without it either (PRODUCT
+ * principle 1, CLAUDE.md rule 7). This is that document reduced to what fits in
+ * a tooltip and an accessible name.
+ */
+export interface ScoreReason {
+  /** The signal's Spanish name, as the engine persisted it; the code if it shipped none. */
+  readonly label: string;
+  /** The contribution in points, signed, so a penalty reads as one. */
+  readonly points: string;
+  /** The engine's own sentence naming the fact the signal read. */
+  readonly reason: string;
+}
 
 /** One project as every list surface renders it. */
 export interface ProjectPresentation {
@@ -47,6 +71,12 @@ export interface ProjectPresentation {
   readonly targetDate: string | null;
   readonly nextStep: string | null;
   readonly score: number;
+  /**
+   * The argument behind `score`, in the engine's order (contribution
+   * descending). Empty means the recalculator has not run on this project yet,
+   * which the surfaces say in words rather than leaving the figure undefended.
+   */
+  readonly scoreReasons: readonly ScoreReason[];
   /** A forced rank is shown beside the computed score, never instead of it. */
   readonly hasOverride: boolean;
   readonly riskCount: number;
@@ -96,12 +126,77 @@ export function toPresentation(item: QueueItem): ProjectPresentation {
     targetDate: item.target_date ?? null,
     nextStep: item.next_step ?? null,
     score: item.score.value,
+    scoreReasons: toScoreReasons(item.score.breakdown),
     hasOverride: item.override !== null && item.override !== undefined,
     riskCount: item.risk_flags.length,
     openBlockers: item.open_blockers,
     updatedAt: item.updated_at,
     searchKey: `${item.code} ${item.name} ${item.client_alias}`.toLowerCase(),
   };
+}
+
+/**
+ * Reduces a persisted breakdown to the lines a list surface can carry.
+ *
+ * Every entry survives, in the order the engine wrote them: dropping the tail
+ * would leave a card claiming that the signals it kept are the whole argument,
+ * and a contribution silently removed is an argument nobody can audit. The
+ * labels and the sentences both ship from the server, so a seventh signal
+ * registered on the backend appears here with no frontend change (CLAUDE.md
+ * rule 8).
+ */
+export function toScoreReasons(
+  breakdown: readonly ScoreBreakdownEntry[],
+): readonly ScoreReason[] {
+  return breakdown.map((entry) => ({
+    label: signalLabel(entry),
+    points: formatContribution(entry.contribution),
+    reason: entry.reason,
+  }));
+}
+
+/** What a score with no argument behind it says instead of a bare figure. */
+const NO_BREAKDOWN = "el motor todavía no registró señales para este puntaje";
+
+/** Heading both phrasings share, so the two cannot state the number differently. */
+function scoreHead(score: number): string {
+  return `Prioridad ${formatScore(score)} de 100`;
+}
+
+/**
+ * The argument in one line: the score and what each signal contributed.
+ *
+ * This is the *accessible* half of the pair, so it stays a sentence. A screen
+ * reader announces it as the name of the score, and twenty-two of them are read
+ * one at a time while the operator arrows down the grid — the engine's full
+ * reasoning belongs in {@link scoreArgument}, which nobody has to listen to.
+ */
+export function scoreSummary(
+  score: number,
+  reasons: readonly ScoreReason[],
+): string {
+  if (reasons.length === 0) return `${scoreHead(score)} · ${NO_BREAKDOWN}`;
+  const signals = reasons.map((line) => `${line.label} ${line.points}`);
+  return [scoreHead(score), ...signals].join(" · ");
+}
+
+/**
+ * The argument in full: one line per signal, with the sentence the engine wrote.
+ *
+ * Rendered into `title`, where a pointer reaches it without leaving the grid —
+ * the score and its breakdown one gesture apart, never a page away
+ * (DESIGN.md §Do's). The reasons are the engine's own prose and are reproduced
+ * verbatim; the plate on the project's detail is the same document drawn out.
+ */
+export function scoreArgument(
+  score: number,
+  reasons: readonly ScoreReason[],
+): string {
+  if (reasons.length === 0) return `${scoreHead(score)} · ${NO_BREAKDOWN}.`;
+  const lines = reasons.map(
+    (line) => `${line.label} ${line.points} — ${line.reason}`,
+  );
+  return [scoreHead(score), ...lines].join("\n");
 }
 
 /**

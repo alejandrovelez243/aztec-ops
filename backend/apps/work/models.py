@@ -358,6 +358,11 @@ class Task(models.Model):
     due_date = models.DateField(null=True, blank=True)
     title = models.CharField(max_length=200)
     detail = models.TextField(default="", blank=True)
+    #: The long-form description, Markdown as the operator wrote it.
+    #: Separate from ``detail``, which stays the one-line summary the task lists
+    #: and the header subtitle render: a field that had to serve both would make
+    #: every table row carry a document.
+    description = models.TextField(default="", blank=True)
     last_progress = models.CharField(max_length=255, default="", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -449,6 +454,7 @@ class Task(models.Model):
             code=self.code,
             title=self.title,
             detail=self.detail,
+            description=self.description,
             project=TaskProjectRef(code=self.project.code, name=self.project.name),
             assignee=self.assignee.to_ref() if self.assignee else None,
             priority=TaxonomyRef.of(

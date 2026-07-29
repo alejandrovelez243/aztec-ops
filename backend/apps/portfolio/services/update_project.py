@@ -36,6 +36,7 @@ _SCALAR_FIELDS: Final[tuple[str, ...]] = (
     "target_date",
     "business_value",
     "summary",
+    "description",
     "next_step",
     "is_archived",
 )

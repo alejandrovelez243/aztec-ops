@@ -4,11 +4,19 @@
  * configured move arching over the row when it advances and under it when it
  * goes back.
  *
- * **The whole figure is `aria-hidden`.** It is a picture of something the
- * transitions table beside it states in full — a screen reader that walked a
- * hundred bezier paths would learn nothing the table does not say better, and
- * two accessible copies of one graph is two things to keep in agreement. Nothing
- * inside is focusable, so nothing can be reached with a keyboard either.
+ * **The drawing is `aria-hidden`.** It is a picture of something the transitions
+ * table beside it states in full — a screen reader that walked a hundred bezier
+ * paths would learn nothing the table does not say better, and two accessible
+ * copies of one graph is two things to keep in agreement.
+ *
+ * The scroll container around it is *not* hidden, and that is deliberate rather
+ * than an oversight. A horizontally scrollable region is keyboard-focusable
+ * (Firefox makes it so on its own), and a focusable element inside an
+ * `aria-hidden` subtree is the one combination that is worse than either choice:
+ * focus lands somewhere the screen reader refuses to describe. So the container
+ * keeps a label that says what it holds and where the content really is, and
+ * everything inside it is hidden — a keyboard can still scroll the picture, and
+ * a reader is pointed at the table instead of walked through the paths.
  *
  * Geometry arrives already computed (`components/workflows/graph.ts`): this page
  * has no island, so the arcs must line up with the cards on the server's first
@@ -58,9 +66,14 @@ const canvasStyle = styleOf([
 ]);
 ---
 
-<figure class="graph" aria-hidden="true">
-  <div class="scroller">
-    <div class="canvas" style={canvasStyle}>
+<figure class="graph">
+  <div
+    class="scroller"
+    tabindex="0"
+    role="group"
+    aria-label="Diagrama del flujo; los mismos movimientos están en la tabla siguiente"
+  >
+    <div class="canvas" style={canvasStyle} aria-hidden="true">
       <svg
         class="arcs"
         viewBox={`0 0 ${width} ${height}`}
@@ -136,8 +149,12 @@ const canvasStyle = styleOf([
 </figure>
 
 <style>
+  /* `min-width: 0` is what lets the scroller below actually scroll: as a grid
+     item the figure is otherwise floored by its own min-content — the full
+     width of the drawing — and the page ends up carrying the overflow. */
   .graph {
     margin: 0;
+    min-width: 0;
   }
 
   /* The drawing is wider than any content column it will ever sit in, so it

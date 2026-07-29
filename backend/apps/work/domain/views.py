@@ -156,6 +156,7 @@ class TaskDetailView(BaseModel):
     code: str
     title: str
     detail: str = ""
+    description: str = ""
     project: TaskProjectRef
     assignee: ActorRef | None = None
     priority: TaxonomyRef

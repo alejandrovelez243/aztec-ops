@@ -2,9 +2,10 @@
 /**
  * `/projects/{code}` — one project, and everything you can do to it.
  *
- * The container: this frontmatter performs the three reads of the first paint
- * (the project, its tasks, its timeline) and hands them to presentational
- * components; the islands underneath own the writes and the live patches.
+ * The container: this frontmatter performs the reads of the first paint (the
+ * project, its tasks, its timeline, and the two vocabularies the create-task
+ * dialog draws its pickers from) and hands them to presentational components;
+ * the islands underneath own the writes and the live patches.
  *
  * Layering, in one sentence each. `transitions` from the project read is the
  * only source of transition buttons, so a workflow state added in the admin
@@ -22,6 +23,7 @@ import Shell from "../../layouts/Shell.astro";
 import ActivityFeed from "../../components/projects/ActivityFeed.astro";
 import BlockersPanel from "../../components/projects/BlockersPanel.astro";
 import DetailHeader from "../../components/projects/DetailHeader.astro";
+import RichText from "../../components/ui/RichText.astro";
 import DetailTabs from "../../components/projects/DetailTabs.astro";
 import NotesPanel from "../../components/projects/NotesPanel.astro";
 import ReasonDialog from "../../components/projects/ReasonDialog.astro";
@@ -36,17 +38,23 @@ import {
 } from "../../components/projects/messages";
 import { emptyAggregateFields } from "../../components/projects/presentation";
 import {
+  getCatalog,
   getProject,
   getProjectActivity,
   getProjectTasks,
   getQueue,
+  getTeamLoad,
   type Result,
 } from "../../lib/api/client";
 import type { ApiError } from "../../lib/api/errors";
 import type {
   ActivityPage,
+  Catalog,
   ProjectDetail,
   TaskPage,
+  TaxonomyRef,
+  TeamLoad,
+  TeamLoadEntry,
 } from "../../lib/api/domain";
 import { assertNever, toViewState, type ViewState } from "../../lib/view-state";
 
@@ -69,13 +77,17 @@ const MISSING_CODE: ApiError = {
   details: {},
 };
 
-const [projectResult, tasksResult, activityResult]: [
+const [projectResult, tasksResult, activityResult, catalogResult, teamResult]: [
   Result<ProjectDetail>,
   Result<TaskPage>,
   Result<ActivityPage>,
+  Result<Catalog>,
+  Result<TeamLoad>,
 ] =
   code === undefined
     ? [
+        { ok: false, error: MISSING_CODE },
+        { ok: false, error: MISSING_CODE },
         { ok: false, error: MISSING_CODE },
         { ok: false, error: MISSING_CODE },
         { ok: false, error: MISSING_CODE },
@@ -84,7 +96,26 @@ const [projectResult, tasksResult, activityResult]: [
         getProject(code),
         getProjectTasks(code),
         getProjectActivity(code, { page_size: ACTIVITY_PAGE_SIZE }),
+        getCatalog(),
+        getTeamLoad(),
       ]);
+
+/**
+ * What the create-task pickers offer, rendered by the server so the dialog has
+ * no loading arm.
+ *
+ * Neither read can take the screen down: a project whose catalog call failed is
+ * still a project you must be able to read and move. So a failure degrades to an
+ * empty list, and the dialog answers for itself — with no priority to send there
+ * is nothing to create, and its submit renders dead with the reason named rather
+ * than posting a task the server would refuse.
+ */
+const priorities: readonly TaxonomyRef[] = catalogResult.ok
+  ? catalogResult.data.priorities
+  : [];
+const members: readonly TeamLoadEntry[] = teamResult.ok
+  ? teamResult.data.items
+  : [];
 
 /**
  * What a region renders, one arm at a time.
@@ -210,6 +241,15 @@ const failureCopyForProject: FailureCopy =
           emptyFields={emptyAggregateFields(project)}
         />
 
+        <div class="card">
+          <RichText
+            scope="project"
+            code={project.code}
+            value={project.description}
+            label="Descripción"
+          />
+        </div>
+
         <div class="split">
           <ScorePlate
             projectCode={project.code}
@@ -220,6 +260,16 @@ const failureCopyForProject: FailureCopy =
           <div class="card risks">
             <RiskFlagList flags={project.risk_flags} />
           </div>
+        </div>
+
+        {
+          /* Notes sit beside the risks rather than behind a tab: they are the
+            written half of the same question the flags ask, and a tab hides
+            them from the operator who is reading why a project is at risk —
+            which is exactly when somebody's note explains it. */
+        }
+        <div class="card notes-card">
+          <NotesPanel projectCode={project.code} />
         </div>
 
         <DetailTabs
@@ -235,6 +285,8 @@ const failureCopyForProject: FailureCopy =
                 projectCode={project.code}
                 tasks={tasksPlan.data.items}
                 updatedAt={project.updated_at}
+                priorities={priorities}
+                members={members}
               />
             )}
             {/* The table owns its own empty sentence and stays mounted, so a
@@ -244,6 +296,8 @@ const failureCopyForProject: FailureCopy =
                 projectCode={project.code}
                 tasks={[]}
                 updatedAt={project.updated_at}
+                priorities={priorities}
+                members={members}
               />
             )}
             {tasksPlan.mode === "error" && (
@@ -264,10 +318,6 @@ const failureCopyForProject: FailureCopy =
               projectCode={project.code}
               blockers={project.blockers}
             />
-          </Fragment>
-
-          <Fragment slot="notes">
-            <NotesPanel projectCode={project.code} />
           </Fragment>
 
           <Fragment slot="activity">
@@ -311,6 +361,11 @@ const failureCopyForProject: FailureCopy =
 }
 
 <style>
+  .notes-card {
+    /* `.card` carries no padding; the component inside owns its inset. */
+    padding: var(--space-5);
+  }
+
   .detail {
     display: flex;
     flex-direction: column;

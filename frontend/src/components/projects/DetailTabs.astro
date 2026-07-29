@@ -24,7 +24,6 @@ const { taskCount, blockerCount, activityCount } = Astro.props;
 const TABS = [
   { key: "tasks", label: "Tareas", count: taskCount },
   { key: "blockers", label: "Bloqueos", count: blockerCount },
-  { key: "notes", label: "Notas", count: null },
   { key: "activity", label: "Actividad", count: activityCount },
 ] as const;
 ---
@@ -78,17 +77,6 @@ const TABS = [
     hidden
   >
     <slot name="blockers" />
-  </section>
-
-  <section
-    class="panel"
-    role="tabpanel"
-    id="panel-notes"
-    data-panel="notes"
-    aria-labelledby="tab-notes"
-    hidden
-  >
-    <slot name="notes" />
   </section>
 
   <section

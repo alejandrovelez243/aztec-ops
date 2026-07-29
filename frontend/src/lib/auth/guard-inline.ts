@@ -67,8 +67,13 @@ try {
     var next = new URLSearchParams(window.location.search).get("next");
     var safe = next !== null && next.charAt(0) === "/" && next.charAt(1) !== "/" ? next : "/";
     window.location.replace(safe);
-  } else {
-    window.localStorage.removeItem(${JSON.stringify(storageKey)});
+  } else if (window.localStorage.getItem(${JSON.stringify(storageKey)}) !== null) {
+    // A stored session with no cookie means the access token expired, not that
+    // the operator signed out: the refresh token may still be good. The form is
+    // hidden while the module script tries to renew, so an expiry reads as a
+    // blink instead of a logout. It clears the session itself if the renewal
+    // fails, which is what keeps the two guards from disagreeing forever.
+    document.documentElement.dataset.restoring = "";
   }
 } catch (error) {
   /* storage or cookies disabled: the form below still works */

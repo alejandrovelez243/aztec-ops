@@ -1,8 +1,14 @@
-"""HTTP surface of the workflow context: one read of the graph shapes, and nothing else.
+"""HTTP surface of the workflow context: reading every state graph, and authoring them.
 
-There is no write route, and no route that lists states on their own. The graphs are operator data
-edited in the admin (ARCHITECTURE decision 6), and the legal moves out of the state an aggregate is
-actually in are served with that aggregate — as ``transitions`` on the project detail — never here.
+Reading a graph is any member's business — a board cannot draw a column nobody told it about.
+Writing one is an ops lead's, on every route, because the shape of a lifecycle decides how everyone
+else's work is allowed to behave. The admin stays as a second door, not as the only one: a lifecycle
+reshapeable only by somebody holding a Django admin account is configurable by engineering, not by
+the operation (ARCHITECTURE decision 6).
+
+There is still no route that lists states on their own, and the legal moves out of the state an
+aggregate is actually in are served with that aggregate — as ``transitions`` on the project
+detail — never here. Authoring a graph and obeying one are separate concerns and stay that way.
 """
 
 from apps.workflow.api.routers import router

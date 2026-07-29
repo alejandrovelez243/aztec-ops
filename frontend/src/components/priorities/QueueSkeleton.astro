@@ -119,7 +119,9 @@ const placeholders = Array.from({ length: rows }, (_, index) => index);
     border-radius: var(--radius-full);
   }
 
-  @media (min-width: 1024px) {
+  /* The loading arm switches on the same frame as the loaded one; the number is
+     argued in `pages/priorities.astro`. */
+  @media (min-width: 1280px) {
     .skeleton-board {
       grid-template-columns: minmax(0, 1fr) clamp(
           calc(var(--space-8) * 5),

@@ -66,7 +66,7 @@ const { entry } = Astro.props;
         <span
           class="bar"
           data-field="bar"
-          style={`width: ${barPercent(entry.utilization)}%`}></span>
+          style={`--bar: ${barPercent(entry.utilization) / 100}`}></span>
       </span>
       <span class="figure pct" data-field="utilization"
         >{formatUtilization(entry.utilization)}</span
@@ -231,12 +231,19 @@ const { entry } = Astro.props;
     overflow: hidden;
   }
 
+  /*
+   * Scaled, not resized: a roster is a column of these, and animating `width`
+   * would re-lay-out the whole table on every frame of a refetch.
+   */
   .bar {
     display: block;
     height: 100%;
+    width: 100%;
+    transform: scaleX(var(--bar, 0));
+    transform-origin: left center;
     border-radius: var(--radius-full);
     background-color: var(--tone-solid);
-    transition: width var(--motion-micro-duration) var(--motion-micro-ease);
+    transition: transform var(--motion-micro-duration) var(--motion-micro-ease);
   }
 
   .pct {

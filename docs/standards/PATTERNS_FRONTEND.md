@@ -406,24 +406,39 @@ no rule can enforce.
 ```
 
 ```css
-/* styles/tokens.css — transcribed from DESIGN.md, names included */
+/* styles/tokens.css — the shipped set; read the file for the whole list */
 :root {
-  --console-green-grey: #2E3532;  --plotboard-black: #141917;
-  --signal-green: #63A17A;        --caution-amber: #D9A441;  --no-go-red: #C4483C;
-  --legend-ivory: #E8E4D9;        --legend-dim: #8A928D;     --rule-grey: #414A46;
-  --sev-low: var(--signal-green); --sev-medium: var(--caution-amber);
-  --sev-high: var(--no-go-red);
+  /* Paper and ink, not a console. */
+  --papel: #f4f3ef;     --carta: #ffffff;      --pozo: #eceae4;
+  --hairline: #e4e2db;
+  --tinta: #1b1d22;     --tinta-media: #565b64; --tinta-suave: #8a8f99;
+
+  /* One accent, and it never encodes a state. */
+  --cobalto: #2545de;   --cobalto-profundo: #1b33ae; --cobalto-papel: #eaedfc;
+
+  /* Semantic tones, each an ink / fill / wash triplet. */
+  --rojo-ink: #ab2f28;  --rojo: #d8433b;   --rojo-wash: #fbeae8;
+  --ambar-ink: #8a5a06; --ambar: #de8f13;  --ambar-wash: #fbf2df;
+  --verde-ink: #1e7a45; --verde: #2e9e5b;  --verde-wash: #e7f5ec;
+  --cielo-ink: #1f5fa8; --cielo: #3b87dc;  --cielo-wash: #e9f1fb;
+  --piedra-ink: #565b64; --piedra: #6e747e; --piedra-wash: #efefeb;
+
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
-  --space-6: 24px; --space-8: 32px;
-  --radius: 0;
-  --font-legend: "Archivo Narrow", Arial Narrow, sans-serif;
-  --font-body: Archivo, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --radius-card: 16px; --radius-control: 10px; --radius-chip: 8px;
+  --font-ui: "Schibsted Grotesk", system-ui, sans-serif;
+  --font-mono: "Spline Sans Mono", ui-monospace, monospace;
 }
 ```
 
+> **This is not the control-room palette.** An earlier draft of this document listed
+> `--console-green-grey`, `--plotboard-black` and `--radius: 0`. That grammar was deliberately
+> abandoned, and `DESIGN.md` says in as many words not to reintroduce it — so a reader who
+> followed the old block would rebuild the exact look the product rejected. Corners are round
+> here, the surface is paper, and the one accent is Cobalto.
+
 **Rules for extending.** A new visual decision is added to `DESIGN.md` first, then to
-`tokens.css`, then used. Severity maps to `--sev-*`; nothing maps a colour from an entity code.
+`tokens.css`, then used. A severity maps to a tone triplet (`--rojo-*`, `--ambar-*`, `--verde-*`);
+nothing maps a colour from an entity code.
 Taxonomy `color` values from the API are data and may be used inline for a taxonomy chip — they are
 the one exception, and they never override a semantic token. Every numeral in a repeated position
 carries `font-variant-numeric: tabular-nums`.

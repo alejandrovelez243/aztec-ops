@@ -46,6 +46,7 @@ const loginGuard = loginGuardScript(SESSION_COOKIE_NAME, SESSION_STORAGE_KEY);
       </div>
 
       <section class="card door" aria-labelledby="login-title">
+        <p class="restoring small" role="status">Restaurando tu sesión…</p>
         <header class="door-head">
           <BrandMark size={34} animate />
           <p class="label">Aztec Ops</p>
@@ -104,8 +105,21 @@ const loginGuard = loginGuardScript(SESSION_COOKIE_NAME, SESSION_STORAGE_KEY);
 
     <script>
       import { shake } from "../lib/motion/spring";
-      import { signIn } from "../lib/auth/session";
+      import { restoreSession, signIn } from "../lib/auth/session";
       import type { ApiError } from "../lib/api/errors";
+
+      // A stored session with no cookie is an expired access token, not a
+      // sign-out. Renew from the refresh token before showing the form; only a
+      // refusal means the credential is really gone.
+      if (document.documentElement.dataset.restoring !== undefined) {
+        void restoreSession().then((restored) => {
+          if (restored) {
+            window.location.replace(safeNext());
+            return;
+          }
+          delete document.documentElement.dataset.restoring;
+        });
+      }
 
       const form = document.getElementById("login-form");
       const errorLine = document.getElementById("login-error");
@@ -292,6 +306,24 @@ const loginGuard = loginGuardScript(SESSION_COOKIE_NAME, SESSION_STORAGE_KEY);
 
       .submit {
         width: 100%;
+      }
+
+      /* Only one of the two is ever on screen: renewing, or asking. */
+      .restoring {
+        display: none;
+        color: var(--tinta-media);
+        text-align: center;
+      }
+
+      :global(html[data-restoring]) .restoring {
+        display: block;
+      }
+
+      :global(html[data-restoring]) form,
+      :global(html[data-restoring]) .hint,
+      :global(html[data-restoring]) .door-head .h1,
+      :global(html[data-restoring]) .door-head .small {
+        display: none;
       }
 
       .hint {

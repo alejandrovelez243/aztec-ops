@@ -50,6 +50,20 @@ export interface FailureCopy {
 export const TASK_MOVES_UNAVAILABLE =
   "Mover la tarea todavía no está disponible desde esta pantalla: aún no sabemos qué movimientos permite su flujo.";
 
+/** Why the create-task form refuses to submit. */
+export const CREATE_INCOMPLETE =
+  "Escribe un título y elige una prioridad para crear la tarea.";
+
+/**
+ * Why the create-task dialog cannot submit at all.
+ *
+ * The API requires a priority, so an empty catalog leaves nothing legal to send.
+ * The sentence names both the cause and the way out: a dead button with no
+ * explanation reads as a broken screen, and the operator keeps pressing it.
+ */
+export const CREATE_NO_PRIORITIES =
+  "No pudimos leer el catálogo de prioridades, así que ahora no se pueden crear tareas. Vuelve a cargar la página.";
+
 /**
  * Aggregate attributes a transition's `requires_fields` can name, and request
  * fields a `validation_error` can blame. Both are attribute names, never

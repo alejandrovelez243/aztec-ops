@@ -6,7 +6,7 @@
  * plate always renders every signal the engine weighed, in the order the API
  * sent them (descending contribution), with the reason each one recorded.
  * `reason` is the engine's own prose and is rendered verbatim inside
- * `lang="en"` rather than paraphrased — the plate exists to reproduce the
+ * verbatim rather than paraphrased — the plate exists to reproduce the
  * decision, not to restate it.
  *
  * A manual override never rewrites `score.value` (`docs/API.md` §2.14). Both
@@ -127,10 +127,10 @@ const overrideReason = override?.reason ?? "";
             <span
               class="fill"
               data-field="bar"
-              style={`width: ${barWidth(entry.contribution, total)}%`}
+              style={`--bar: ${barWidth(entry.contribution, total) / 100}`}
             />
           </span>
-          <p class="small reason" lang="en" data-field="reason">
+          <p class="small reason" data-field="reason">
             {entry.reason}
           </p>
         </li>
@@ -149,7 +149,7 @@ const overrideReason = override?.reason ?? "";
       <span class="bar" aria-hidden="true"
         ><span class="fill" data-field="bar"></span></span
       >
-      <p class="small reason" lang="en" data-field="reason"></p>
+      <p class="small reason" data-field="reason"></p>
     </li>
   </template>
 
@@ -293,12 +293,20 @@ const overrideReason = override?.reason ?? "";
     overflow: hidden;
   }
 
+  /*
+   * Scaled, not resized: animating `width` re-lays-out the plate on every frame,
+   * and a recompute animates every bar at once. `scaleX` from a left origin runs
+   * on the compositor, and a solid fill has no content to distort.
+   */
   .fill {
     display: block;
     height: 100%;
+    width: 100%;
+    transform: scaleX(var(--bar, 0));
+    transform-origin: left center;
     border-radius: var(--radius-full);
     background-color: var(--cobalto);
-    transition: width var(--motion-carta-duration) var(--motion-carta-ease);
+    transition: transform var(--motion-carta-duration) var(--motion-carta-ease);
   }
 
   .reason {

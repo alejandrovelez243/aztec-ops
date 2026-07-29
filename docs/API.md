@@ -869,15 +869,21 @@ MemberOut { alias, label: str, role: TaxonomyRef | null,
 
 | Route | Body | Success | Errors |
 |---|---|---|---|
-| `POST /team/members` | `{code, label, role?, weekly_capacity_points, password?}` | `201 MemberOut` | `409 conflicting_state` (code taken), `422 validation_error` (unknown `role`, capacity out of 1–200, a password the validators refuse) |
+| `POST /team/members` | `{label, role?, weekly_capacity_points, password?}` | `201 MemberOut` | `422 validation_error` (unknown `role`, capacity out of 1–200, a password the validators refuse) |
 | `PATCH /team/members/{code}` | `{label?, role?, weekly_capacity_points?, is_active?}` | `200 MemberOut` | `404 not_found`, `422 validation_error`, `403` |
 | `DELETE /team/members/{code}` | — | `204` | `404 not_found`, `403` |
 | `POST /team/members/{code}/password` | `{password}` | `200 MemberOut` | `404`, `422 validation_error`, `403` |
 
 Four things are load-bearing:
 
-* **`code` is permanent.** It is what every event and activity record names the person by, so
-  there is no rename. A person whose name changed gets a new `label`.
+* **`code` is derived, not typed, and it is permanent.** `POST` does not accept one — exactly as
+  `POST /projects` does not — and the service mints it from `label` inside the creating
+  transaction: `"Alejandro Vélez"` → `alejandro.velez`, accents stripped, first and last token,
+  and `alejandro.velez2` for the second person of that name. It is the person's username, the
+  `actor` of every activity record they cause and the `entity.id` of every event about them, so a
+  typo typed once would be a typo the audit trail carries forever with no rename to fix it. The
+  response carries the code that was assigned. A person whose name changed gets a new `label`,
+  never a new code.
 * **`DELETE` deletes nothing.** The effect is `is_active = false`: the tasks and projects that
   name them are untouched, and a row removed underneath those would either cascade the history
   away or break the foreign keys holding it. `PATCH` with `is_active: true` restores them.

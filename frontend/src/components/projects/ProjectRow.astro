@@ -6,12 +6,20 @@
  * The name is the link; the row is clickable as a convenience (wired by the
  * list island), never as the only way in, so the surface stays keyboard-
  * reachable in DOM order.
+ *
+ * The score cell carries its own argument, in the same two forms the card uses
+ * — the engine's sentences in `title`, the one-line summary as what the cell
+ * announces — so a column of figures is never a column of unexplained numbers
+ * (PRODUCT principle 1). A comparison table is exactly where the reasons must
+ * stay folded away: twenty-two of them drawn out would bury the comparison
+ * they exist to support.
  */
 import DueChip from "./DueChip.astro";
 import OwnerBadge from "./OwnerBadge.astro";
 import StateChip from "./StateChip.astro";
 import { formatScore } from "./format";
 import { healthTone } from "./tone";
+import { scoreArgument, scoreSummary } from "./presentation";
 import type { ProjectPresentation } from "./presentation";
 
 export interface Props {
@@ -21,6 +29,8 @@ export interface Props {
 
 const { project } = Astro.props;
 const rail = healthTone(project.healthCode);
+const argument = scoreArgument(project.score, project.scoreReasons);
+const summary = scoreSummary(project.score, project.scoreReasons);
 ---
 
 <tr
@@ -76,8 +86,11 @@ const rail = healthTone(project.healthCode);
       {project.riskCount}
     </span>
   </td>
-  <td class="col-score">
-    <span class="figure" data-field="score">{formatScore(project.score)}</span>
+  <td class="col-score" title={argument} data-score-slot>
+    <span class="figure" data-field="score" aria-hidden="true"
+      >{formatScore(project.score)}</span
+    >
+    <span class="visually-hidden" data-field="score-note">{summary}</span>
     {project.hasOverride && <span class="chip tone-cielo">Ajuste</span>}
   </td>
 </tr>

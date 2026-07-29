@@ -105,6 +105,16 @@ export async function submitTaskDueDate(
   }
 
   renderDateControl(control, result.data.due_date ?? null);
+  // `is_overdue` is derived from the very date that just moved, so the lateness
+  // flag has to move with it — otherwise a task pushed into next week keeps
+  // wearing "vencida" until something else happens to re-read it. Scoped to the
+  // row or header this control sits in, so the one function serves the table and
+  // the task's own screen without either knowing about the other.
+  const scope = control.closest("[data-task-row], [data-task-header]");
+  const overdue = scope?.querySelector<HTMLElement>("[data-field='overdue']");
+  if (overdue !== null && overdue !== undefined) {
+    overdue.hidden = !result.data.is_overdue;
+  }
   toast({
     kind: "success",
     title: "Fecha actualizada",

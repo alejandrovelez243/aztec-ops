@@ -74,7 +74,9 @@
 <style>
   .legend {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    /* `min()` rather than a bare track floor: below 300px of usable width the
+       floor would win and push the legend past the page edge. */
+    grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
     gap: var(--space-2) var(--space-5);
     padding: var(--space-3) var(--space-4);
     border-radius: var(--radius-control);

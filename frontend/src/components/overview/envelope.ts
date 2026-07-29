@@ -1,10 +1,13 @@
 /**
- * Narrowing for the two envelope payloads the Resumen surface patches from.
+ * Narrowing for the two envelope payloads the Resumen surface patches from,
+ * and — for `project.priority.recalculated` — for the `/projects` list island,
+ * which imports it rather than writing a second reader: one parser per topic is
+ * what keeps two surfaces from disagreeing about the same frame.
  *
  * The store hands subscribers `payload: Record<string, unknown>` on purpose: a
  * topic's payload schema is versioned independently and belongs to the
  * subscriber, not to the transport. This module is that subscriber's parser, and
- * it is the only place on this surface where `unknown` is read
+ * it is the only place on these surfaces where `unknown` is read
  * (`docs/standards/FRONTEND.md` §1).
  *
  * Every parser returns `null` instead of throwing. A payload that does not match

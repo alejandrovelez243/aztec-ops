@@ -363,6 +363,13 @@ const staleSentence =
    */
   const TASK_REFRESH_DEBOUNCE_MS = 250;
 
+  /**
+   * The id of the sentence that says why "Crear tarea" is off. Shared with `TaskBoard.astro`:
+   * the reason is authored there in Spanish, and this only points the button at it, so the
+   * island never builds user-facing copy.
+   */
+  const CREATE_REASON_ID = "tb-create-reason";
+
   /** Why a card refuses to be picked up while the stream is down. */
   const STALE_DRAG_HINT =
     "Sin conexión en vivo: no puedes arrastrar tarjetas hasta reconectar.";
@@ -416,8 +423,16 @@ const staleSentence =
     readonly pointerId: number;
     readonly originX: number;
     readonly originY: number;
-    /** True when the press started on a link, which keeps its own click until we drag. */
-    readonly viaLink: boolean;
+    /**
+     * The link the press landed on, or `null`.
+     *
+     * Read at `pointerdown` and carried, never re-read at `pointerup`: the grab captures the
+     * pointer to the *card* so a task's title can also be its grip, and a captured pointer
+     * retargets every later pointer event to the capturing element. By `pointerup` the anchor
+     * is no longer anybody's `event.target`, so this is the only remaining record that the
+     * finger went down on the title.
+     */
+    readonly link: HTMLAnchorElement | null;
   }
 
   /** One live drag. Everything the follower, the legality paint and the drop need. */
@@ -691,6 +706,7 @@ const staleSentence =
       sub: query("[data-tb-sub]"),
       project: query("[data-tb-project]"),
       close: query("[data-tb-close]"),
+      create: query("[data-tb-create]"),
       code: query("[data-tb-code]"),
       state: query("[data-tb-state]"),
       owner: query("[data-tb-owner]"),
@@ -758,6 +774,23 @@ const staleSentence =
       }
       if (tb.project !== null) tb.project.hidden = false;
       if (tb.close !== null) tb.close.hidden = false;
+      setCreateAvailability(true);
+    }
+
+    /**
+     * Turns "Crear tarea" on or off with the selection.
+     *
+     * Disabled and named, never hidden: creation needs a project to hang the task on, and a
+     * button that vanishes leaves the operator hunting for a door instead of reading why it is
+     * shut. `aria-describedby` is attached only while it is off, because a description that
+     * outlives its reason is read out on a control that no longer has one.
+     */
+    function setCreateAvailability(enabled: boolean): void {
+      const button = tb.create;
+      if (!(button instanceof HTMLButtonElement)) return;
+      button.disabled = !enabled;
+      if (enabled) button.removeAttribute("aria-describedby");
+      else button.setAttribute("aria-describedby", CREATE_REASON_ID);
     }
 
     /**
@@ -801,6 +834,7 @@ const staleSentence =
       if (tb.sub !== null) tb.sub.textContent = "Ningún proyecto seleccionado.";
       if (tb.project !== null) tb.project.hidden = true;
       if (tb.close !== null) tb.close.hidden = true;
+      setCreateAvailability(false);
       showBoardArm("idle");
       if (!options.focus || previous === null) return;
       const card = findCard(rail, previous);
@@ -885,6 +919,9 @@ const staleSentence =
         if (node === null) continue;
         body.append(node);
       }
+      // A filter that is on must survive a repaint: cards built here arrive
+      // visible, and leaving them so would contradict the pressed member button.
+      applyMemberFilterToTasks();
       for (const column of columnsOf(panel)) refreshColumn(column);
       return unplaced;
     }
@@ -908,6 +945,9 @@ const staleSentence =
 
       node.dataset["code"] = task.code;
       node.dataset["stateCode"] = task.stateCode;
+      // Carried on the card so the member filter can narrow the board without a
+      // refetch, the same way the rail reads a project's owner.
+      node.dataset["ownerAlias"] = task.owner?.alias ?? "";
       node.setAttribute("aria-label", `${task.title} · ${task.code}`);
 
       const link = node.querySelector<HTMLAnchorElement>("[data-tb-task-link]");
@@ -1062,10 +1102,13 @@ const staleSentence =
     /**
      * Narrows the rail to one person's projects, or lifts the filter.
      *
-     * Cards are hidden, never removed: a filtered rail has to snap back without a refetch,
-     * and a card removed mid-transition would lose the pending move it is carrying. The task
-     * board is untouched — it shows one project, and hiding half of that project's work
-     * because somebody else owns it would answer a question nobody asked.
+     * Cards are hidden, never removed: a filtered board has to snap back without a refetch,
+     * and a card removed mid-transition would lose the pending move it is carrying.
+     *
+     * **Both surfaces narrow.** Picking a person asks "what is on their plate", and a board
+     * that answered it for projects while still showing every colleague's task would answer
+     * half the question — the task columns are where the work actually is. An unowned task
+     * is filtered out too: "sin responsable" is not this person's work either.
      */
     function applyMemberFilter(alias: string | null): void {
       memberFilter = alias;
@@ -1073,6 +1116,7 @@ const staleSentence =
         const owner = card.dataset["ownerAlias"] ?? "";
         card.hidden = alias !== null && owner !== alias;
       }
+      applyMemberFilterToTasks();
       for (const zone of columnsOf(rail)) refreshColumn(zone);
       for (const button of board.querySelectorAll<HTMLElement>(SEL.member)) {
         button.setAttribute(
@@ -1082,6 +1126,20 @@ const staleSentence =
       }
       refreshEngagementCounts();
       refreshRoving();
+    }
+
+    /**
+     * Hides the task cards that are not the filtered person's, and re-counts the columns.
+     *
+     * Split out because it also runs after a task refresh: cards painted while a filter is
+     * on would otherwise arrive visible and quietly contradict the pressed member button.
+     */
+    function applyMemberFilterToTasks(): void {
+      for (const card of board.querySelectorAll<HTMLElement>(SEL.card)) {
+        const owner = card.dataset["ownerAlias"] ?? "";
+        card.hidden = memberFilter !== null && owner !== memberFilter;
+      }
+      for (const zone of columnsOf(board)) refreshColumn(zone);
     }
 
     /**
@@ -1282,18 +1340,18 @@ const staleSentence =
       if (card === null || isPending(card)) return;
       const surface = surfaceFor(card);
       if (surface === null) return;
-      const viaLink = target.closest("a") !== null;
+      const link = target.closest<HTMLAnchorElement>("a");
       closeMenu();
       // Stops the press from starting a text selection that would fight the drag. A link
       // keeps its default so focus and the click still work when the press never travels.
-      if (!viaLink) event.preventDefault();
+      if (link === null) event.preventDefault();
       armed = {
         card,
         surface,
         pointerId: event.pointerId,
         originX: event.clientX,
         originY: event.clientY,
-        viaLink,
+        link,
       };
       // Warmed on the press, not on the drag threshold: the lookup is a request, and a flick
       // that crosses the board in one motion would otherwise let go before the answer lands.
@@ -1335,24 +1393,20 @@ const staleSentence =
       const session = drag;
       if (session === null) {
         if (press === null || press.pointerId !== event.pointerId) return;
-        const target = event.target;
-        if (target instanceof Element) {
-          // Buttons keep their own activation.
-          if (target.closest("button") !== null) return;
-          const link = target.closest<HTMLAnchorElement>("a");
-          if (link !== null) {
-            // The press never travelled, so this was a tap on the title, not a
-            // grip on it. The anchor cannot answer that tap by itself:
-            // `onPointerDown` captured the pointer to the card so the title
-            // could also *be* the grip, and a captured pointer retargets the
-            // follow-up `click` to the capturing element — the anchor's own
-            // default never runs and the operator goes nowhere. Following it
-            // here is what makes the title behave like the link it looks like.
-            // Client-side, because a board reload would cost the operator the
-            // selection and scroll position they arrived with.
-            void navigate(link.href);
-            return;
-          }
+        // Buttons never arm a press (`onPointerDown` steps aside for them), so reaching here
+        // means the finger went down on the card itself or on its title.
+        if (press.link !== null) {
+          // The press never travelled, so this was a tap on the title, not a grip on it. The
+          // anchor cannot answer that tap by itself: `onPointerDown` captured the pointer to
+          // the card so the title could also *be* the grip, and a captured pointer retargets
+          // both the follow-up `click` and this very `pointerup` to the capturing element —
+          // the anchor's own default never runs, and `event.target` is no longer the anchor
+          // either, which is why the link is read from the armed press and not from the
+          // event. Following it here is what makes the title behave like the link it looks
+          // like. Client-side, because a board reload would cost the operator the selection
+          // and scroll position they arrived with.
+          void navigate(press.link.href);
+          return;
         }
         if (press.surface.kind !== "project") return;
         selectCard(press.card, { push: true, focus: true });
@@ -1394,7 +1448,7 @@ const staleSentence =
       if (zones.length === 0) return;
 
       // A drag that started on a link must not also navigate when the finger lifts.
-      if (press.viaLink) suppressClick = true;
+      if (press.link !== null) suppressClick = true;
 
       const rect = card.getBoundingClientRect();
       const placeholder = document.createElement("div");
@@ -2593,6 +2647,18 @@ const staleSentence =
         const alias = member.dataset["alias"] ?? "";
         applyMemberFilter(
           alias === memberFilter || alias === "" ? null : alias,
+        );
+        return;
+      }
+      if (target.closest("[data-tb-create]") !== null) {
+        // One creation flow, reached from two places. The dialog lives on the project detail
+        // and this button walks the operator to it with `#nueva-tarea`, rather than the board
+        // carrying a second copy: two dialogs would mean two sets of fields, of copy and of
+        // failure handling for the same act, drifting apart the first time either is edited.
+        // Client-side, so the board's selection and scroll survive the trip back.
+        if (selectedCode === null) return;
+        void navigate(
+          `/projects/${encodeURIComponent(selectedCode)}#nueva-tarea`,
         );
         return;
       }

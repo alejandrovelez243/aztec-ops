@@ -2,15 +2,24 @@
 
 from apps.workflow.domain.views import WorkflowCatalogView
 from apps.workflow.models import Workflow
+from apps.workflow.repositories import record_counts_on_states
 
 
 def read_workflows() -> WorkflowCatalogView:
     """Read every configured graph with its states and its edges, as an operator arranged them.
 
-    Four index scans — the graphs, their nodes, their active edges, their engagement-type bindings —
-    and nothing else, because :meth:`~apps.workflow.models.WorkflowQuerySet.with_shape` prefetches
-    what each projection reads. The tables hold single-digit row counts, so the document is cheap
-    enough to fetch on board load and simple enough that the client never caches it defensively.
+    Six index scans — the graphs, their nodes, their active edges, their engagement-type bindings,
+    and the two aggregates that count how many projects and tasks are standing on each node — and
+    nothing else, because :meth:`~apps.workflow.models.WorkflowQuerySet.with_shape` prefetches what
+    each projection reads and :func:`~apps.workflow.repositories.record_counts_on_states` counts
+    every node of every graph at once rather than per column. The tables hold single-digit row
+    counts, so the document is cheap enough to fetch on board load and simple enough that the client
+    never caches it defensively.
+
+    The occupancy counts are what let a client render an *editor* and not merely a board: they are
+    the reason a node can say whether it may be retired, and the number an operator is shown when it
+    may not. They describe configuration — how full a column is — and still say nothing about
+    legality: which move a record may make is computed per record, elsewhere.
 
     Retired graphs are served too, and this is the deliberate difference from
     :func:`~apps.catalog.services.read_catalog.read_catalog`, which publishes only active rows. The
@@ -35,6 +44,13 @@ def read_workflows() -> WorkflowCatalogView:
         :class:`~apps.workflow.domain.views.WorkflowCatalogView`, safe to serialize with no further
         database access.
     """
+    workflows = tuple(Workflow.objects.with_shape())
+    # Counted once for every node of every graph rather than per workflow: the
+    # occupancy query groups by state, so asking it per graph would issue one
+    # query per workflow to answer a question one query already answers.
+    occupancy = record_counts_on_states(
+        [state.pk for workflow in workflows for state in workflow.states.all()]
+    )
     return WorkflowCatalogView(
-        workflows=tuple(workflow.to_shape() for workflow in Workflow.objects.with_shape()),
+        workflows=tuple(workflow.to_shape(occupancy=occupancy) for workflow in workflows),
     )

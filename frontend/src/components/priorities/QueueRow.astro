@@ -4,7 +4,7 @@
  * score — the six things an operations lead reads before deciding.
  *
  * The row is a `<button>` that opens its context panel (`aria-expanded` /
- * `aria-controls`): below 1024px the panel expands in place under this row, above it
+ * `aria-controls`): below 1280px the panel expands in place under this row, above it
  * the same node is placed in the pinned right column. `Enter` is bound by the island
  * to *open the project*, which is the list idiom a queue wants; the discoverable,
  * pointer-and-screen-reader path to the same place is the panel's "Ver proyecto"
@@ -131,10 +131,18 @@ const ownerName = ownerLabel ?? "Sin responsable";
     /*
      * Fixed trailing tracks, all composed from the spacing scale: each row is its
      * own grid, so only fixed widths keep twenty-two rows in one column.
+     *
+     * The name track is floored rather than left at `minmax(0, 1fr)`: with a 0
+     * floor, a column narrower than the fixed tracks resolves the name to 0px
+     * and the project silently loses the one field it is read by, while the
+     * score keeps its full width. The floor is two rhythm units — the width at
+     * which a name is still a name — so a squeeze clips visibly instead of
+     * deleting, and it is under the space every shipped range leaves (the
+     * narrowest is the 768px drawer, ~332px of name).
      */
     grid-template-columns:
       var(--space-6)
-      minmax(0, 1fr)
+      minmax(calc(var(--space-8) * 2), 1fr)
       var(--space-6)
       calc(var(--space-8) + var(--space-5))
       calc(var(--space-8) + var(--space-7))
@@ -263,7 +271,8 @@ const ownerName = ownerLabel ?? "Sin responsable";
     }
   }
 
-  @media (min-width: 1024px) {
+  /* The master–detail frame; the number is argued in `pages/priorities.astro`. */
+  @media (min-width: 1280px) {
     .row {
       grid-column: 1;
     }

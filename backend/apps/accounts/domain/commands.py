@@ -40,8 +40,14 @@ class CreateMemberCommand(BaseModel):
     real state, not an incomplete row. An account with no usable password simply cannot sign in
     until one is set through the password use case.
 
+    ``code`` is optional and the HTTP API always leaves it empty: it is derived from ``label`` by
+    :meth:`~apps.accounts.models.UserQuerySet.allocate_code` inside the creating transaction, so a
+    rollback frees it. A caller may still pin one — the fixtures do — because seeded people carry
+    codes that other fixtures already reference by hand.
+
     Attributes:
         code: The stable slug every payload will name this person by, e.g. ``"camila.torres"``.
+            Empty means "derive one from the name".
         label: Display name, operator-editable.
         role_code: ``catalog.Role.code``, or ``None`` for an unclassified person.
         weekly_capacity_points: The denominator of owner load.
@@ -50,7 +56,7 @@ class CreateMemberCommand(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    code: str = Field(min_length=1, max_length=CODE_MAX_LENGTH)
+    code: str = Field(default="", max_length=CODE_MAX_LENGTH)
     label: str = Field(min_length=1, max_length=LABEL_MAX_LENGTH)
     role_code: str | None = None
     weekly_capacity_points: int = Field(

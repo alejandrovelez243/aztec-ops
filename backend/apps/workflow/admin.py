@@ -27,7 +27,16 @@ class WorkflowStateInline(admin.TabularInline[WorkflowState, Workflow]):
 
     model = WorkflowState
     extra = 0
-    fields = ("code", "label", "category", "is_initial", "is_terminal", "order", "color")
+    fields = (
+        "code",
+        "label",
+        "category",
+        "is_initial",
+        "is_terminal",
+        "is_active",
+        "order",
+        "color",
+    )
     ordering = ("order", "code")
     show_change_link = True
 

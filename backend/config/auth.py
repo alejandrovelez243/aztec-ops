@@ -81,6 +81,12 @@ OPS_LEAD_ACTION: Final = "Overriding the ranking or rebuilding the whole portfol
 #: looking for a bug that is not there.
 ROSTER_ACTION: Final = "Registering, editing or retiring a person on the roster"
 
+#: The same rule again, guarding the shape of the lifecycles themselves. Authoring a workflow
+#: decides how everyone else's work is allowed to behave — which columns exist, which moves are
+#: offered, which of them demand a reason — so it is the most consequential capability of the three
+#: and the least often used. Reading a graph stays available to any member.
+WORKFLOW_ACTION: Final = "Shaping a workflow: its states, its transitions and its bindings"
+
 
 class TokenAuth(JWTBaseAuthentication, HttpBearer):
     """The default authentication of the whole API: a signed access token, header or cookie.
@@ -154,11 +160,12 @@ class TokenAuth(JWTBaseAuthentication, HttpBearer):
 class OpsLeadAuth(TokenAuth):
     """Authentication plus the one authorization rule this product has.
 
-    Two capabilities use it. Two routes override the engine rather than participate in it — forcing
-    a project's rank against its computed score, and rebuilding the ranking of the entire
+    Three capabilities use it. Two routes override the engine rather than participate in it —
+    forcing a project's rank against its computed score, and rebuilding the ranking of the entire
     portfolio. Four more edit the roster: registering a person, changing what they are allowed to
-    be carrying, retiring them, and replacing a credential. Everything a project or a task can do
-    is collaborative by design and stays that way.
+    be carrying, retiring them, and replacing a credential. Eight more author the lifecycles: the
+    graphs, their states, their transitions and their bindings — the rules everyone else's work then
+    obeys. Everything a project or a task can do is collaborative by design and stays that way.
 
     The *rule* is the same in both cases (``User.is_ops_lead``) and only the phrase differs, which
     is why this is one class taking its action rather than two classes with one line each. A second
@@ -203,6 +210,9 @@ ops_lead = OpsLeadAuth()
 
 #: The same rule guarding the roster writes, declared per route.
 roster_admin = OpsLeadAuth(ROSTER_ACTION)
+
+#: The same rule guarding every write that reshapes a lifecycle, declared per route.
+workflow_author = OpsLeadAuth(WORKFLOW_ACTION)
 
 
 def authenticate_request(request: HttpRequest) -> User:
