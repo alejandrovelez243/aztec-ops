@@ -62,17 +62,15 @@ that **reversed an earlier one**; the ADR is where the reversal is argued.
 
 ### 3.1 Deployment topology
 
-**Three long-running application processes**, one one-shot bootstrap job, and two backing services.
-There is one worker, and it is simultaneously the outbox drain, every event handler and the executor
-of the scheduled ticks.
+**Three long-running application processes** and two backing services. There is one worker, and it
+is simultaneously the outbox drain, every event handler and the executor of the scheduled ticks.
 
 ```mermaid
 flowchart LR
   UI["frontend<br/>Astro 7 dev server, :4321"]
 
-  subgraph app["Application (one image, four commands)"]
-    BOOT["bootstrap<br/>migrate, then seed, then EXITS 0<br/>everything else waits on that exit"]
-    API["api<br/>uvicorn ASGI, :8000<br/>REST /api/v1 + SSE /api/stream"]
+  subgraph app["Application (one image, three roles)"]
+    API["api<br/>migrate, seed, then uvicorn ASGI, :8000<br/>REST /api/v1 + SSE /api/stream"]
     W["worker<br/>celery worker, concurrency 2<br/>THE ONLY WORKER: drains the outbox,<br/>runs every handler, executes the ticks"]
     B["beat<br/>celery beat<br/>holds the schedule, executes nothing"]
   end
@@ -82,9 +80,8 @@ flowchart LR
     RD[("redis 7<br/>Celery broker + the aztec.sse channel")]
   end
 
-  BOOT --> PG
-  BOOT -.->|"service_completed_successfully"| API
-  BOOT -.->|"service_completed_successfully"| W
+  API -.->|"service_healthy"| W
+  API -.->|"service_healthy"| B
   UI -->|"fetch + EventSource"| API
   API --> PG
   API -->|"SUBSCRIBE aztec.sse"| RD
@@ -95,14 +92,16 @@ flowchart LR
   W -->|"PUBLISH aztec.sse"| RD
 ```
 
-- **`bootstrap`** runs `migrate && seed` and exits. `api` and `worker` gate on
-  `condition: service_completed_successfully`, which is why no service needs a healthcheck to get
-  the ordering right and why nothing crash-loops against a schema that does not exist yet. It also
-  puts migrations in exactly one place: an `api` scaled to two replicas would otherwise have both
-  replicas migrating the same database at once. Seeding lives in the Compose command and never in
-  the image's `CMD` — a production image must not seed itself on boot.
-- **`api`** serves ASGI, and that is not negotiable: `GET /api/stream` holds a connection open per
-  dashboard, and a WSGI worker would hold a thread for each one. It no longer migrates.
+- **`api`** runs `migrate`, then `seed` (skipped when `ENVIRONMENT=production`), then serves ASGI —
+  not negotiable: `GET /api/stream` holds a connection open per dashboard, and a WSGI worker would
+  hold a thread for each one. `worker` and `beat` gate on `condition: service_healthy`, and the
+  probe is `GET /api/v1/health/live`, so by the time either starts the schema exists and nothing
+  crash-loops against a missing table. It is the only migrator: an `api` scaled to two replicas
+  would have both migrating the same database at once, and that is the point at which migrations
+  move back into a deploy job.
+- The start-up sequence for all three roles lives in `backend/docker-entrypoint.sh`; Compose only
+  names the role (`command: ["worker"]`). Flags, `--reload` and the migrate/seed step are properties
+  of the image, so a deploy that is not Compose inherits them instead of restating them.
 - **`worker`** is the bus. `--concurrency 2` because the work is database-bound and each process
   holds its own PostgreSQL connection.
 - **`beat`** depends on Redis alone, because it keeps no domain state.
@@ -229,12 +228,8 @@ flowchart TD
   R --> DB
   M -->|"to_result / to_view / to_entry"| D
 
-  API x--x|"never imports"| M
-  D x--x|"never imports"| M
-
-  %% The two forbidden edges are the point of this diagram, so they are drawn as such:
-  %% red and dashed. Rendered like the allowed arrows they read as permission.
-  linkStyle 10,11 stroke:#d33,stroke-width:2px,stroke-dasharray:6 4
+  API -.->|"FORBIDDEN: never imports"| M
+  D -.->|"FORBIDDEN: never imports"| M
 ```
 
 The two crossed links are the illegal arrows, and they are the whole rule:
@@ -1014,8 +1009,8 @@ The spreadsheet is converted **once** into Django fixtures committed under
 `backend/scripts/xlsx_to_fixtures.py`, regenerates them from the original `.xlsx`; it is not part of
 the runtime path.
 
-**Seeding is not a separate step.** The one-shot `bootstrap` service runs `migrate && seed` and
-exits; `api` and `worker` do not start until it has exited 0 (§3.1). So `make up` is the whole
+**Seeding is not a separate step.** The `api` container runs `migrate` and then `seed` before it
+binds its port, and `worker` and `beat` wait for its healthcheck (§3.1). So `make up` is the whole
 bootstrap. That also means `DJANGO_SUPERUSER_USERNAME`,
 `DJANGO_SUPERUSER_PASSWORD`, `DJANGO_SUPERUSER_EMAIL` and `SEED_USER_PASSWORD` must be set in `.env`
 before the first `make up` — they ship empty on purpose, because a default that works is still a
@@ -1094,7 +1089,7 @@ make up                # build, start, migrate, seed, wait on healthchecks
 
 | Target | What it does |
 |---|---|
-| `make up` | `docker compose up -d --build --wait`. The `bootstrap` service migrates and seeds and exits before `api` and `worker` start |
+| `make up` | `docker compose up -d --build --wait`. `api` migrates and seeds before it reports healthy; `worker` and `beat` wait on that |
 | `make down` / `make reset` / `make clean` | stop; drop volumes and come back up; remove containers, volumes and local images |
 | `make ps` / `make logs s=worker` | status and health; follow one service or all |
 | `make shell` / `make dbshell` / `make makemigrations` | Django shell, psql, migration generation |

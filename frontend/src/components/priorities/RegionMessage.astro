@@ -1,0 +1,72 @@
+---
+/**
+ * The empty and error arms of the queue region: a sentence naming what is missing or
+ * what failed, and the control that resolves it.
+ *
+ * A blank area is not an empty state. Every use of this component names the thing
+ * that is empty (or the call that failed) and offers the action that fills it, which
+ * is the difference between a view that tells the operator what happened and one
+ * that leaves them guessing (`docs/standards/PATTERNS_FRONTEND.md` §4).
+ */
+import Icon from "../ui/Icon.astro";
+import type { IconName } from "../ui/Icon.astro";
+
+export interface Props {
+  /** One line, in the product's own words, naming the situation. */
+  title: string;
+  /** The sentence that explains it and points at the way out. */
+  body: string;
+  icon: IconName;
+  /**
+   * Tone class for the mark; the region borrows the semantic set rather than the
+   * brand voice, so a failure reads as a failure and an empty queue reads as calm.
+   */
+  tone: "tone-piedra" | "tone-rojo" | "tone-ambar";
+}
+
+const { title, body, icon, tone } = Astro.props;
+---
+
+<div class="region card">
+  <span class:list={["mark", tone]} aria-hidden="true"><Icon name={icon} size={22} /></span>
+  <p class="h2">{title}</p>
+  <p class="body-text">{body}</p>
+  <p class="actions"><slot /></p>
+</div>
+
+<style>
+  .region {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: var(--space-3);
+    padding: var(--space-7) var(--space-5);
+  }
+
+  .mark {
+    display: grid;
+    place-items: center;
+    width: var(--space-7);
+    height: var(--space-7);
+    border-radius: var(--radius-full);
+    background-color: var(--tone-wash);
+    color: var(--tone-ink);
+  }
+
+  .body-text {
+    color: var(--tinta-media);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  .actions:empty {
+    display: none;
+  }
+</style>

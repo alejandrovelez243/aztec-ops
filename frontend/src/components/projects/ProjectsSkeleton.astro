@@ -1,0 +1,63 @@
+---
+/**
+ * The `loading` arm of the projects grid: the exact geometry of the loaded
+ * state, shimmering.
+ *
+ * Not a spinner — a spinner tells the operator to wait without telling them
+ * what for, and the layout then jumps when the answer arrives (DESIGN.md
+ * §Motion, "Loading"). Six placeholders is a screenful without pretending to
+ * know how many rows are coming.
+ */
+const PLACEHOLDERS = 6;
+const rows = Array.from({ length: PLACEHOLDERS }, (_, index) => index);
+---
+
+<div class="skeleton-grid" aria-hidden="true">
+  {
+    rows.map(() => (
+      <div class="card skeleton-card">
+        <div class="line skeleton head" />
+        <div class="line skeleton title" />
+        <div class="line skeleton meta" />
+        <div class="line skeleton foot" />
+      </div>
+    ))
+  }
+</div>
+
+<style>
+  .skeleton-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--space-4);
+  }
+
+  .skeleton-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+  }
+
+  .line {
+    height: var(--space-4);
+  }
+
+  .head {
+    width: 45%;
+  }
+
+  .title {
+    height: var(--space-5);
+    width: 85%;
+  }
+
+  .meta {
+    width: 65%;
+  }
+
+  .foot {
+    width: 35%;
+    margin-top: var(--space-3);
+  }
+</style>

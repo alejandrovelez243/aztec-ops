@@ -306,7 +306,7 @@ function renderQueueSkeleton(): string {
 }
 
 function renderCardSkeleton(): string {
-  return `<li class="ov-card ov-card--skeleton card" aria-hidden="true">
+  return `<li class="ov-card ov-card--skeleton card tone-piedra" aria-hidden="true">
   <div class="ov-band"><span class="skeleton ov-sk-rank"></span><span class="skeleton ov-sk-chip"></span></div>
   <div class="ov-main">
     <div class="ov-ident"><span class="skeleton ov-sk-name"></span><span class="skeleton ov-sk-sub"></span></div>

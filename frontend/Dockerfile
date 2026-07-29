@@ -21,12 +21,12 @@ USER node
 COPY --chown=node:node package.json package-lock.json .npmrc ./
 RUN npm ci
 
-# Under /usr/local/bin, not /app: compose bind-mounts ./frontend over /app and would hide it.
-COPY --chown=node:node docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
 COPY --chown=node:node . /app
 
 EXPOSE 4321
 
-ENTRYPOINT ["docker-entrypoint.sh"]
+# `rm -f .astro/dev.json` is load-bearing: Astro records the dev server's pid there, the file lives
+# in the bind-mounted source tree, and it outlives the container that wrote it. Every container
+# numbers its processes from 1, so the stale pid names a live process in the next one, Astro
+# believes a second server is already running and exits — a crash loop under `restart: on-failure`.
+CMD ["sh", "-c", "rm -f .astro/dev.json && npm run dev -- --host 0.0.0.0 --port 4321"]

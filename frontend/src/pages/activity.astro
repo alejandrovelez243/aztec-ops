@@ -140,9 +140,12 @@ const PROJECT_ACTIVITY_PATH = "/api/v1/projects/{code}/activity";
     gap: var(--space-3);
   }
 
-  /* Optical alignment: the dot sits on the first line's baseline, not on its box. */
+  /* Centres the dot on the first line of text, derived from the type tokens rather than
+     nudged by hand, so it stays centred if the body scale ever moves. */
   .notes .dot {
-    margin-top: 7px;
+    margin-top: calc(
+      (var(--text-body-size) * var(--text-body-line) - var(--space-2)) / 2
+    );
   }
 
   @media (max-width: 640px) {

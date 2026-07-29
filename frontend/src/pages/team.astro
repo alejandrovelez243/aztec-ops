@@ -392,8 +392,10 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
         return;
       case "disconnected":
         await syncRows(root, view.data.items);
-        renderStale(root, view.lastEventAt);
+        // Arm first, then the timestamp: a `role="status"` announces a change it was visible
+        // for, so writing the clock into a hidden banner would announce nothing.
         setArm(root, "disconnected");
+        renderStale(root, view.lastEventAt);
         return;
       case "empty": {
         const copy = root.querySelector<HTMLElement>("[data-empty-copy]");
@@ -493,8 +495,8 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
 
     if (next === "disconnected") {
       missedEvents = true;
-      renderStale(root, lastEventAt);
       if (root.dataset.view === "ready") setArm(root, "disconnected");
+      renderStale(root, lastEventAt);
       return;
     }
 
@@ -530,13 +532,12 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
    * The surface's one authored motion moment: the bars grow in once, staggered, while their
    * percentages count up from zero.
    *
-   * Layout is already final — the server rendered every width — so this only makes the
-   * measurement visible; under reduced motion the bars are simply there and the figures are
-   * written at once by `countUp`.
+   * Layout is already final — the server rendered every width and every figure — so this only
+   * makes the measurement visible. Under reduced motion there is nothing to do: the answer is
+   * already on screen, and the entrance is the only thing being skipped.
    */
   function playIntro(root: HTMLElement): void {
     if (root.dataset.view !== "ready") return;
-    // Under reduced motion the server-rendered widths and figures are already the answer.
     if (prefersReducedMotion()) return;
     const { duration, easing } = sampleSpring("carta");
 

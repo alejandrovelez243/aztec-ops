@@ -98,7 +98,15 @@ const LOGIN_PATH = "/login";
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#f4f3ef" />
     <title>{title} — Aztec Ops</title>
+    <meta property="og:title" content={`${title} — Aztec Ops`} />
+    <meta
+      property="og:description"
+      content="Prioriza el portafolio y explica por qué."
+    />
+    <meta property="og:image" content="/brand/og.jpg" />
+    <meta name="twitter:card" content="summary_large_image" />
     <ClientRouter />
   </head>
   <body>

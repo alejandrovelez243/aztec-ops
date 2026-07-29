@@ -96,9 +96,48 @@ export const BLOCKER_KINDS: readonly BlockerKind[] = [
   "TECHNICAL",
 ];
 
+/**
+ * Spanish names for the risk flags and priority signals shipped today.
+ *
+ * Both sets are **open**: a flag or a signal is one class plus one registry
+ * entry (CLAUDE.md rule 8), so a code this build has never seen will arrive.
+ * That is why every lookup falls back to the code itself and why the flag's own
+ * `reason` — the engine's evidence — is always rendered beside the name: an
+ * unnamed risk still renders, which is the whole point (a dropped flag is a
+ * risk nobody sees). These maps are naming, never behaviour: no branch anywhere
+ * asks whether a code is in them.
+ */
+const RISK_LABEL: Readonly<Record<string, string>> = {
+  BLOCKED: "Bloqueado",
+  OVERDUE: "Vencido",
+  NO_NEXT_STEP: "Sin próximo paso",
+  NO_TARGET_DATE: "Sin fecha objetivo",
+  STALE: "Sin actividad reciente",
+  OWNER_OVERLOADED: "Responsable sobrecargado",
+};
+
+const SIGNAL_LABEL: Readonly<Record<string, string>> = {
+  deadline_pressure: "Presión de fecha",
+  overdue_work: "Trabajo vencido",
+  criticality: "Criticidad",
+  business_value: "Valor de negocio",
+  blockage: "Bloqueo",
+  staleness: "Falta de avance",
+};
+
 /** Spanish name of an aggregate attribute; unknown names render verbatim. */
 export function fieldLabel(field: string): string {
   return FIELD_LABEL[field] ?? field;
+}
+
+/** Spanish name of a risk flag; an unknown code renders as itself. */
+export function riskLabel(code: string): string {
+  return RISK_LABEL[code] ?? code;
+}
+
+/** Spanish name of a priority signal; an unknown code renders readably. */
+export function signalLabel(code: string): string {
+  return SIGNAL_LABEL[code] ?? code.replace(/_/g, " ");
 }
 
 /** Spanish name of an activity verb; an unknown verb renders verbatim. */
@@ -198,5 +237,8 @@ function unknownCopy(backendCode: string | null): FailureCopy {
  */
 export function regionFailureCopy(error: ApiError, subject: string): FailureCopy {
   const base = failureCopy(error);
-  return { title: `No pudimos cargar ${subject}`, detail: base.title };
+  return {
+    title: `No pudimos cargar ${subject}`,
+    detail: `${base.title}. ${base.detail}`,
+  };
 }

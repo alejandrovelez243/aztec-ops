@@ -273,7 +273,9 @@ function openChip(openTasks: number): LoadChip {
     return {
       key: "open",
       tone: "tone-ambar",
-      text: "Sin tareas abiertas",
+      // Lower case, like the "sin fecha" / "sin próximo paso" chips of DESIGN.md: a named
+      // absence is a quiet observation, not a heading.
+      text: "sin tareas abiertas",
       visible: true,
     };
   }

@@ -1,0 +1,697 @@
+/**
+ * The Resumen surface ("El Muro", comp C — Zonas del día).
+ *
+ * Global rather than scoped on purpose: the cards are produced by
+ * `./markup.ts`, one renderer shared by the page's first paint and the live
+ * island, and a string renderer cannot carry Astro's scoping attribute. Every
+ * selector is therefore prefixed `ov-`.
+ *
+ * Only `var(--token)` values appear here (tokens.css is the single source of
+ * colour, spacing, radius, shadow and motion). The two media-query breakpoints
+ * are the ones DESIGN.md §Layout already fixes: 1024 and 768.
+ *
+ * THE DENSITY RULE OF THIS SURFACE. Every card in every zone renders the same
+ * DOM; the zone decides how much of it is visible — three breakdown bars in
+ * "Atender hoy", two in "Esta semana", one in "Radar". That is what lets a card
+ * promoted by a colleague's recompute *travel* between zones with `flip()`
+ * instead of being destroyed in one list and rebuilt in another.
+ */
+
+/* --- Page frame --------------------------------------------------------- */
+
+.ov-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.ov-lead {
+  color: var(--tinta-media);
+  margin-top: var(--space-1);
+}
+
+.ov-live {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.ov-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-6);
+  align-items: start;
+}
+
+@media (min-width: 1024px) {
+  .ov-columns {
+    grid-template-columns: minmax(0, 2.4fr) minmax(0, 1fr);
+  }
+}
+
+.ov-queue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
+.ov-aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* --- Zones: the coloured tape bands of the wall -------------------------- */
+
+.ov-zone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ov-zone[hidden] {
+  display: none;
+}
+
+.ov-zone-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: var(--border-width) solid var(--hairline);
+}
+
+.ov-zone-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--tinta);
+}
+
+.ov-zone-sep {
+  color: var(--tinta-suave);
+}
+
+.ov-zone-count {
+  color: var(--tinta-media);
+}
+
+.ov-zone-hint {
+  margin-left: auto;
+  text-align: right;
+}
+
+.ov-zone-list {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.ov-zone--today .ov-zone-list {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.ov-zone--week .ov-zone-list {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-3);
+}
+
+.ov-zone--radar .ov-zone-list {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+/* --- The card: one DOM, three densities ---------------------------------- */
+
+.ov-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-bottom: var(--space-4);
+  min-width: 0;
+}
+
+.ov-band {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-4);
+  background-color: var(--tone-wash);
+  border-radius: calc(var(--radius-card) - var(--border-width))
+    calc(var(--radius-card) - var(--border-width)) 0 0;
+}
+
+.ov-rank {
+  color: var(--tone-ink);
+  font-size: var(--text-title-size);
+  font-weight: 700;
+}
+
+.ov-state {
+  background-color: var(--carta);
+  color: var(--tone-ink);
+}
+
+.ov-attribution {
+  margin-left: auto;
+  background-color: var(--cobalto-papel);
+  color: var(--cobalto);
+}
+
+.ov-attribution[hidden] {
+  display: none;
+}
+
+.ov-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-inline: var(--space-4);
+  min-width: 0;
+}
+
+.ov-ident {
+  min-width: 0;
+}
+
+.ov-name {
+  color: var(--tinta);
+  overflow-wrap: anywhere;
+}
+
+.ov-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  min-width: 0;
+}
+
+.ov-client {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-score {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex: none;
+}
+
+.ov-score-value {
+  color: var(--tinta);
+}
+
+.ov-score-caption {
+  color: var(--tinta-suave);
+}
+
+/* --- Breakdown bars: the argument, at the depth the zone allows ---------- */
+
+.ov-bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-inline: var(--space-4);
+}
+
+.ov-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+.ov-bar-label {
+  color: var(--tinta-media);
+  text-transform: none;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-bar-value {
+  color: var(--tinta-media);
+  text-align: right;
+}
+
+.ov-bar-track {
+  grid-column: 1 / -1;
+  height: var(--space-1);
+  border-radius: var(--radius-full);
+  background-color: var(--pozo);
+  overflow: hidden;
+}
+
+.ov-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background-color: var(--tone-solid, var(--piedra));
+}
+
+.ov-bars-absent {
+  display: flex;
+}
+
+/* --- Foot: owner, absences, and the way in ------------------------------- */
+
+.ov-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-inline: var(--space-4);
+  margin-top: auto;
+}
+
+.ov-owner-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ov-owner-badge .avatar {
+  width: var(--space-5);
+  height: var(--space-5);
+}
+
+.ov-owner-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-override-reason {
+  flex-basis: 100%;
+  color: var(--tinta-media);
+  font-style: italic;
+}
+
+.ov-open {
+  margin-left: auto;
+  flex: none;
+}
+
+/* --- Density: "Esta semana" --------------------------------------------- */
+
+.ov-zone--week .ov-card {
+  gap: var(--space-2);
+  padding-bottom: var(--space-3);
+}
+
+.ov-zone--week .ov-band {
+  padding-block: var(--space-1);
+}
+
+.ov-zone--week .ov-score-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-h1-size);
+  font-weight: var(--text-h1-weight);
+  letter-spacing: 0;
+}
+
+.ov-zone--week .ov-score-caption,
+.ov-zone--week .ov-override-reason {
+  display: none;
+}
+
+.ov-zone--week .ov-bar:nth-child(n + 3) {
+  display: none;
+}
+
+/* --- Density: "Radar" ---------------------------------------------------- */
+
+.ov-zone--radar .ov-card {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-control);
+  box-shadow: none;
+}
+
+.ov-zone--radar .ov-card:hover {
+  box-shadow: var(--shadow-resting);
+  transform: none;
+}
+
+.ov-zone--radar .ov-band {
+  padding: 0;
+  background-color: transparent;
+  border-radius: 0;
+  flex: none;
+  flex-wrap: nowrap;
+}
+
+.ov-zone--radar .ov-state {
+  background-color: var(--tone-wash);
+}
+
+.ov-zone--radar .ov-main {
+  flex: 1 1 auto;
+  align-items: center;
+  padding-inline: 0;
+}
+
+.ov-zone--radar .ov-sub {
+  margin-top: 0;
+}
+
+.ov-zone--radar .ov-score {
+  align-items: flex-end;
+}
+
+.ov-zone--radar .ov-score-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-title-size);
+  font-weight: var(--text-title-weight);
+  letter-spacing: 0;
+}
+
+.ov-zone--radar .ov-score-caption,
+.ov-zone--radar .ov-override-reason,
+.ov-zone--radar .ov-owner-name,
+.ov-zone--radar .ov-bar-value {
+  display: none;
+}
+
+.ov-zone--radar .ov-bars {
+  flex: none;
+  width: calc(var(--space-8) * 2);
+  padding-inline: 0;
+}
+
+.ov-zone--radar .ov-bar:nth-child(n + 2) {
+  display: none;
+}
+
+.ov-zone--radar .ov-foot {
+  flex: none;
+  flex-wrap: nowrap;
+  padding-inline: 0;
+  margin-top: 0;
+}
+
+.ov-zone--radar .ov-open {
+  height: var(--space-6);
+  padding-inline: var(--space-3);
+  font-size: var(--text-small-size);
+}
+
+/* The wall is also touched: a coarse pointer never gets a sub-40px target. */
+@media (pointer: coarse) {
+  .ov-zone--radar .ov-open {
+    height: 40px;
+  }
+}
+
+/* --- The signature moment: a colleague's move, made visible -------------- */
+
+.ov-card.is-flashing {
+  animation: ov-ring var(--motion-carta-duration) var(--motion-carta-ease);
+}
+
+.ov-card.is-flashing .ov-band {
+  animation: ov-wash var(--motion-panel-duration) var(--motion-panel-ease);
+}
+
+@keyframes ov-ring {
+  0% {
+    box-shadow: var(--shadow-resting), 0 0 0 0 var(--cobalto-papel);
+  }
+
+  45% {
+    box-shadow: var(--shadow-lifted), 0 0 0 4px var(--cobalto-papel);
+  }
+
+  100% {
+    box-shadow: var(--shadow-resting), 0 0 0 0 var(--cobalto-papel);
+  }
+}
+
+@keyframes ov-wash {
+  0%,
+  100% {
+    background-color: var(--tone-wash);
+  }
+
+  35% {
+    background-color: color-mix(in srgb, var(--tone-solid) 26%, var(--carta));
+  }
+}
+
+/* --- Aside: owner load and the pending activity region ------------------- */
+
+.ov-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.ov-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.ov-panel-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--cobalto);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.ov-panel-link:hover {
+  color: var(--cobalto-profundo);
+}
+
+.ov-owners {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ov-owner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2);
+  border-radius: var(--radius-control);
+}
+
+.ov-owner.is-overloaded {
+  background-color: var(--tone-wash);
+}
+
+.ov-owner-ident {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ov-owner-label,
+.ov-owner-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-owner-load {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+.ov-util {
+  display: block;
+  width: var(--space-8);
+  height: var(--space-1);
+  border-radius: var(--radius-full);
+  background-color: var(--pozo);
+  overflow: hidden;
+}
+
+.ov-util-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background-color: var(--tone-solid);
+}
+
+.ov-owner-percent {
+  color: var(--tinta-media);
+  min-width: var(--space-6);
+  text-align: right;
+}
+
+.ov-owner-flag {
+  grid-column: 2 / -1;
+}
+
+/* --- Pending region: an honest hole, designed ---------------------------- */
+
+.ov-pending {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.ov-pending-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ov-pending-head .h2 {
+  margin-right: auto;
+}
+
+.ov-pending-icon {
+  color: var(--tinta-suave);
+}
+
+.ov-pending-aside {
+  color: var(--tinta-suave);
+}
+
+.ov-pending-endpoint {
+  align-self: flex-start;
+}
+
+/* --- Notes: the empty and error arms ------------------------------------- */
+
+.ov-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-5);
+}
+
+.ov-note-dot {
+  margin-top: var(--space-2);
+}
+
+.ov-note-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ov-note-action {
+  margin-left: auto;
+  flex: none;
+}
+
+/* --- Stale banner: stream down, data still on screen --------------------- */
+
+.ov-stale {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background-color: var(--tone-wash);
+}
+
+.ov-stale[hidden] {
+  display: none;
+}
+
+.ov-stale-text {
+  color: var(--tone-ink);
+}
+
+.ov-stale-action {
+  margin-left: auto;
+  flex: none;
+}
+
+/* --- Skeletons: the geometry of the loaded state ------------------------- */
+
+.ov-card--skeleton {
+  pointer-events: none;
+}
+
+.ov-sk-rank {
+  width: var(--space-5);
+  height: var(--space-4);
+}
+
+.ov-sk-chip {
+  width: var(--space-8);
+  height: var(--space-4);
+}
+
+.ov-sk-name {
+  display: block;
+  width: 70%;
+  height: var(--space-4);
+}
+
+.ov-sk-sub {
+  display: block;
+  width: 45%;
+  height: var(--space-3);
+  margin-top: var(--space-1);
+}
+
+.ov-sk-score {
+  display: block;
+  width: var(--space-7);
+  height: var(--space-6);
+}
+
+.ov-sk-bar {
+  display: block;
+  width: 100%;
+  height: var(--space-2);
+}
+
+.ov-sk-avatar {
+  width: var(--space-6);
+  height: var(--space-6);
+  border-radius: var(--radius-full);
+}
+
+.ov-owner--skeleton {
+  grid-template-columns: auto minmax(0, 1fr) var(--space-8);
+}
+
+/* --- Narrow: the wall stacks, nothing is dropped ------------------------- */
+
+@media (max-width: 768px) {
+  .ov-zone-hint {
+    display: none;
+  }
+
+  .ov-zone--radar .ov-card {
+    flex-wrap: wrap;
+  }
+
+  /* The row wraps rather than shedding its bar: a score whose leading signal is
+     hidden is a number with no argument, which this surface never renders. */
+  .ov-zone--radar .ov-bars {
+    width: 100%;
+  }
+
+  .ov-zone--radar .ov-owner-name {
+    display: inline;
+  }
+}

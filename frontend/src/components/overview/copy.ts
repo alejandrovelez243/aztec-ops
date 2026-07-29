@@ -152,7 +152,6 @@ export const STREAM_COPY = {
   staleNoEvents: "todavía sin eventos en esta sesión",
   lastEventPrefix: "último evento",
   reconnect: "Reconectar",
-  reconnecting: "Reconectando…",
 } as const;
 
 /** Copy shared by the cards themselves. */
