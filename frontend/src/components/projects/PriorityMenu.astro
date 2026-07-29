@@ -1,0 +1,220 @@
+---
+/**
+ * How urgent this is, and the menu that changes it.
+ *
+ * The trigger *is* the priority chip: the thing that reports the fact is the
+ * thing that edits it, so there is no second affordance to discover and no chip
+ * that turns out to have been clickable all along (FRONTEND.md §10,
+ * "Present-Absence, and controls that cannot write").
+ *
+ * Priorities are operator-editable taxonomy, so nothing here is keyed by a code.
+ * The options are whatever `GET /api/v1/catalog` published, in its order, and
+ * every tone — the trigger's and each option's — comes from that row's own
+ * `color` through `taxonomyTone`. A priority added from the admin this morning
+ * therefore renders, and is choosable, with zero frontend changes; a `switch` on
+ * `code` here is exactly the bug that would silently drop it.
+ *
+ * The options are server-rendered rather than fetched on open, so the panel has
+ * no loading arm: the catalog is small, immutable within a page view, and
+ * already read for the create dialog. With the catalog read failed the list is
+ * empty and the control renders visibly dead with {@link PRIORITY_UNAVAILABLE}
+ * named — never hidden, and never a chip that swallows clicks in silence.
+ */
+import Icon from "../ui/Icon.astro";
+import { PRIORITY_UNAVAILABLE } from "./messages";
+import { taxonomyTone, toneStyle } from "./tone";
+import type { TaxonomyRef } from "../../lib/api/domain";
+
+export interface Props {
+  /** Business code of the task this control edits — `PRJ-01-T02`. */
+  code: string;
+  /** The priority in force now; its `color` is the only source of the tone. */
+  current: TaxonomyRef;
+  /** Every priority the catalog offers; empty degrades the control to dead. */
+  options: readonly TaxonomyRef[];
+  /**
+   * Why the control cannot be used, in Spanish. Present means the trigger
+   * renders disabled with this as its tooltip and its description.
+   */
+  disabledReason?: string;
+}
+
+const { code, current, options, disabledReason } = Astro.props;
+
+/**
+ * An empty catalog is a disabled control with its own sentence, not a silent
+ * one: the caller does not have to remember to pass a reason for the failure
+ * mode this component already knows how to have.
+ */
+const reason =
+  disabledReason ?? (options.length === 0 ? PRIORITY_UNAVAILABLE : undefined);
+const isDisabled = reason !== undefined;
+const reasonId = isDisabled ? `priority-off-${code}` : undefined;
+
+const tone = taxonomyTone(current.color);
+---
+
+<div
+  class="priority-control"
+  data-priority-control
+  data-code={code}
+  data-current={current.code}
+>
+  <button
+    class:list={["btn", "chip", "trigger", tone.className]}
+    style={toneStyle(tone)}
+    type="button"
+    data-menu-trigger
+    aria-haspopup="menu"
+    aria-expanded="false"
+    aria-label={`Cambiar prioridad. Ahora: ${current.label}`}
+    aria-describedby={reasonId}
+    disabled={isDisabled}
+    title={reason}
+  >
+    <span data-field="priority-label">{current.label}</span>
+    <Icon name="chevron-down" size={14} />
+  </button>
+
+  {
+    isDisabled && (
+      <span class="visually-hidden" id={reasonId} data-priority-reason>
+        {reason}
+      </span>
+    )
+  }
+
+  <div
+    class="panel card"
+    role="menu"
+    data-menu-panel
+    aria-label="Elegir prioridad"
+    hidden
+  >
+    {
+      options.map((option) => (
+        <button
+          class="item"
+          type="button"
+          role="menuitemradio"
+          data-menu-item
+          data-value={option.code}
+          aria-checked={option.code === current.code}
+        >
+          <span
+            class:list={["chip", taxonomyTone(option.color).className]}
+            style={toneStyle(taxonomyTone(option.color))}
+          >
+            {option.label}
+          </span>
+          <span
+            class="tick"
+            data-option-tick
+            hidden={option.code !== current.code}
+          >
+            <Icon name="check" size={16} />
+          </span>
+        </button>
+      ))
+    }
+  </div>
+</div>
+
+<style>
+  .priority-control {
+    position: relative;
+    display: inline-flex;
+    min-width: 0;
+  }
+
+  /*
+   * A chip that is also a button. `.btn` is worn only for its focus, disabled
+   * and `.is-loading` behaviour — the spinner reads `--tone-solid`, so an
+   * in-flight save spins in the priority's own colour — and everything `.btn`
+   * sizes is put back to the chip's geometry here, or the row would grow a
+   * 40px control where it had a label-sized badge.
+   */
+  .trigger {
+    gap: var(--space-1);
+    height: auto;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-chip);
+    font-size: var(--text-label-size);
+    font-weight: var(--text-label-weight);
+    line-height: var(--text-label-line);
+  }
+
+  .trigger :global(svg) {
+    flex: none;
+    opacity: 0.7;
+    transition: transform var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .trigger[aria-expanded="true"] :global(svg) {
+    transform: rotate(180deg);
+  }
+
+  /* Anchored in viewport coordinates by `lib/ui/menu.ts`: the task table is a
+    horizontal scroller and an absolutely positioned panel would be clipped by
+    it. Everything but `top`/`left` is decided here. */
+  .panel {
+    position: fixed;
+    z-index: var(--z-drawer);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    width: max-content;
+    min-width: 200px;
+    max-width: min(320px, calc(100vw - var(--space-6)));
+    padding: var(--space-2);
+    box-shadow: var(--shadow-lifted);
+  }
+
+  .panel[hidden] {
+    display: none;
+  }
+
+  .item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: 36px;
+    padding: var(--space-2);
+    border-radius: var(--radius-chip);
+    text-align: left;
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .item:hover,
+  .item:focus-visible {
+    background-color: var(--pozo);
+  }
+
+  .item[aria-checked="true"] {
+    background-color: var(--cobalto-papel);
+  }
+
+  /* The tick keeps its box when unchecked, so choosing one does not shunt the
+     chips sideways. */
+  .tick {
+    display: inline-flex;
+    width: 16px;
+    flex: none;
+    margin-left: auto;
+    color: var(--cobalto);
+    line-height: 0;
+  }
+
+  .tick[hidden] {
+    display: inline-flex;
+    visibility: hidden;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .trigger :global(svg) {
+      transition: none;
+    }
+  }
+</style>

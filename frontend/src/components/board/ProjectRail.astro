@@ -12,8 +12,14 @@ import type { BoardSurfaceModel } from "./board-model";
  * a scan.
  *
  * One panel per engagement type, because `Workflow.objects.resolve` binds a graph per type:
- * switching the select swaps the whole set of bands, not just their contents. Exactly one
- * panel is ever visible; the others stay in the DOM so the switch costs no request.
+ * switching the engagement field swaps the whole set of bands, not just their contents.
+ * Exactly one panel is ever visible; the others stay in the DOM so the switch costs no request.
+ *
+ * Each panel carries `data-engagement-label` beside its code because it is the one place the
+ * engagement type's *rendered* label survives: the field's own entries are rewritten with a
+ * count on every filter change, so reading a name back out of them would eat the name. Same
+ * rule as Data-Owns-Color — the taxonomy's word comes from the payload, never from the DOM
+ * text of a control.
  *
  * Presentational. The island owns selection, dragging, filtering and every live patch; this
  * component decides the markup and holds the Spanish.
@@ -36,6 +42,7 @@ const { surfaces, active, selectedCode = null } = Astro.props;
         class="rail-panel"
         data-panel
         data-engagement-code={surface.engagementType.code}
+        data-engagement-label={surface.engagementType.label}
         hidden={surface.engagementType.code !== active}
         aria-label={`Proyectos de ${surface.engagementType.label}`}
       >
@@ -60,6 +67,19 @@ const { surfaces, active, selectedCode = null } = Astro.props;
     overflow-x: hidden;
     overscroll-behavior-y: contain;
     scroll-snap-type: y proximity;
+    /*
+     * Bounded here, and stuck to the top, because nothing above it is bounded:
+     * `.shell` only sets `min-height`, so every ancestor grows to its content
+     * and the rail's `overflow-y` had nothing to overflow — it stretched to all
+     * twenty projects and the page scrolled instead, carrying the task columns
+     * off the screen the rail exists to drive.
+     *
+     * `dvh` rather than `vh` so a mobile browser's collapsing chrome does not
+     * hide the last band behind it.
+     */
+    position: sticky;
+    top: 0;
+    max-height: 100dvh;
   }
 
   .rail-panel {
@@ -82,6 +102,10 @@ const { surfaces, active, selectedCode = null } = Astro.props;
      above the task board, still complete and still droppable. */
   @media (max-width: 1023px) {
     .rail {
+      /* Lying down, it is a horizontal strip above the board, so the sticky
+         column and its viewport cap would pin a strip nobody asked to pin. */
+      position: static;
+      max-height: none;
       overflow-x: auto;
       overflow-y: hidden;
       overscroll-behavior-x: contain;

@@ -257,6 +257,20 @@ class ActivityRecord(models.Model):
         OWNER_CHANGED = "OWNER_CHANGED", "Owner changed"
         NEXT_STEP_SET = "NEXT_STEP_SET", "Next step set"
         TASK_ADDED = "TASK_ADDED", "Task added"
+        # Removal is a soft delete (ADR 0012), so both directions are facts about the project the
+        # task hangs off — the timeline on ``/projects/{code}`` is where a task appearing and
+        # disappearing has to read as one story. Two verbs rather than one ``TASK_ARCHIVE_CHANGED``
+        # with the direction in ``metadata``, for the reason this class docstring gives: a reader
+        # filtering the trail for removals must not have to open every row to find them.
+        TASK_REMOVED = "TASK_REMOVED", "Task removed"
+        TASK_RESTORED = "TASK_RESTORED", "Task restored"
+        # What a task waits on, replaced as a whole. Its own verb rather than a row under the
+        # ``PRIORITY_CHANGED``/``OWNER_CHANGED`` shape, for the reason this class docstring gives:
+        # those name a scalar column moving, this names a set of edges being redrawn, and folding
+        # it in would need the generic ``UPDATED`` that deliberately does not exist here. "When did
+        # this task stop waiting on that one" is the question a stalled project is read with, and it
+        # has to be one filtered scan rather than a walk over every edit ever made to a task.
+        DEPENDENCIES_CHANGED = "DEPENDENCIES_CHANGED", "Dependencies changed"
         NOTE_ADDED = "NOTE_ADDED", "Note added"
         SEEDED = "SEEDED", "Seeded"
         RENAMED = "RENAMED", "Renamed"
@@ -280,6 +294,11 @@ class ActivityRecord(models.Model):
         TRANSITION_ADDED = "TRANSITION_ADDED", "Transition added"
         TRANSITION_EDITED = "TRANSITION_EDITED", "Transition edited"
         TRANSITION_RETIRED = "TRANSITION_RETIRED", "Transition retired"
+        # A record was put on a different lifecycle. Distinct from ``STATE_CHANGED`` for the same
+        # reason the authoring verbs are: this one does not move the record, it changes which graph
+        # owns the ground it is standing on. ``from_value``/``to_value`` are the two workflow codes,
+        # so "which lifecycle was this project on in March" is one filtered scan.
+        WORKFLOW_ASSIGNED = "WORKFLOW_ASSIGNED", "Workflow assigned"
 
     class Origin(models.TextChoices):
         """Who or what caused the fact, which is what makes a score movement arguable."""

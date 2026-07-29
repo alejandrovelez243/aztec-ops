@@ -13,17 +13,29 @@ event having been emitted about it.
 ``transitions`` is the load-bearing part. It is the only source of transition buttons
 (`docs/API.md` §2.2): the frontend holds no list of state codes and never guesses legality, which
 is what makes adding a workflow state a fixture row and zero frontend changes.
+
+``notes`` is served here rather than behind a ``/projects/{code}/notes`` route, the same way the
+task detail serves its own: the panel that renders them is on this screen, and a second request is
+a second chance to paint half a page.
 """
 
 from datetime import datetime
+from typing import Final
 
 from apps.portfolio.domain.errors import ProjectNotFound
 from apps.portfolio.domain.views import HealthRef, ProjectDetailView
 from apps.portfolio.models import Project
 from apps.prioritization.services.read_project_priority import read_project_priority
 from apps.shared.refs import TaxonomyRef
-from apps.work.models import Blocker, Task
+from apps.work.models import Blocker, Note, Task
 from apps.workflow.models import WorkflowTransition
+
+#: How many of a project's comments the detail carries. A ceiling, not a page — the same contract
+#: (and, deliberately, the same number) as ``TASK_NOTE_LIMIT``: the panel shows everything, so
+#: paging would cost every reader a second request to learn there is no second page. Reaching it is
+#: the signal to add a paginated ``/projects/{code}/notes`` *beside* this field, never instead of
+#: it.
+PROJECT_NOTE_LIMIT: Final = 100
 
 
 def read_project_detail(*, project_code: str, now: datetime) -> ProjectDetailView:
@@ -36,7 +48,8 @@ def read_project_detail(*, project_code: str, now: datetime) -> ProjectDetailVie
             a detail page whose parts disagreed about "now" is one nobody can reason about.
 
     Returns:
-        The project with its tasks, blockers, score, computed risk flags and legal transitions.
+        The project with its tasks, blockers, score, computed risk flags, legal transitions and
+        the newest :data:`PROJECT_NOTE_LIMIT` notes.
 
     Raises:
         ProjectNotFound: No project carries that code.
@@ -46,7 +59,12 @@ def read_project_detail(*, project_code: str, now: datetime) -> ProjectDetailVie
         raise ProjectNotFound(project_code)
 
     today = now.date()
-    tasks = Task.objects.for_project(project.pk)
+    # One scoped selection feeding both the counts and the rendered list, so the three numbers in
+    # the header can never disagree with the rows underneath them: a removed task is absent from
+    # ``open_tasks``, from ``overdue_tasks``, from ``blocked_tasks`` and from ``tasks`` at once
+    # (ADR 0012). ``open_blockers`` is read from ``Blocker`` and is deliberately *not* scoped —
+    # an impediment raised against a removed task is still an impediment on this project.
+    tasks = Task.objects.active().for_project(project.pk)
     counts = tasks.counts(today=today)
     blockers = Blocker.objects.for_project(project.pk).with_relations().in_panel_order()
     priority = read_project_priority(project_code=project.code, now=now)
@@ -55,6 +73,9 @@ def read_project_detail(*, project_code: str, now: datetime) -> ProjectDetailVie
         code=project.code,
         name=project.name,
         summary=project.summary or None,
+        # Long-form Markdown, delivered as the empty string rather than null: the editor mounts on
+        # a document that is empty, not on one that is absent, and the column is NOT NULL.
+        description=project.description,
         client=TaxonomyRef.of(code=project.client.code, label=project.client.alias),
         owner=project.owner.to_ref() if project.owner else None,
         engagement_type=TaxonomyRef.of(
@@ -81,6 +102,7 @@ def read_project_detail(*, project_code: str, now: datetime) -> ProjectDetailVie
             else None
         ),
         state=project.workflow_state.to_ref(),
+        workflow=project.to_workflow_ref(),
         health=HealthRef.of(priority.health.value),
         start_date=project.start_date,
         target_date=project.target_date,
@@ -107,5 +129,14 @@ def read_project_detail(*, project_code: str, now: datetime) -> ProjectDetailVie
             .with_states()
             .as_options()
         ),
+        # ``for_project`` is the whole project's commentary, task-scoped notes included, and that
+        # is a decision rather than an accident of the named query. Three things force it: the
+        # write copies ``project`` onto a task note precisely so the project timeline finds it
+        # without a join; the ``note.added`` envelope names the project for a task note too, so the
+        # panel already renders one live and a project-only read would make it vanish on reload;
+        # and ``NoteView`` carries ``task_code``, so a reader can still tell which piece of work a
+        # comment is about. The narrower ``for_task`` exists for the opposite surface — the task
+        # screen must not inherit the project's whole conversation — and is not the scope here.
+        notes=Note.objects.for_project(project.pk).recent(PROJECT_NOTE_LIMIT).as_views(),
         updated_at=project.updated_at,
     )

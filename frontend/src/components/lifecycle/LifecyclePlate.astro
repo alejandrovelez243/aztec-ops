@@ -1,0 +1,439 @@
+---
+/**
+ * Which lifecycle this record follows, whether somebody chose it, and — for an ops lead — the
+ * control that changes it.
+ *
+ * **Why it is two facts and not one.** "Sigue el ciclo de vida de proyecto" and "alguien lo eligió
+ * para este proyecto" answer different questions, and only the second one can be undone. A record
+ * that inherits its lifecycle has nothing to revert; a record that was put on one is running a
+ * lifecycle nothing else in its engagement type is running, which is exactly the fact an operator
+ * needs when the buttons here differ from the buttons on the project beside it. So the name and the
+ * origin are rendered as separate things, never collapsed into one line.
+ *
+ * **Where it sits.** Between the record's facts and its transition bar, because it is the sentence
+ * that explains the bar: the state chip says where the record stands, the buttons say where it may
+ * go, and this says which graph both of them come from. It is rendered for everybody — reading how
+ * the operation is shaped is any member's business — and the *writes* are revealed in the browser
+ * for the ops lead, because a server render cannot know who is asking (`score-plate.ts` reveals its
+ * override the same way, for the same reason). The API is still the answer of record: a member who
+ * unhides the button meets a typed 403.
+ *
+ * **The picker never invents a choice.** Its rows come from `GET /api/v1/workflows`, read when the
+ * dialog opens rather than at first paint: the control belongs to one capability most readers do
+ * not have, and a lifecycle created five minutes ago has to appear without a reload. That read has
+ * all four view states — it is loading, it can fail, and a deployment with no graph for this kind of
+ * record is a configuration to fix and not an error to retry — and they live in the dialog, where
+ * the operator is looking, rather than on the screen behind it.
+ *
+ * Presentational: every value here comes from the record's own read, and the island underneath owns
+ * the reads and the writes. Nothing on this plate repaints until the server has answered.
+ */
+import Icon from "../ui/Icon.astro";
+import { scopeCopy, workflowHref, type LifecycleScope } from "./presentation";
+import type { WorkflowRef } from "../../lib/api/domain";
+
+export interface Props {
+  /** Which kind of record this plate speaks for; decides the copy and the routes. */
+  scope: LifecycleScope;
+  /** Business code of the record — `PRJ-01`, `PRJ-01-T02`. */
+  code: string;
+  /** The graph in force and how the record got it, from the record's own read. */
+  workflow: WorkflowRef;
+  /** The state the record stands on: the code the compatibility check compares. */
+  stateCode: string;
+  /** The same state as the operator reads it; every sentence names this, never the code. */
+  stateLabel: string;
+  /**
+   * The project's engagement type code, when the surface knows it. It is what makes the
+   * "heredar" row able to name the graph it would fall back to; `null` leaves that row honest
+   * about not knowing rather than guessing (see `inheritedShape`).
+   */
+  engagementType?: string | null;
+}
+
+const {
+  scope,
+  code,
+  workflow,
+  stateCode,
+  stateLabel,
+  engagementType = null,
+} = Astro.props;
+
+const copy = scopeCopy(scope);
+const inherited = workflow.source === "INHERITED";
+---
+
+<section
+  class="lifecycle"
+  data-lifecycle-plate
+  data-scope={scope}
+  data-code={code}
+  data-workflow-code={workflow.code}
+  data-workflow-source={workflow.source}
+  data-state-code={stateCode}
+  data-state-label={stateLabel}
+  data-engagement-type={engagementType ?? ""}
+  aria-label="Flujo de trabajo"
+>
+  <span class="mark" aria-hidden="true">
+    <Icon name="flow" size={18} />
+  </span>
+
+  <div class="body">
+    <p class="label">Flujo de trabajo</p>
+    <p class="title name">
+      <span data-field="lifecycle-name">{workflow.name}</span>
+      <span
+        class:list={["chip", inherited ? "tone-piedra" : "tone-cielo"]}
+        data-lifecycle-source>{inherited ? "Heredado" : "Asignado"}</span
+      >
+    </p>
+    <p class="small note" data-field="lifecycle-note">
+      {inherited ? copy.inheritedNote : copy.directNote}
+    </p>
+  </div>
+
+  <div class="actions">
+    <a
+      class="btn btn-ghost"
+      href={workflowHref(workflow.code)}
+      data-lifecycle-link
+    >
+      Ver el flujo
+    </a>
+    {
+      /* Rendered for everybody, revealed in the browser for the ops lead: who is
+        signed in is a browser fact, and the API answers 403 to anyone else. */
+    }
+    <div class="ops" data-ops-lead hidden>
+      <button
+        class="btn btn-secondary"
+        type="button"
+        data-action="open-lifecycle"
+      >
+        Cambiar flujo
+      </button>
+    </div>
+  </div>
+
+  <dialog
+    class="dialog"
+    data-lifecycle-dialog
+    aria-labelledby="lifecycle-dialog-title"
+  >
+    <form method="dialog" data-lifecycle-form>
+      <h2 class="h2" id="lifecycle-dialog-title">
+        Cambiar el flujo de trabajo
+      </h2>
+      <p class="small">
+        Cambia qué flujo manda sobre {copy.subject}: qué estados existen y qué
+        movimientos ofrece. No lo mueve — se queda en «<span
+          data-field="lifecycle-state">{stateLabel}</span
+        >».
+      </p>
+
+      <div class="arm" data-lifecycle-arm="loading" hidden>
+        <p class="skeleton row"></p>
+        <p class="skeleton row"></p>
+        <span class="visually-hidden" role="status">
+          Buscando los flujos disponibles.
+        </span>
+      </div>
+
+      <div class="arm" data-lifecycle-arm="error" hidden>
+        <p class="title" data-field="lifecycle-error-title"></p>
+        <p class="small" data-field="lifecycle-error-detail"></p>
+        <div>
+          <button
+            class="btn btn-secondary"
+            type="button"
+            data-action="retry-lifecycle"
+          >
+            Reintentar
+          </button>
+        </div>
+      </div>
+
+      <div class="arm" data-lifecycle-arm="empty" hidden>
+        <p class="body-text" data-field="lifecycle-empty"></p>
+        <div>
+          <a class="btn btn-secondary" href="/workflows">
+            Ir a Flujos de trabajo
+          </a>
+        </div>
+      </div>
+
+      {
+        /* A real radio group: arrow keys move through it, an incompatible option
+          is `disabled` and therefore unreachable, and the whole set goes inert
+          while the write is in flight. */
+      }
+      <fieldset class="arm options" data-lifecycle-arm="data" hidden>
+        <legend class="label">Flujos que aplican a este registro</legend>
+        <div class="option-list" data-lifecycle-options></div>
+      </fieldset>
+
+      {
+        /* A refusal lands here and not in a toast: the operator is looking at
+          this dialog, the dialog stays open, and the next choice is one key
+          away. */
+      }
+      <p class="refusal tone-rojo" data-lifecycle-refusal hidden>
+        <span class="title" data-field="refusal-title"></span>
+        <span class="small" data-field="refusal-detail"></span>
+      </p>
+
+      <div class="dialog-actions">
+        <button
+          class="btn btn-ghost"
+          type="button"
+          data-action="close-lifecycle"
+        >
+          Cancelar
+        </button>
+        <button
+          class="btn btn-primary"
+          type="submit"
+          data-action="submit-lifecycle"
+          disabled
+        >
+          Cambiar flujo
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  {
+    /* One home for a row's markup: the island clones this, so a live row cannot
+      drift from a server-rendered sibling. */
+  }
+  <template data-template="lifecycle-option">
+    <label class="option">
+      <input
+        class="option-radio"
+        type="radio"
+        name="lifecycle-choice"
+        data-lifecycle-radio
+      />
+      <span class="option-body">
+        <span class="option-head">
+          <span class="title" data-field="option-name"></span>
+          <span class="chip chip-code" data-field="option-code" hidden></span>
+          <span class="chip tone-cielo" data-option-current hidden>Actual</span>
+        </span>
+        <span class="small" data-field="option-note"></span>
+      </span>
+    </label>
+  </template>
+</section>
+
+<script>
+  import { onPage } from "../projects/island";
+  import { mountLifecyclePlate } from "./lifecycle-plate";
+
+  onPage("[data-lifecycle-plate]", mountLifecyclePlate);
+</script>
+
+<style>
+  .lifecycle {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-top: var(--space-2);
+    padding-top: var(--space-4);
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .mark {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: var(--space-6);
+    height: var(--space-6);
+    border-radius: var(--radius-full);
+    background-color: var(--pozo);
+    color: var(--tinta-media);
+  }
+
+  .body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    flex: 1 1 260px;
+    min-width: 0;
+  }
+
+  .name {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .note {
+    color: var(--tinta-media);
+  }
+
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .ops[hidden] {
+    display: none;
+  }
+
+  .dialog {
+    width: min(520px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+  }
+
+  .dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .arm {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  /* `hidden` must beat the flex displays above, on every arm and every chip. */
+  .arm[hidden],
+  .chip[hidden],
+  .refusal[hidden] {
+    display: none;
+  }
+
+  .options {
+    border: 0;
+    padding: 0;
+    margin: 0;
+    min-width: 0;
+  }
+
+  .option-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin-top: var(--space-2);
+    max-height: min(48vh, 360px);
+    overflow-y: auto;
+  }
+
+  .option {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-control);
+    cursor: pointer;
+    transition:
+      border-color var(--motion-micro-duration) var(--motion-micro-ease),
+      background-color var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .option:hover {
+    background-color: var(--pozo);
+  }
+
+  .option:has(.option-radio:checked) {
+    border-color: var(--cobalto);
+    background-color: var(--cobalto-papel);
+  }
+
+  /* The radio keeps the global focus ring; the row it lives in follows it, so
+     the keyboard's position is legible at the size of the target, not of the
+     dot. */
+  .option:has(.option-radio:focus-visible) {
+    border-color: var(--cobalto);
+  }
+
+  /* An option the target graph cannot receive: unchoosable, still readable, with
+     the reason on its own line rather than hidden in a tooltip. */
+  .option:has(.option-radio:disabled) {
+    cursor: not-allowed;
+    border-style: dashed;
+    color: var(--tinta-media);
+  }
+
+  /* The name follows the row: `.title` sets its own ink, so without this the
+     graph's name would keep reading as choosable while everything around it
+     says otherwise. */
+  .option:has(.option-radio:disabled) .title {
+    color: var(--tinta-media);
+  }
+
+  .option:has(.option-radio:disabled):hover {
+    background-color: transparent;
+  }
+
+  .option-radio {
+    flex: none;
+    /* Optically centred against the first line of the name, which is a title
+       and taller than the control. */
+    margin-top: 2px;
+    accent-color: var(--cobalto);
+  }
+
+  .option-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .option-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .refusal {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-3);
+    border-radius: var(--radius-chip);
+    background-color: var(--tone-wash);
+    color: var(--tone-ink);
+  }
+
+  .refusal .small {
+    color: var(--tone-ink);
+  }
+
+  .row {
+    height: var(--space-6);
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .option {
+      transition: none;
+    }
+  }
+</style>

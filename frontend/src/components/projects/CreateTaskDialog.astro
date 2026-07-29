@@ -19,10 +19,17 @@
  * The options are rendered by the server rather than fetched on open, so the
  * dialog has no loading arm and cannot show an empty picker at the moment the
  * operator needs it.
+ *
+ * One dialog per page, opened from wherever creation is offered. `projectCode`
+ * may therefore be `""`: the board learns which project it is creating on only
+ * when a card is selected, so `create-task.ts` writes the code — and the
+ * dependency options — into the dialog as it opens it.
  */
 import DateField from "../ui/DateField.astro";
 import MenuSelect from "../ui/MenuSelect.astro";
 import type { MenuOption } from "../ui/MenuSelect.astro";
+import MultiSelect from "../ui/MultiSelect.astro";
+import type { MultiOption } from "../ui/MultiSelect.astro";
 import { CREATE_NO_PRIORITIES } from "./messages";
 import type {
   TaskItem,
@@ -31,12 +38,13 @@ import type {
 } from "../../lib/api/domain";
 
 export interface Props {
+  /** The project the task hangs on; `""` when the surface decides on open. */
   projectCode: string;
   /** Priorities the catalog publishes; empty when that read failed. */
   priorities: readonly TaxonomyRef[];
   /** The roster, for the assignee picker; empty when that read failed. */
   members: readonly TeamLoadEntry[];
-  /** The project's existing tasks, offered as dependency codes. */
+  /** The project's existing tasks, offered as dependencies. */
   tasks: readonly TaskItem[];
 }
 
@@ -61,7 +69,15 @@ const defaultPriority = priorityOptions[0]?.value ?? "";
  * the operator's typing at a 422.
  */
 const canSubmit = priorityOptions.length > 0;
-const blockedId = `create-task-blocked-${projectCode}`;
+
+/** One dialog per page, so its ids are constants rather than per-project keys. */
+const blockedId = "create-task-blocked";
+
+/** The dependencies offered at first paint; re-set on open by `create-task.ts`. */
+const dependencyOptions: MultiOption[] = tasks.map((task) => ({
+  value: task.code,
+  label: task.title,
+}));
 ---
 
 <dialog
@@ -71,7 +87,9 @@ const blockedId = `create-task-blocked-${projectCode}`;
   aria-labelledby="create-task-title"
 >
   <form data-create-task-form>
-    <h2 class="h2" id="create-task-title">Nueva tarea en {projectCode}</h2>
+    <h2 class="h2" id="create-task-title">
+      Nueva tarea en <span data-field="create-project">{projectCode}</span>
+    </h2>
 
     <label class="field">
       <span class="label">Tarea</span>
@@ -110,26 +128,24 @@ const blockedId = `create-task-blocked-${projectCode}`;
       </div>
     </div>
 
-    <label class="field">
-      <span class="label">Depende de</span>
-      {
-        /* Free text on purpose: the API keeps an unresolvable reference as the
-          dependency's `raw_label`, and 61 of the 82 tasks in the source data
-          describe their prerequisite in prose. A picker alone would make every
-          created task poorer than every seeded one. */
-      }
-      <input
-        class="input"
-        type="text"
-        name="depends_on"
-        list={`deps-${projectCode}`}
-        autocomplete="off"
-        placeholder="Código de tarea o descripción"
-      />
-      <datalist id={`deps-${projectCode}`}>
-        {tasks.map((task) => <option value={task.code}>{task.title}</option>)}
-      </datalist>
-    </label>
+    {
+      /* Real tasks, several of them, never free text.
+        The API is lenient with a dependency it cannot resolve — it keeps the
+        words as `raw_label`, which is what lets the importer carry the 61 of 82
+        source tasks that describe their prerequisite in prose. That leniency is
+        for the *import* path and stays. This is the *authoring* path: here the
+        operator has the project's tasks in front of them, so referencing one is
+        a link the board and the timeline can follow, while typed prose would be
+        a note only a human can read. Do not "fix" the backend to match. */
+    }
+    <MultiSelect
+      facet="create-depends-on"
+      label="Depende de"
+      options={dependencyOptions}
+      addLabel="Añadir dependencia"
+      emptyLabel="Sin dependencias."
+      exhaustedNote="No queda ninguna tarea de este proyecto a la que depender."
+    />
 
     <p class="small error" data-field="create-error" hidden></p>
 
@@ -190,13 +206,6 @@ const blockedId = `create-task-blocked-${projectCode}`;
 
   .blocked {
     color: var(--tinta-media);
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    min-width: 0;
   }
 
   .row {

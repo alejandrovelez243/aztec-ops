@@ -384,6 +384,28 @@ hr,
 
 /* --- Inputs --- */
 
+/**
+ * One labelled control: the `.label` above, the `.input` below.
+ *
+ * Global beside `.label` and `.input` because it is the third part of the same
+ * idea, and it was the only one every surface re-declared for itself — fourteen
+ * identical copies, which is not one definition of a field but fourteen that
+ * happen to agree. The day the spacing moves, they stop agreeing, and the one
+ * nobody remembered is the one nobody sees.
+ *
+ * `min-width: 0` is included: a field is almost always a flex or grid child, and
+ * without it a long placeholder or an `<input>`'s implicit min-content width
+ * pushes the row wider than its track instead of letting the control shrink.
+ * Components still override the gap or add `flex: 1`; Astro's scoped selectors
+ * carry higher specificity, so a local rule always wins over this one.
+ */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
 .input {
   width: 100%;
   padding: 0 var(--space-3);
@@ -500,6 +522,29 @@ textarea.input {
   font-size: var(--text-small-size);
   line-height: var(--text-small-line);
   color: var(--tinta-media);
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+}
+
+/** The optional single recovery ("Deshacer"); reads as a link, not a second CTA. */
+.toast-action {
+  align-self: center;
+  flex: none;
+  padding: 0 var(--space-2);
+  min-height: 32px;
+  border-radius: var(--radius-chip);
+  font-size: var(--text-small-size);
+  font-weight: var(--text-title-weight);
+  color: var(--cobalto);
+  transition: background-color var(--motion-micro-duration)
+    var(--motion-micro-ease);
+}
+
+.toast-action:hover {
+  background-color: var(--pozo);
 }
 
 .toast-close {

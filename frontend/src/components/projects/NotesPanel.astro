@@ -7,20 +7,29 @@
  * moment something greps it for "bloqueado" the typed row stops being written
  * (`docs/API.md` §2.12). The form says so in as many words.
  *
- * The list starts empty by necessity, not by choice: the API exposes
- * `POST /projects/{code}/notes` and no matching read, and the `NOTE_ADDED`
- * activity record carries the note's id rather than its body. So this panel
- * shows the notes that arrive while it is open — this operator's and, over the
- * stream, their colleagues' — and says that plainly instead of pretending the
- * project has none.
+ * The list is rendered by the server from `notes` on the project detail
+ * (`docs/API.md` §2.2): every note the project carries, newest first, including
+ * the ones written against its tasks. The island on top of it only *adds* —
+ * this operator's own note as the POST answers it, and colleagues' notes as the
+ * stream delivers them — and it deduplicates on the note code, so a note that
+ * was already painted here does not arrive twice. Server-rendered and streamed
+ * rows share the markup below the `data-template="note"` clone produces, so the
+ * two are indistinguishable once on screen.
+ *
+ * The empty arm therefore means the project has no notes, which is a fact about
+ * the project. It no longer means "we cannot show you the ones it has".
  */
 import Icon from "../ui/Icon.astro";
+import { formatInstant, relativeTime } from "./format";
+import type { NoteView } from "../../lib/api/domain";
 
 export interface Props {
   projectCode: string;
+  /** The project's notes as the detail read returns them: newest first. */
+  notes: readonly NoteView[];
 }
 
-const { projectCode } = Astro.props;
+const { projectCode, notes } = Astro.props;
 ---
 
 <section class="notes" data-notes data-project-code={projectCode}>
@@ -48,16 +57,39 @@ const { projectCode } = Astro.props;
     </div>
   </form>
 
-  <p class="empty small" data-notes-empty>
-    Todavía no hay notas nuevas. Las que publiques aparecerán aquí, y también
-    las de tus colegas mientras esta página esté abierta.
+  <p class="empty small" data-notes-empty hidden={notes.length > 0}>
+    Este proyecto todavía no tiene notas. Publica la primera: quedará en la
+    bitácora para quien lea después.
   </p>
 
-  <ul class="list" data-note-list></ul>
+  <ul class="list" data-note-list>
+    {
+      notes.map((note) => (
+        <li class="note card" data-note data-code={note.code}>
+          <p class="title">
+            <span data-field="note-author">{note.author}</span>
+            <span
+              class="small when"
+              data-field="note-when"
+              data-occurred-at={note.created_at}
+              title={formatInstant(note.created_at) ?? undefined}
+            >
+              {relativeTime(note.created_at)}
+            </span>
+          </p>
+          <p class="body-text" data-field="note-body">
+            {note.body}
+          </p>
+        </li>
+      ))
+    }
+  </ul>
 
   {
-    /* One home for the row markup: every note on this panel arrives after the
-      first paint, from a write or from the stream. */
+    /* One home for the row markup, and it must stay the same shape as the rows
+      above: the island clones this for a note it just wrote and for one the
+      stream delivered, and a reader must not be able to tell which half of the
+      panel a note came from. */
   }
   <template data-template="note">
     <li class="note card" data-note>
@@ -89,12 +121,6 @@ const { projectCode } = Astro.props;
     flex-direction: column;
     gap: var(--space-2);
     padding: var(--space-4);
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
   }
 
   .hint {

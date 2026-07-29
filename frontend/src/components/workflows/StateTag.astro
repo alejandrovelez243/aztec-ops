@@ -17,14 +17,24 @@ export interface Props {
   toneClass: string;
   /** Inline `--tone-solid` that `tone-data` derives ink and wash from; `null` otherwise. */
   toneStyle: string | null;
+  /**
+   * Patch hook for the editor: names this tag on its root and its label, so a
+   * row cloned from a template can be re-toned and re-worded in place. Absent on
+   * a tag nothing ever repaints.
+   */
+  hook?: string;
 }
 
-const { label, toneClass, toneStyle } = Astro.props;
+const { label, toneClass, toneStyle, hook } = Astro.props;
 ---
 
-<span class:list={["state-tag", toneClass]} style={toneStyle}>
+<span
+  class:list={["state-tag", toneClass]}
+  style={toneStyle}
+  data-state-tag={hook}
+>
   <span class="dot" aria-hidden="true"></span>
-  <span lang="es">{label}</span>
+  <span lang="es" data-field={hook}>{label}</span>
 </span>
 
 <style>

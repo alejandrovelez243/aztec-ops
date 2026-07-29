@@ -18,15 +18,18 @@
  */
 
 import { applyTone, cloneTemplate, pulse, setField } from "../projects/dom";
+import { renderLifecyclePlate } from "../lifecycle/paint";
 import { renderOwnerControl } from "../projects/owner-menu";
+import { renderPriorityControl } from "../projects/priority-menu";
 import { renderDateControl } from "../ui/date-field";
 import { joinFields } from "../projects/messages";
-import { stateTone, taxonomyTone } from "../projects/tone";
+import { stateTone } from "../projects/tone";
 import {
   dependencyLabel,
   dependencyTitle,
   emptyTaskFields,
 } from "./presentation";
+import { findDependencyField, renderDependencyField } from "./dependency-field";
 import type { ActorRef, TaskDetail } from "../../lib/api/domain";
 
 /**
@@ -45,11 +48,14 @@ export function applyTaskDetail(task: TaskDetail): void {
       stateChip.dataset.category = task.state.category;
     }
 
-    const priority = header.querySelector<HTMLElement>("[data-priority-chip]");
-    if (priority !== null) {
-      applyTone(priority, taxonomyTone(task.priority.color));
-      setField(priority, "priority-label", task.priority.label);
-    }
+    // The priority chip is a picker now, and it goes through the control's own
+    // painter for the same reason the owner does: a change made here and one
+    // arriving over the stream must leave the control identical, ticked option
+    // included.
+    const priority = header.querySelector<HTMLElement>(
+      "[data-priority-control]",
+    );
+    if (priority !== null) renderPriorityControl(priority, task.priority);
 
     const overdue = header.querySelector<HTMLElement>("[data-field='overdue']");
     if (overdue !== null) overdue.hidden = !task.is_overdue;
@@ -66,6 +72,10 @@ export function applyTaskDetail(task: TaskDetail): void {
     renderLastProgress(header, task.last_progress);
     renderOwner(header, task.assignee ?? null);
     renderDependencies(header, task);
+    // The lifecycle and the state travel together on purpose: which graphs this
+    // task could be moved onto depends on the state it is standing on, so a
+    // transition has to reach the plate even though it changes no lifecycle.
+    renderLifecyclePlate(header, task);
 
     header.dataset.updatedAt = task.updated_at;
     pulse(header);
@@ -115,8 +125,26 @@ function renderOwner(header: HTMLElement, actor: ActorRef | null): void {
   renderOwnerControl(control, actor);
 }
 
-/** Rebuilds the prerequisite chips, keeping the operation's own words. */
+/**
+ * Rebuilds the prerequisite chips, keeping the operation's own words.
+ *
+ * Through the picker's own painter when the header rendered one, for the same
+ * reason the owner and the priority go through theirs: a set this screen edited
+ * and one arriving over `task.updated` must leave the control identical, chips
+ * and remaining options included.
+ *
+ * The read-only arm below is not dead code. The picker needs the project's other
+ * tasks to offer, and that read is allowed to fail without taking the task screen
+ * down — when it did, the header renders the chips as plain text with the reason
+ * named, and this is what patches them.
+ */
 function renderDependencies(header: HTMLElement, task: TaskDetail): void {
+  const control = findDependencyField(header);
+  if (control !== null) {
+    renderDependencyField(control, task.dependencies);
+    return;
+  }
+
   const list = header.querySelector<HTMLElement>("[data-dependency-list]");
   if (list === null) return;
   list.replaceChildren();

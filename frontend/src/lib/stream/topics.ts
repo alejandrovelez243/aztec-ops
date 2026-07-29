@@ -29,6 +29,12 @@ export const TOPICS = [
   "task.created",
   "task.updated",
   "task.state_changed",
+  // One topic carrying `is_archived`, not a removed/restored pair — the same
+  // reasoning `member.activation_changed` states below: a subscriber's question
+  // is a boolean, and two topics would make every list name both and handle
+  // them identically. A topic absent from this array is delivered and silently
+  // discarded, so removal would look like a broken stream.
+  "task.archive_changed",
   "blocker.raised",
   "blocker.resolved",
   "note.added",

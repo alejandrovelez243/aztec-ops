@@ -47,6 +47,10 @@ const VERBS: readonly VocabularyOption[] = [
   // was a lie on the row about somebody joining the team.
   { value: "CREATED", label: "Alta" },
   { value: "STATE_CHANGED", label: "Cambio de estado" },
+  // Beside the state change and not among the roster's facts: it is the same
+  // subject — how this record is allowed to move — and the trail is where "why
+  // do its buttons differ from yesterday's" is answered.
+  { value: "WORKFLOW_ASSIGNED", label: "Cambio de flujo" },
   { value: "PRIORITY_CHANGED", label: "Prioridad recalculada" },
   { value: "OWNER_CHANGED", label: "Cambio de responsable" },
   { value: "NEXT_STEP_SET", label: "Próximo paso definido" },

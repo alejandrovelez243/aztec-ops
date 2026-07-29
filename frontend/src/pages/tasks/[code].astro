@@ -2,16 +2,24 @@
 /**
  * `/tasks/{code}` — one task, and everything you can do to it.
  *
- * The container: this frontmatter performs the single read of the first paint
- * and hands it to presentational components; the islands underneath own the
- * writes and the live patches. One read is the whole screen because the API
- * answers it that way — the task, its project, its legal moves and its comments
- * arrive together, so this page can never render half of itself while a second
- * request is in flight.
+ * The container: this frontmatter performs the reads of the first paint and
+ * hands them to presentational components; the islands underneath own the writes
+ * and the live patches. One read is the whole *screen* because the API answers
+ * it that way — the task, its project, its legal moves and its comments arrive
+ * together, so this page can never render half of itself while a second request
+ * is in flight. The two reads beside it — the catalog, and the project's other
+ * tasks for the dependency picker — are not screen content but picker options,
+ * and both are explicitly allowed to fail without taking the task down: each
+ * control answers for itself, reporting the value the task read carried and
+ * going visibly dead with the reason named.
  *
  * Layering, in one sentence each. `transitions` from that read is the only
  * source of transition buttons, so a task state added in the admin needs no
- * frontend change. Nothing repaints a state change until the stream confirms
+ * frontend change. `workflow` from the same read names the graph those buttons
+ * came from and whether an ops lead chose it for this task, because two tasks of
+ * one project may legitimately follow different lifecycles and a screen showing
+ * only the state could not say why their buttons differ. Nothing repaints a
+ * state change until the stream confirms
  * it — the server owns legality, and a rollback the operator has already read
  * past is worse than a wait. And a code that resolves to nothing renders the
  * "no encontrada" arm with the way back to its project, never a crash: a task
@@ -35,9 +43,20 @@ import {
   projectHref,
 } from "../../components/tasks/presentation";
 import EmptyState from "../../components/ui/EmptyState.astro";
-import { getTask, type Result } from "../../lib/api/client";
+import type { MultiOption } from "../../components/ui/MultiSelect.astro";
+import {
+  getCatalog,
+  getProjectTasks,
+  getTask,
+  type Result,
+} from "../../lib/api/client";
 import type { ApiError } from "../../lib/api/errors";
-import type { TaskDetail } from "../../lib/api/domain";
+import type {
+  Catalog,
+  TaskDetail,
+  TaskPage,
+  TaxonomyRef,
+} from "../../lib/api/domain";
 import { assertNever, toViewState, type ViewState } from "../../lib/view-state";
 
 const code = Astro.params.code;
@@ -50,10 +69,65 @@ const MISSING_CODE: ApiError = {
   details: {},
 };
 
-const result: Result<TaskDetail> =
-  code === undefined ? { ok: false, error: MISSING_CODE } : await getTask(code);
+/**
+ * How many of the project's tasks may be offered as prerequisites.
+ *
+ * The whole project, in one page: a picker that silently stopped offering the
+ * 51st task would look like the task does not exist. The board reads its cards
+ * with the same ceiling.
+ */
+const SIBLING_PAGE_SIZE = 200;
+
+/**
+ * The project the siblings are read from, before the task itself has answered.
+ *
+ * Derived from the task code — the server mints `PRJ-01-T03` — so the three reads
+ * go out together instead of the picker's options waiting a round trip behind the
+ * task. It is a guess about *routing*, not about content: `task.project.code` is
+ * the authority and the two are compared below before a single option is offered.
+ */
+const parentGuess = code === undefined ? null : projectCodeOf(code);
+
+const [result, catalogResult, siblingsResult]: [
+  Result<TaskDetail>,
+  Result<Catalog>,
+  Result<TaskPage>,
+] =
+  code === undefined
+    ? [
+        { ok: false, error: MISSING_CODE },
+        { ok: false, error: MISSING_CODE },
+        { ok: false, error: MISSING_CODE },
+      ]
+    : await Promise.all([
+        getTask(code),
+        getCatalog(),
+        // A code whose shape names no project is still read as a task — the
+        // server owns what a task code looks like — but there is nowhere to read
+        // siblings from, so the picker degrades exactly as a failed read does.
+        parentGuess === null
+          ? Promise.resolve<Result<TaskPage>>({
+              ok: false,
+              error: MISSING_CODE,
+            })
+          : getProjectTasks(parentGuess, { page_size: SIBLING_PAGE_SIZE }),
+      ]);
 
 const failure: ApiError | null = result.ok ? null : result.error;
+
+/**
+ * What the priority chip offers as a picker.
+ *
+ * The catalog is a second read and it is not allowed to take this screen down:
+ * a task whose vocabulary call failed is still a task you must be able to read,
+ * move and comment on. So a failure degrades to an empty list and the control
+ * answers for itself — it keeps reporting the priority the task read carried and
+ * renders visibly dead with the reason named (FRONTEND.md §8), rather than
+ * offering choices no server would accept.
+ */
+const priorities: readonly TaxonomyRef[] = catalogResult.ok
+  ? catalogResult.data.priorities
+  : [];
 
 /**
  * What this screen renders, one arm at a time.
@@ -116,6 +190,25 @@ const plan = planFor(state);
 const task = plan.mode === "data" ? plan.task : null;
 
 /**
+ * What the "Depende de" picker offers, or `null` when it may not offer anything.
+ *
+ * Three conditions, and all three are refusals to guess. The sibling read must
+ * have succeeded — it is a second read and is not allowed to take the task screen
+ * down, so a failure degrades the field to read-only chips with the reason named
+ * (FRONTEND.md §8) rather than to an empty picker that would look like a project
+ * of one task. The project the siblings came from must be the project the task
+ * says it is in, because the read was routed by a code derived from the URL. And
+ * the task itself is filtered out: nothing may wait on itself, and the server
+ * would answer that click with a cycle.
+ */
+const dependencyOptions: readonly MultiOption[] | null =
+  !siblingsResult.ok || task === null || task.project.code !== parentGuess
+    ? null
+    : siblingsResult.data.items
+        .filter((sibling) => sibling.code !== task.code)
+        .map((sibling) => ({ value: sibling.code, label: sibling.title }));
+
+/**
  * Which project the breadcrumb and the way back point at. The task's own answer
  * when it loaded; otherwise the one its code names, because a dead link should
  * still return the operator to the wall it came from.
@@ -149,15 +242,18 @@ const title = task === null ? "Tarea no encontrada" : task.title;
             projectName={plan.task.project.name}
             assigneeAlias={plan.task.assignee?.alias ?? null}
             assigneeLabel={plan.task.assignee?.label ?? null}
-            priorityLabel={plan.task.priority.label}
-            priorityColor={plan.task.priority.color ?? null}
+            priority={plan.task.priority}
+            priorities={priorities}
             stateLabel={plan.task.state.label}
             stateCategory={plan.task.state.category}
+            stateCode={plan.task.state.code}
             stateColor={plan.task.state.color ?? null}
+            workflow={plan.task.workflow}
             dueDate={plan.task.due_date ?? null}
             isOverdue={plan.task.is_overdue}
             lastProgress={plan.task.last_progress}
             dependencies={plan.task.dependencies}
+            dependencyOptions={dependencyOptions}
             transitions={plan.task.transitions}
             emptyFields={emptyTaskFields(plan.task)}
             updatedAt={plan.task.updated_at}

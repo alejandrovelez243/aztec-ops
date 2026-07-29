@@ -112,9 +112,15 @@ def _author_alias(author_code: str) -> str:
 
 
 def _resolve_task(task_code: str | None, *, project_id: int, project_code: str) -> Task | None:
+    """Resolve the task a note hangs off, refusing one that was removed.
+
+    Scoped to the unremoved tasks (ADR 0012): a comment on a task nobody can open is a comment
+    nobody will read, and the conversation belongs on the project timeline instead. The notes
+    already written against a task survive its removal untouched — the row is hidden, not deleted.
+    """
     if task_code is None:
         return None
-    task = Task.objects.for_code(task_code).first()
+    task = Task.objects.active().for_code(task_code).first()
     if task is None:
         raise TaskNotFound(task_code)
     if task.project_id != project_id:

@@ -1,0 +1,320 @@
+---
+/**
+ * The engagement-type chip, the menu it opens, and the confirmation behind it.
+ *
+ * **The badge is the trigger** (`docs/standards/FRONTEND.md` §10): the thing that reports the
+ * fact is the thing that edits it, so there is no second affordance to discover and no kebab to
+ * grow. It is deliberately not a button in the transition bar either — that bar renders
+ * `transitions` and only `transitions`, and a "Convertir" beside them would teach the operator
+ * that changing the engagement type is a workflow move, which is the confusion this screen exists
+ * to remove.
+ *
+ * **The menu is the taxonomy.** One "Convertir en …" per engagement type other than the current
+ * one, built from what `GET /api/v1/catalog` published: a fourth type added in the admin appears
+ * here with no frontend change, and no map is keyed by `diagnostico`.
+ *
+ * **The dialog is a sentence, not a diagram.** Every word of every arm is server-rendered into
+ * one `<template>` per destination, from the project read and the workflow catalog the page
+ * already holds — so it has no loading arm, and the paragraph that says "no se puede todavía"
+ * is on screen *before* the operator can press anything. `convert-engagement.ts` composes the
+ * sentences; this file only lays them out.
+ *
+ * Presentational: it renders plans and announces an intent through the DOM. The island underneath
+ * owns the request, and nothing here repaints until the server has answered.
+ */
+import Icon from "../ui/Icon.astro";
+import { paragraphClass, type ConversionPlan } from "./convert-engagement";
+import { taxonomyTone, toneStyle } from "./tone";
+
+export interface Props {
+  /** Business code of the project — the address the PATCH is sent to. */
+  projectCode: string;
+  /** The engagement type in force, as the chip reports it. */
+  label: string;
+  /** The taxonomy's own colour for that type, or `null` when the operator set none. */
+  color: string | null;
+  /**
+   * One plan per type this project could be converted into, from
+   * `buildConversions`. Empty renders the chip visibly dead with {@link disabledReason},
+   * never hidden: a control that disappears teaches the operator the capability does not exist.
+   */
+  conversions: readonly ConversionPlan[];
+  /** Why the chip cannot be pressed, in Spanish. Required when `conversions` is empty. */
+  disabledReason: string;
+}
+
+const { projectCode, label, color, conversions, disabledReason } = Astro.props;
+
+const tone = taxonomyTone(color);
+const isDisabled = conversions.length === 0;
+const reasonId = `convert-off-${projectCode}`;
+---
+
+<div class="convert" data-convert-engagement data-project-code={projectCode}>
+  <div class="control" data-engagement-control>
+    <button
+      class:list={["chip", "trigger", tone.className]}
+      style={toneStyle(tone)}
+      type="button"
+      data-menu-trigger
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-label={`Convertir el tipo de encargo. Ahora: ${label}`}
+      aria-describedby={isDisabled ? reasonId : undefined}
+      disabled={isDisabled}
+      title={isDisabled ? disabledReason : undefined}
+    >
+      <span lang="es">{label}</span>
+      <Icon name="chevron-down" size={14} />
+    </button>
+
+    {
+      isDisabled && (
+        <span class="visually-hidden" id={reasonId}>
+          {disabledReason}
+        </span>
+      )
+    }
+
+    <div
+      class="panel card"
+      role="menu"
+      data-menu-panel
+      aria-label="Convertir el tipo de encargo"
+      hidden
+    >
+      {
+        conversions.map((plan) => (
+          <button
+            class="item"
+            type="button"
+            role="menuitem"
+            data-menu-item
+            data-value={plan.code}
+            data-label={plan.label}
+            lang="es"
+          >
+            {`Convertir en ${plan.label}`}
+          </button>
+        ))
+      }
+    </div>
+  </div>
+
+  {
+    /* A modal is right here and almost nowhere else: it is a confirmation the operator asked
+      for, it is short, and the surface behind it has no room to carry the explanation
+      permanently (DESIGN, Don'ts; FRONTEND.md §10). */
+  }
+  <dialog class="dialog" data-convert-dialog aria-labelledby="convert-title">
+    <form method="dialog" data-convert-form>
+      <h2 class="h2" id="convert-title">
+        Convertir en <span data-field="convert-target" lang="es"></span>
+      </h2>
+
+      {/* The chosen destination's paragraphs are cloned in here on open. */}
+      <div class="plan" data-convert-body lang="es"></div>
+
+      {
+        /* The server's own refusal, when one arrives: read where the operator is looking,
+          with the dialog still open and the choice one key away. */
+      }
+      <p class="refusal tone-rojo" data-convert-refusal hidden>
+        <span class="title" data-field="convert-error-title"></span>
+        <span class="small" data-field="convert-error-detail"></span>
+      </p>
+
+      <div class="dialog-actions">
+        <button class="btn btn-ghost" type="button" data-action="close-convert">
+          Cancelar
+        </button>
+        <button
+          class="btn btn-primary"
+          type="submit"
+          data-action="submit-convert"
+        >
+          Convertir
+        </button>
+      </div>
+    </form>
+  </dialog>
+
+  {
+    /* One template per destination: every sentence is decided on the server, so the dialog can
+      open with its whole explanation already written. */
+  }
+  {
+    conversions.map((plan) => (
+      <template data-template={`conversion-${plan.code}`}>
+        <div class="plan-body" data-allowed={String(plan.isAllowed)}>
+          {plan.paragraphs.map((paragraph) => (
+            <p class={paragraphClass(paragraph.tone)}>
+              {paragraph.runs.map((run) =>
+                run.emphasis ? <strong>{run.text}</strong> : run.text,
+              )}
+            </p>
+          ))}
+        </div>
+      </template>
+    ))
+  }
+</div>
+
+<script>
+  import { onPage } from "./island";
+  import { mountConvertEngagement } from "./convert-engagement";
+
+  onPage("[data-convert-engagement]", mountConvertEngagement);
+</script>
+
+<style>
+  .convert {
+    display: inline-flex;
+    min-width: 0;
+  }
+
+  .control {
+    position: relative;
+    display: inline-flex;
+    min-width: 0;
+  }
+
+  /* The chip keeps its chip shape and gains the affordance of a control: a hairline it did not
+     have, and the caret that says it opens something. */
+  .trigger {
+    gap: var(--space-2);
+    max-width: 100%;
+    cursor: pointer;
+    border: var(--border-width) solid transparent;
+    transition:
+      border-color var(--motion-micro-duration) var(--motion-micro-ease),
+      background-color var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .trigger:hover:not(:disabled),
+  .trigger[aria-expanded="true"] {
+    border-color: currentColor;
+  }
+
+  .trigger:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+  }
+
+  .trigger :global(svg) {
+    flex: none;
+    transition: transform var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .trigger[aria-expanded="true"] :global(svg) {
+    transform: rotate(180deg);
+  }
+
+  /* Anchored in viewport coordinates by `lib/ui/menu.ts`; everything but `top`/`left` here. */
+  .panel {
+    position: fixed;
+    z-index: var(--z-drawer);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    width: max-content;
+    min-width: 220px;
+    max-width: min(320px, calc(100vw - var(--space-6)));
+    padding: var(--space-2);
+    box-shadow: var(--shadow-lifted);
+  }
+
+  .panel[hidden] {
+    display: none;
+  }
+
+  .item {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 36px;
+    padding: var(--space-2);
+    border-radius: var(--radius-chip);
+    text-align: left;
+    font-size: var(--text-small-size);
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .item:hover,
+  .item:focus-visible {
+    background-color: var(--pozo);
+  }
+
+  .dialog {
+    width: min(520px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+  }
+
+  .dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .plan {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .plan :global(.plan-body) {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  /* The arm that refuses: ámbar, because it is a condition to resolve, not a failure that
+     happened (the semantic red is reserved for what stopped). */
+  .plan :global(.warning) {
+    padding: var(--space-3);
+    border-radius: var(--radius-chip);
+    background-color: var(--ambar-wash);
+    color: var(--ambar-ink);
+  }
+
+  .refusal {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    padding: var(--space-3);
+    border-radius: var(--radius-chip);
+    background-color: var(--tone-wash);
+    color: var(--tone-ink);
+  }
+
+  .refusal[hidden] {
+    display: none;
+  }
+
+  .refusal .small {
+    color: var(--tone-ink);
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .trigger,
+    .trigger :global(svg) {
+      transition: none;
+    }
+  }
+</style>

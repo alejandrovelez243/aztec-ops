@@ -8,7 +8,10 @@ and nowhere else:
 
 * ``Project.workflow_state`` is written **only** by the transition service. The column is a plain
   FK because a database constraint cannot express "an active WorkflowTransition exists"; the
-  service raises ``TransitionNotAllowed`` instead (DATA_MODEL §9.3).
+  service raises ``TransitionNotAllowed`` instead (DATA_MODEL §9.3). ``Project.workflow`` is the one
+  exception and it is not a state change: ``assign_project_workflow`` repoints the project at the
+  equivalent node of another graph, keeping the state ``code`` it already had, and refuses when the
+  target graph has no such node. The pair is the invariant :meth:`Project.clean` states.
 * ``ProjectSnapshot`` carries ``project_id`` as a plain column rather than a foreign key. The read
   side must survive the write side being rebuilt, so it is coupled to the business code only
   (DATA_MODEL §8). It denormalizes facts and never conclusions: risk flags and health are computed
@@ -25,6 +28,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 
 from apps.portfolio.domain.value_objects import QUEUE_ORDERING, ProjectResult
@@ -38,6 +42,7 @@ from apps.prioritization.domain.types import ProjectRiskInput
 from apps.prioritization.domain.views import ScoreView
 from apps.shared.ordering import resolve_ordering
 from apps.shared.refs import ActorRef, StateRef, TaxonomyRef
+from apps.workflow.domain.views import WorkflowRef
 
 if TYPE_CHECKING:
     from apps.portfolio.domain.value_objects import ProjectSnapshotValues, SnapshotQueueFilters
@@ -54,7 +59,10 @@ _PROJECT_RELATIONS = (
     "engagement_type",
     "project_type",
     "stage",
-    "workflow_state",
+    # Two levels deep, because the graph a project follows is the graph that owns the state it
+    # stands on: :meth:`Project.to_workflow_ref` reads it on every detail render, and one extra
+    # join beats a lazy query per project.
+    "workflow_state__workflow",
     "owner",
     "currency",
 )
@@ -301,6 +309,22 @@ class ProjectSnapshotQuerySet(models.QuerySet["ProjectSnapshot"]):
         self.update_or_create(project_code=values.project_code, defaults=defaults)
 
 
+class ClientQuerySet(models.QuerySet["Client"]):
+    """Named queries over counterparties, composable because they are queryset methods."""
+
+    def active(self) -> "ClientQuerySet":
+        """Restrict to counterparties still being delivered to.
+
+        Retirement is ``is_active = False`` and it exists to take a client out of the pickers while
+        the projects already pointing at it keep resolving through their foreign key. The ordering
+        is the model's own, by alias, which is the order an operator scans a list in.
+
+        Returns:
+            The active rows, in alias order.
+        """
+        return self.filter(is_active=True)
+
+
 class Client(models.Model):
     """A counterparty the operation delivers to.
 
@@ -314,6 +338,8 @@ class Client(models.Model):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    objects = ClientQuerySet.as_manager()
+
     class Meta:
         verbose_name = "client"
         verbose_name_plural = "clients"
@@ -325,6 +351,20 @@ class Client(models.Model):
     def __str__(self) -> str:
         """Return the display alias."""
         return self.alias
+
+    def to_ref(self) -> TaxonomyRef:
+        """Describe this counterparty as the reference shape every picker renders.
+
+        A client is not a taxonomy row, but on the wire it answers the same question a taxonomy
+        value does — "which of these do I choose?" — so it travels in the same ``{code, label}``
+        shape rather than in a fourth one the frontend would have to learn. ``alias`` is the label
+        because ``code`` is the slug nobody outside the fixtures reads. No color: a counterparty is
+        not one of the things `DESIGN.md`'s one-voice rule lets carry a hue.
+
+        Returns:
+            The reference, ready to serialize.
+        """
+        return TaxonomyRef.of(code=self.code, label=self.alias)
 
 
 class Project(models.Model):
@@ -364,6 +404,23 @@ class Project(models.Model):
     )
     workflow_state = models.ForeignKey(
         "workflow.WorkflowState",
+        on_delete=models.PROTECT,
+        related_name="projects",
+    )
+    #: The lifecycle **this project** follows, when an ops lead chose one for it. Null is the common
+    #: case and is not missing data: it means nobody chose, so the graph comes from the binding
+    #: ladder (``Workflow.objects.resolve``). Set, it is the most specific step of that ladder and
+    #: outranks the engagement type's binding.
+    #:
+    #: The invariant that makes the column safe: when it is set it always equals
+    #: ``workflow_state.workflow``. ``assign_project_workflow`` is the only writer and it lands the
+    #: project on a state of the graph it assigns, refusing when the target has none matching. A
+    #: project pinned to one graph while standing on another's node would have a lifecycle its own
+    #: state contradicts, which is why :meth:`clean` re-states the rule for the admin's second door.
+    workflow = models.ForeignKey(
+        "workflow.Workflow",
+        null=True,
+        blank=True,
         on_delete=models.PROTECT,
         related_name="projects",
     )
@@ -429,6 +486,61 @@ class Project(models.Model):
     def __str__(self) -> str:
         """Return the business code and name, which is how operators refer to a project."""
         return f"{self.code} — {self.name}"
+
+    def clean(self) -> None:
+        """Refuse a direct workflow assignment that the project's own state contradicts.
+
+        ``assign_project_workflow`` is the only writer of the pair and it lands the project on a
+        state of the graph it assigns, so this defends every *other* path — a shell session, a data
+        migration, a form somebody adds later. Without it, a project can be pinned to a graph whose
+        columns it is not standing in, which is precisely the corrupted aggregate the service
+        refuses to create: a lifecycle the ``workflow_state`` column denies, with no board able to
+        draw the row and no move able to leave it.
+
+        Not a database constraint because it cannot be one — the fact being compared lives two
+        tables away, on ``WorkflowState.workflow``. It is also why the admin shows ``workflow``
+        read-only: the invariant is checkable there, but the ``ActivityRecord`` and the event a
+        reassignment owes are not.
+
+        Raises:
+            ValidationError: ``workflow`` is set and is not the graph that owns ``workflow_state``.
+        """
+        super().clean()
+        if self.workflow_id is None or self.workflow_state_id is None:
+            return
+        if self.workflow_id != self.workflow_state.workflow_id:
+            raise ValidationError(
+                {
+                    "workflow": (
+                        "This project stands on a state of another workflow. Move it first, or "
+                        "assign the workflow that owns its current state."
+                    )
+                }
+            )
+
+    def to_workflow_ref(self) -> WorkflowRef:
+        """Describe the lifecycle this project follows, and whether somebody chose it.
+
+        The graph is read from the state the project is standing on, never from the binding
+        re-evaluated now: those two answers diverge the moment an ops lead rebinds an engagement
+        type, and the record keeps obeying the graph it is in — its buttons come from that graph's
+        edges. Reporting the binding's current answer would name a lifecycle this project will never
+        be offered a move from.
+
+        ``source`` comes from the ``workflow`` column instead, which is the only fact that
+        distinguishes "an ops lead put this project here" from "this is where its engagement type
+        sends everything". Both are true of the same graph, and a UI that offers "revert to the
+        inherited lifecycle" needs to know which.
+
+        Reads ``workflow_state.workflow``; chain :meth:`ProjectQuerySet.with_relations`.
+
+        Returns:
+            The graph's code and name, tagged ``DIRECT`` or ``INHERITED``.
+        """
+        graph = self.workflow_state.workflow
+        if self.workflow_id is None:
+            return WorkflowRef.inherited(code=graph.code, name=graph.name)
+        return WorkflowRef.direct(code=graph.code, name=graph.name)
 
     def to_result(self) -> ProjectResult:
         """Describe this aggregate as the frozen value every write use case returns.

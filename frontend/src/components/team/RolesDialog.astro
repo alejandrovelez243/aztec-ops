@@ -36,7 +36,19 @@ import Icon from "../ui/Icon.astro";
     mostrando.
   </p>
 
-  <ul class="roles" data-roles-list></ul>
+  {
+    /* Three arms, because "still loading" and "there are none" are different
+      answers and an empty list cannot tell them apart — which is exactly how a
+      slow read got read as data loss. `data-roles-state` is the single mode
+      flag; nothing is ever shown by two arms at once. */
+  }
+  <div class="roles-region" data-roles-region data-roles-state="loading">
+    <p class="small note" data-roles-loading>Cargando roles…</p>
+    <p class="small note" data-roles-empty>
+      Todavía no hay roles registrados. Añade el primero abajo.
+    </p>
+    <ul class="roles" data-roles-list></ul>
+  </div>
 
   <form class="add" data-role-form novalidate>
     <label class="field">
@@ -128,6 +140,22 @@ import Icon from "../ui/Icon.astro";
 </dialog>
 
 <style>
+  .roles-region[data-roles-state="loading"] .roles,
+  .roles-region[data-roles-state="loading"] [data-roles-empty],
+  .roles-region[data-roles-state="empty"] .roles,
+  .roles-region[data-roles-state="empty"] [data-roles-loading],
+  .roles-region[data-roles-state="ready"] [data-roles-loading],
+  .roles-region[data-roles-state="ready"] [data-roles-empty],
+  .roles-region[data-roles-state="error"] .roles,
+  .roles-region[data-roles-state="error"] [data-roles-loading],
+  .roles-region[data-roles-state="error"] [data-roles-empty] {
+    display: none;
+  }
+
+  .note {
+    color: var(--tinta-media);
+  }
+
   .dialog {
     width: min(600px, calc(100vw - var(--space-6)));
     padding: var(--space-5);
@@ -221,9 +249,6 @@ import Icon from "../ui/Icon.astro";
   }
 
   .field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
     flex: 1;
   }
 

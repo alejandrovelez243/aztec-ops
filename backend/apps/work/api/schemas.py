@@ -56,6 +56,21 @@ class TaskUpdateIn(Schema):
 
     ``workflow_state`` is absent, as it is from every schema in this module: a state moves through
     ``POST /api/v1/tasks/{code}/transition`` and nowhere else (CLAUDE.md rule 2).
+
+    ``is_archived`` is the restore half of the soft delete (ADR 0012), the same way
+    ``MemberUpdateIn.is_active`` is the restore half of retiring a person: ``DELETE`` removes and
+    ``PATCH {"is_archived": false}`` puts back. Both directions are accepted here — a client that
+    could only ever set it one way would need a second endpoint to undo an undo — and the response
+    is the task as it now stands, removed or not.
+
+    ``depends_on`` is sent **whole** and replaces the entire prerequisite set, ``[]`` included,
+    which is how a task stops waiting on anything. That is the same decision
+    ``workflow.TransitionUpdateIn.requires_fields`` documents — patching one entry of a list has no
+    unambiguous spelling — and here it is stronger still: an edge that is only prose has no
+    identifier a delta could name it by. Absent leaves the edges alone; ``null`` is accepted and
+    means the same as absent, since ``[]`` already says "clear". Each entry is read exactly as at
+    creation: a task code of this project resolves to an edge, anything else is kept verbatim as
+    ``raw_label``.
     """
 
     title: str = Field(default="", min_length=1, max_length=200)
@@ -65,6 +80,8 @@ class TaskUpdateIn(Schema):
     priority: str = Field(default="", min_length=1, max_length=32)
     assignee: str | None = None
     due_date: date | None = None
+    is_archived: bool | None = None
+    depends_on: list[str] | None = None
 
 
 class TaskTransitionIn(Schema):
@@ -122,10 +139,17 @@ class TaskQuery(Schema):
     ``is_overdue`` is a derived facet: it compares ``due_date`` against server time inside the
     query, so it can never disagree with the ``is_overdue`` rendered on the rows it returns. The
     source spreadsheet's own ``Si``/``No`` column is not imported and is not part of this contract.
+
+    ``is_archived`` is the **scope**, not a facet, and it is the same non-optional boolean
+    defaulting to ``False`` that ``QueueQuery`` uses: removed tasks are out of the operation's
+    attention by definition (ADR 0012), so the two sets are never mixed in one list. ``true`` is
+    what the restore screen asks for — without it a removed task would be unreachable from the
+    product and ``PATCH {"is_archived": false}`` would have no caller.
     """
 
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=DEFAULT_PAGE_SIZE, ge=1)
+    is_archived: bool = False
     assignee: list[str] = Field(default_factory=list)
     priority: list[str] = Field(default_factory=list)
     state: str | None = None

@@ -318,13 +318,16 @@ export interface paths {
          * @description Return every configured state graph: its states and its edges, as an operator arranged them.
          *
          *     Each state carries ``code``, ``label``, ``category`` and ``color`` — the shared
-         *     :class:`~apps.shared.refs.StateRef` every read surface already renders — and each graph carries
-         *     the engagement types bound to it, the kind of aggregate it governs, whether it is the fallback
-         *     for that kind, and ``transitions``: every active edge as ``from_state`` / ``to_state`` codes plus
-         *     the operator's ``label``, ``requires_reason`` and ``requires_fields``.
+         *     :class:`~apps.shared.refs.StateRef` every read surface already renders — plus what an *editor*
+         *     needs and cannot derive: ``order``, ``is_initial``, ``is_terminal``, ``is_active``,
+         *     ``record_count`` and ``can_retire``. Each graph carries the engagement types bound to it, the
+         *     kind of aggregate it governs, whether it is the fallback for that kind, and ``transitions``:
+         *     every active edge as ``from_state`` / ``to_state`` codes plus the operator's ``label``,
+         *     ``requires_reason`` and ``requires_fields``.
          *
          *     Authenticated like every other read; the list of routes that opt out is five long and closed
-         *     (`docs/API.md` §1.2).
+         *     (`docs/API.md` §1.2). The *writes* below additionally require an ops lead — reading the shape of
+         *     the operation is not the same permission as deciding it.
          *
          *     One document rather than a route per engagement type, for the same reason ``GET /catalog`` is
          *     one document: a board draws all of its columns at once. Asking per engagement type would also
@@ -344,7 +347,9 @@ export interface paths {
          *     the graph. **So an edge existing is not a move being legal.** A client that reads an arrow here
          *     and acts on it without asking the record meets exactly the same typed 409 it met before, now
          *     carrying ``details.allowed``. Every enforcement path stays where it is: nothing in this route is
-         *     read by ``validate_transition``, which re-reads the rows each time it decides.
+         *     read by ``validate_transition``, which re-reads the rows each time it decides. The same holds
+         *     for the authoring fields: ``can_retire`` answers whether an *operator* may remove a column, never
+         *     whether a *record* may move.
          *
          *     **Nor does it become the global state list §2.17 refuses.** ``GET /catalog`` excludes states
          *     because a state code is unique only inside its workflow, so a *flat* list invites the client to
@@ -355,14 +360,256 @@ export interface paths {
          *     state is unoccupied has no such column, cannot say "nothing is blocked", and cannot accept a card
          *     dropped into it — and a screen that draws the lifecycle needs the arrows and cannot derive those
          *     either, since an unused edge is invisible to every record that never took it.
+         *
+         *     The ``guard`` a move names is still **not** published, on any of these shapes. Whether a guard
+         *     passes depends on facts no row of the graph holds, so naming it would invite a client to predict
+         *     an answer it cannot compute; the authoring surface accepts it as input and
+         *     ``GET /workflows/guards`` lists the codes that exist.
          */
         get: operations["apps_workflow_api_routers_get_workflows"];
+        put?: never;
+        /**
+         * Post Workflow
+         * @description Create a lifecycle: an empty, active graph governing projects or tasks.
+         *
+         *     It arrives empty and is shaped by the routes below, one node and one edge at a time. A lifecycle
+         *     authored in a single request either succeeds whole or leaves an operator re-typing a form.
+         *
+         *     ``engagement_types`` binds the graph so work of those types resolves to it. An engagement type
+         *     already bound to another graph for the same entity kind is ``409 conflicting_state``: resolution
+         *     has to be deterministic, so a type names exactly one lifecycle per kind.
+         *
+         *     Errors: ``409 conflicting_state`` (code taken, or engagement type already bound),
+         *     ``422 validation_error`` (``applies_to`` outside ``PROJECT`` | ``TASK``, unknown engagement
+         *     type), ``403 permission_denied``.
+         */
+        post: operations["apps_workflow_api_routers_post_workflow"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/guards": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workflow Guards
+         * @description Every guard code a transition may name, sorted — the picker the transition editor renders.
+         *
+         *     Served from the registry rather than from a list in the frontend, which is what keeps CLAUDE.md
+         *     rule 8 true end to end: adding a guard is one function plus one decorator line, and the picker
+         *     follows with no second edit anywhere.
+         *
+         *     Ops lead, like the writes it accompanies. A guard code is not something a reader of the board
+         *     needs, and it is the one part of a move whose outcome nothing may predict — which is exactly why
+         *     it appears here, on the authoring surface, and on no read of the graph.
+         */
+        get: operations["apps_workflow_api_routers_get_workflow_guards"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflow_code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Workflow
+         * @description Rename a lifecycle, retire it, or put it back in service. Absent means untouched.
+         *
+         *     Retiring is ``is_active = false`` and never a delete: the graph stops being offered to new work
+         *     and keeps resolving for everything already inside it, whose states are ``PROTECT``ed exactly so.
+         *
+         *     ``code`` and ``applies_to`` are not writable. The first is the address every binding and every
+         *     published document names it by; the second would leave the records already in the graph governed
+         *     by a lifecycle claiming to govern something else.
+         *
+         *     Errors: ``404 not_found``, ``422 validation_error``, ``403 permission_denied``.
+         */
+        patch: operations["apps_workflow_api_routers_patch_workflow"];
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflow_code}/states": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Workflow State
+         * @description Add a column to a lifecycle, appended unless ``order`` says where it goes.
+         *
+         *     ``order`` omitted **appends**: a new column belongs at the end of an arrangement somebody already
+         *     made, and landing at zero would silently reshuffle the board.
+         *
+         *     The first state of an empty graph becomes its entry node — otherwise a graph authored entirely
+         *     through the product could hold no new work until somebody opened the admin.
+         *
+         *     ``category`` must be one of ``BACKLOG``, ``IN_PROGRESS``, ``BLOCKED``, ``DONE``, ``CANCELLED``:
+         *     it is what every risk rule and every priority signal branches on, so a sixth value would be an
+         *     inert state rather than a new behaviour.
+         *
+         *     Errors: ``404 not_found`` (no such workflow), ``409 conflicting_state`` (the graph already has
+         *     that state code, retired or not), ``422 validation_error`` (unknown category),
+         *     ``403 permission_denied``.
+         */
+        post: operations["apps_workflow_api_routers_post_workflow_state"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflow_code}/states/{state_code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Workflow State
+         * @description Take a column out of a lifecycle: this **retires** it and never deletes it.
+         *
+         *     The row survives with ``is_active: false``, because history points at it and because the
+         *     database ``PROTECT``s it. What the operator gets is the effect they asked for: the node leaves
+         *     the graph, and every arrow touching it — in or out — is withdrawn in the same transaction, since
+         *     a move to a column outside the graph is a move nothing may take.
+         *
+         *     **Refused while records occupy it**, with ``409 conflicting_state`` carrying how many projects
+         *     and how many tasks are standing there. That is a rule the database cannot state: a record parked
+         *     on a retired node would have no column to be drawn in and no move to make, so the operator moves
+         *     them first. The refusal names the numbers because "that failed" is not something anyone can act
+         *     on.
+         *
+         *     Withdrawing the last move *out of* a state is the opposite case and is allowed — that is how a
+         *     terminal state is declared. It is ``DELETE`` on the transition, below.
+         *
+         *     Errors: ``404 not_found``, ``409 conflicting_state`` (records are on the state),
+         *     ``403 permission_denied``.
+         */
+        delete: operations["apps_workflow_api_routers_delete_workflow_state"];
+        options?: never;
+        head?: never;
+        /**
+         * Patch Workflow State
+         * @description Reword, recolour, recategorise or move a column. Absent means untouched.
+         *
+         *     ``code`` is not writable: every project and task on this node holds it, and renaming is what
+         *     ``label`` is for. ``is_active`` accepts only ``true``, which restores a retired node — retiring
+         *     is ``DELETE``, because it can be refused by records this request knows nothing about.
+         *
+         *     Errors: ``404 not_found`` (no such workflow, or the graph has no such state — which is also the
+         *     answer when the code names a state of a *different* graph), ``422 validation_error`` (unknown
+         *     category, or ``is_active: false``), ``403 permission_denied``.
+         */
+        patch: operations["apps_workflow_api_routers_patch_workflow_state"];
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflow_code}/transitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Workflow Transition
+         * @description Declare a move between two columns **of this graph**.
+         *
+         *     Both endpoints are resolved inside the workflow in the path, which is what makes an edge across
+         *     two lifecycles impossible to express rather than merely rejected: a state code is unique only
+         *     inside its graph.
+         *
+         *     ``guard``, when given, must be one of the codes ``GET /workflows/guards`` lists. Checked here
+         *     rather than only when a record moves, so a typo cannot sit in the graph claiming to enforce a
+         *     safety check that evaporated.
+         *
+         *     Declaring an edge changes no record. The move becomes available from the state it leaves;
+         *     whether a given project or task may take it is still decided per record, against the row it sits
+         *     on, the fields filled in on it and the guard.
+         *
+         *     Errors: ``404 not_found`` (no such workflow; or an endpoint is not a state of this graph),
+         *     ``409 conflicting_state`` (this ordered pair already has an edge — restore it with ``PATCH``),
+         *     ``422 validation_error`` (unregistered guard), ``403 permission_denied``.
+         */
+        post: operations["apps_workflow_api_routers_post_workflow_transition"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workflows/{workflow_code}/transitions/{from_state_code}/{to_state_code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Workflow Transition
+         * @description Withdraw a declared move: this **retires** it and never deletes it.
+         *
+         *     The row survives with ``is_active: false`` — the trail and the events name this edge by its
+         *     endpoints, and deleting the row would turn a readable audit into two codes nothing resolves —
+         *     and it disappears from ``transitions`` on the next read, because a withdrawn move is not a
+         *     drawable arrow.
+         *
+         *     **Withdrawing the last move out of a state is allowed**, and is how a terminal state is
+         *     declared: nothing leaves ``entregado``, so ``entregado`` is where the lifecycle ends. No record
+         *     is harmed by losing a move it had not taken — a record on that state simply has no buttons,
+         *     which is what "terminal" means.
+         *
+         *     Errors: ``404 not_found``, ``403 permission_denied``.
+         */
+        delete: operations["apps_workflow_api_routers_delete_workflow_transition"];
+        options?: never;
+        head?: never;
+        /**
+         * Patch Workflow Transition
+         * @description Change what a declared move asks for, or restore a withdrawn one. Absent means untouched.
+         *
+         *     The ordered pair is the address and is not editable: an edge *is* its endpoints, so repointing
+         *     an arrow is withdrawing one move and declaring another — two decisions, two lines in the trail.
+         *
+         *     ``requires_fields`` is sent whole. ``is_active`` accepts only ``true``, and re-enabling this row
+         *     is the *only* way a withdrawn move comes back: a second row for the same pair is forbidden by
+         *     constraint, so ``POST`` answers ``409``.
+         *
+         *     Errors: ``404 not_found`` (no such workflow or no such edge), ``422 validation_error``
+         *     (unregistered guard, or ``is_active: false``), ``403 permission_denied``.
+         */
+        patch: operations["apps_workflow_api_routers_patch_workflow_transition"];
         trace?: never;
     };
     "/api/v1/queue": {
@@ -382,6 +629,33 @@ export interface paths {
          *     it is loaded rather than the moment it was last rebuilt.
          */
         get: operations["apps_portfolio_api_routers_get_queue"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/clients": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Clients
+         * @description The counterparties a project can be registered against.
+         *
+         *     Here and not on ``GET /api/v1/catalog`` because ``Client`` is a portfolio aggregate, not one of
+         *     the operator-editable taxonomies that document publishes: serving it there would make the
+         *     catalog context read a model another context owns.
+         *
+         *     Retired counterparties are absent — the projects already pointing at one keep resolving through
+         *     their foreign key, but nobody can pick it again.
+         */
+        get: operations["apps_portfolio_api_routers_get_clients"];
         put?: never;
         post?: never;
         delete?: never;
@@ -466,6 +740,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_code}/workflow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Project Workflow
+         * @description Put this project on a named lifecycle, overriding what its engagement type binds.
+         *
+         *     A route of its own rather than a field of ``PATCH /projects/{code}`` for two reasons that
+         *     survive the permission being the same as every other project write: it can be refused for a
+         *     cause no other field of a project edit has — the target graph not containing the state the
+         *     project stands on — and a service that both edited scalars and reassigned lifecycles would be
+         *     two use cases sharing one transaction boundary.
+         *
+         *     **Any member, deliberately.** This was an ops-lead write, on the argument that deciding which
+         *     lifecycle a record obeys is a lead's call. What made that untenable is that the same act reaches
+         *     the operation by a second door: changing a project's engagement type through
+         *     ``PATCH /projects/{code}`` re-resolves the binding and therefore the graph, and that field is
+         *     any member's. One act behind two doors, one locked and one open, is not a permission model —
+         *     it is a lock on the door nobody was using. Closing the other door instead would take the
+         *     engagement type away from the people who own it, so the gate came off this one.
+         *
+         *     **It changes the graph, never the state.** The project keeps the state ``code`` it was standing
+         *     on and is repointed at that state in the target graph, so this cannot be used to move a project
+         *     to a state no edge leads to. Moving remains ``POST /projects/{code}/transition``.
+         *
+         *     ``409 conflicting_state`` when the target has no active state carrying the project's current
+         *     state code, with ``details.available`` listing the states it does offer: either add the missing
+         *     column to the target (§2.19) or move the project first, then reassign.
+         *
+         *     Errors: ``404 not_found`` (no such project, or no such workflow), ``409 conflicting_state``
+         *     (incompatible state; or the target is retired), ``422 validation_error`` (the target governs
+         *     tasks, not projects).
+         */
+        put: operations["apps_portfolio_api_routers_put_project_workflow"];
+        post?: never;
+        /**
+         * Delete Project Workflow
+         * @description Stop this project following its own lifecycle: it inherits one again.
+         *
+         *     ``DELETE`` removes the *assignment*, never a workflow and never the project. What comes back is
+         *     the project following whatever the binding ladder hands it — its engagement type's binding, the
+         *     per-kind default binding, or the default graph — and the detail's ``workflow.source`` flips from
+         *     ``DIRECT`` to ``INHERITED``.
+         *
+         *     The inherited graph is compatibility-checked exactly like a named one: if it does not contain
+         *     the state the project is standing on, this is the same ``409 conflicting_state``. "Inherited" is
+         *     not a synonym for "safe", and a project cannot be dropped back onto a lifecycle that has no
+         *     column for where it stands.
+         *
+         *     Errors: ``404 not_found``, ``409 conflicting_state``, ``422 validation_error`` (no binding and
+         *     no default workflow answers for projects).
+         */
+        delete: operations["apps_portfolio_api_routers_delete_project_workflow"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/team/load": {
         parameters: {
             query?: never;
@@ -509,6 +846,10 @@ export interface paths {
          *     Default order is severity descending then soonest due — the order an operator actually works
          *     in. ``priority`` sorts by ``Priority.weight``, so a priority inserted above ``critica`` from
          *     the admin sorts correctly with no code change.
+         *
+         *     ``is_archived`` scopes the list and defaults to ``false``: removed tasks are absent from the
+         *     page *and* from ``count``. Sending ``true`` returns the removed ones instead — never both at
+         *     once — which is the screen a task is restored from (ADR 0012).
          */
         get: operations["apps_work_api_routers_get_project_tasks"];
         put?: never;
@@ -549,7 +890,27 @@ export interface paths {
         get: operations["apps_work_api_routers_get_task"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Task
+         * @description Remove a task from the operation's attention, deleting nothing.
+         *
+         *     ``DELETE`` because that is the verb an operator reaches for and the one a CRUD client offers,
+         *     but the effect is ``is_archived = true`` (ADR 0012): the task keeps its code forever, its
+         *     dependency edges still constrain the project's graph, its notes and its blockers survive, and
+         *     ``PATCH {"is_archived": false}`` puts it back. A row deleted underneath all of that would take
+         *     the history with it and leave the already-published ``task.created`` naming nothing.
+         *
+         *     Idempotent — removing an already-removed task is the same 204, so a retry after a dropped
+         *     response is safe — and it writes no second activity record and emits no second event, because
+         *     nothing changed.
+         *
+         *     Any authenticated member may remove a task, like every other write in this router: removal is
+         *     reversible and fully audited, so gating it behind ``ops_lead`` would stop the person who
+         *     created the task by mistake from undoing it.
+         *
+         *     Errors: ``404 not_found`` when the code names no task at all.
+         */
+        delete: operations["apps_work_api_routers_delete_task"];
         options?: never;
         head?: never;
         /**
@@ -562,6 +923,17 @@ export interface paths {
          *
          *     ``workflow_state`` is not a field of this payload at all — a state moves through the transition
          *     route (CLAUDE.md rule 2) — and neither is ``is_overdue``, which is derived.
+         *
+         *     ``depends_on`` is the exception to "absent means untouched, null clears": it is a *set*, sent
+         *     whole, and the list replaces every prerequisite the task had — ``[]`` clears them. A code that
+         *     would close a loop in the project's graph is ``409 conflicting_state``, checked against the
+         *     graph as it would stand after the replacement, and a code from another project is refused;
+         *     anything that does not look like a task code is kept verbatim as the operation's own prose.
+         *
+         *     ``is_archived: false`` is how a removed task is restored, and it is the reason this route reads
+         *     the detail back **unscoped** where ``GET`` does not: the caller that just moved that field is
+         *     entitled to see the row it wrote, in either direction, and a 404 in reply to a successful write
+         *     would be a lie about what happened (ADR 0012).
          *
          *     The whole detail is returned rather than the changed fields, for the same reason
          *     ``PATCH /projects/{code}`` returns it: the screen that issued the edit is the screen that has
@@ -591,6 +963,58 @@ export interface paths {
          */
         post: operations["apps_work_api_routers_post_task_transition"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_code}/workflow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Task Workflow
+         * @description Put this task on a named lifecycle, overriding what its project's engagement type binds.
+         *
+         *     Its own route rather than a field of ``PATCH /tasks/{code}``, for the reasons the project
+         *     counterpart gives: every other field on that payload is any member's to edit while this one is
+         *     an ops lead's, ``auth=`` is declared per operation so the OpenAPI document states it, and this
+         *     write can be refused for a cause no scalar edit has.
+         *
+         *     Two tasks of one project may legitimately end up on different graphs — which is the point, since
+         *     an exceptional piece of work stops being a reason to fork the engagement type every project
+         *     shares — so the detail reports ``workflow`` beside ``state``.
+         *
+         *     **It changes the graph, never the state.** The task keeps the state ``code`` it stood on and is
+         *     repointed at that state inside the target graph. Moving remains
+         *     ``POST /tasks/{code}/transition``.
+         *
+         *     Errors: ``404 not_found`` (no such task, or no such workflow), ``409 conflicting_state`` (the
+         *     target has no active state matching the task's — ``details.available`` lists what it does offer;
+         *     or the target is retired), ``422 validation_error`` (the target governs projects, not tasks),
+         *     ``403 permission_denied``.
+         */
+        put: operations["apps_work_api_routers_put_task_workflow"];
+        post?: never;
+        /**
+         * Delete Task Workflow
+         * @description Stop this task following its own lifecycle: it inherits one again.
+         *
+         *     ``DELETE`` removes the *assignment*, never a workflow and never the task — the task-removal
+         *     route is ``DELETE /tasks/{code}``, one path segment up. What comes back is the task following
+         *     whatever the binding ladder hands it, with ``workflow.source`` flipped to ``INHERITED``.
+         *
+         *     The inherited graph is compatibility-checked exactly like a named one: a task cannot be dropped
+         *     back onto a lifecycle with no column for the state it is standing on.
+         *
+         *     Errors: ``404 not_found``, ``409 conflicting_state``, ``422 validation_error`` (no binding and
+         *     no default workflow answers for tasks), ``403 permission_denied``.
+         */
+        delete: operations["apps_work_api_routers_delete_task_workflow"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1122,7 +1546,7 @@ export interface components {
              * Engagement Types
              * @default []
              */
-            engagement_types: components["schemas"]["TaxonomyRef"][];
+            engagement_types: components["schemas"]["EngagementTypeRef"][];
             /**
              * Project Types
              * @default []
@@ -1173,6 +1597,35 @@ export interface components {
             minor_units: number;
         };
         /**
+         * EngagementTypeRef
+         * @description One engagement type, ready to render *and* to explain what it does to the ranking.
+         *
+         *     ``TaxonomyRef`` plus the one fact a client cannot derive: the multiplier this type applies to
+         *     the weighted signal sum (``ARCHITECTURE`` §4.1). Extending the shared reference rather than
+         *     defining a parallel one keeps an engagement type renderable by the same chip component as every
+         *     other taxonomy — a client that only wants ``{code, label, color}`` reads exactly those.
+         *
+         *     It travels because of a sentence the product owes the operator. Converting a project from one
+         *     engagement type to another moves it in the priority queue, and a dialog that asks somebody to
+         *     confirm that without saying so is asking them to confirm something they cannot see. The
+         *     alternative — a map from ``diagnostico`` to ``1.10`` held in the frontend — is the business enum
+         *     in code that CLAUDE.md rule 1 forbids, and it would be wrong the day an operator edits a weight.
+         *
+         *     Attributes:
+         *         weight: Strictly positive; the database refuses zero or negative, because a zero would
+         *             silently erase every signal's effect rather than de-prioritizing the work.
+         */
+        EngagementTypeRef: {
+            /** Code */
+            code: string;
+            /** Label */
+            label: string;
+            /** Color */
+            color?: string | null;
+            /** Weight */
+            weight: string;
+        };
+        /**
          * RoleCreateIn
          * @description Body of ``POST /api/v1/catalog/roles``.
          *
@@ -1203,24 +1656,6 @@ export interface components {
             label?: string | null;
             /** Is Active */
             is_active?: boolean | null;
-        };
-        /**
-         * StateRef
-         * @description One workflow state, ready to render and safe to branch on.
-         *
-         *     ``category`` travels alongside ``code`` because ``code`` is unique only inside its workflow —
-         *     two workflows may both own ``bloqueada`` — so a client deciding "is this blocked" reads
-         *     ``category`` and never a list of codes it would have to keep in sync (DATA_MODEL §12).
-         */
-        StateRef: {
-            /** Code */
-            code: string;
-            /** Label */
-            label: string;
-            /** Category */
-            category: string;
-            /** Color */
-            color?: string | null;
         };
         /**
          * WorkflowCatalogView
@@ -1301,6 +1736,88 @@ export interface components {
             requires_fields: string[];
         };
         /**
+         * WorkflowNodeView
+         * @description One node of a graph: the reference every payload renders, plus what shaping it needs.
+         *
+         *     A superset of :class:`~apps.shared.refs.StateRef` on the wire — ``code``, ``label``,
+         *     ``category`` and ``color`` keep their names and their meaning, so every client that already
+         *     reads a column header keeps working — carrying the four facts an *editor* cannot render without
+         *     and cannot derive: where the operator put the column, whether it is the entry node, whether it
+         *     is still part of the graph, and whether it can be taken out of it.
+         *
+         *     The fields are repeated rather than inherited from ``StateRef``. Subclassing would also inherit
+         *     ``StateRef.of``, a constructor that cannot build this shape, and a classmethod that type-checks
+         *     and raises is worse than four lines of field declarations. :meth:`of` takes the reference
+         *     instead, so the colour is normalized in exactly one place.
+         *
+         *     Attributes:
+         *         code: Node slug, unique inside this graph only.
+         *         label: Operator-editable Spanish.
+         *         category: The closed vocabulary every other context branches on.
+         *         color: ``#RRGGBB``, or ``null`` when the operator set none.
+         *         order: The operator's arrangement. Published as a number, not merely implied by the array,
+         *             because the authoring API accepts ``order`` and an editor that could not show the
+         *             current value could only ever guess at the next one.
+         *         is_initial: The entry node a brand new aggregate is placed on. At most one per graph, by
+         *             partial unique constraint.
+         *         is_terminal: The operator marked this node as an end of the lifecycle. Descriptive: what
+         *             actually ends a lifecycle is having no active move out, which is a fact about the edges.
+         *         is_active: ``False`` means retired — out of the graph for new work, still resolving for
+         *             anything already on it. A retired node is **published, not omitted**, and that is the
+         *             deliberate difference from a withdrawn edge: an edge is a move, and advertising a move
+         *             nothing can take is a lie, while a node is a *place*, and a record may still be standing
+         *             in it. A board that could not draw the column would lose those records from the screen
+         *             entirely — the same reason a retired graph is still served. Clients must not offer a
+         *             retired node as a drop target or in a picker.
+         *         record_count: How many projects and tasks currently sit on this node. The **explanation**
+         *             behind ``can_retire``: an editor says "3 registros en este estado" instead of greying a
+         *             button out for no visible reason.
+         *         can_retire: Whether ``DELETE`` on this node would succeed right now — it is in service and
+         *             nothing occupies it. The server answers it rather than letting the client derive it, for
+         *             the same reason transition buttons are served rather than computed: the rule has one
+         *             home, and a client that got it wrong would offer an action the API then refuses.
+         */
+        WorkflowNodeView: {
+            /** Code */
+            code: string;
+            /** Label */
+            label: string;
+            /** Category */
+            category: string;
+            /** Color */
+            color?: string | null;
+            /**
+             * Order
+             * @default 0
+             */
+            order: number;
+            /**
+             * Is Initial
+             * @default false
+             */
+            is_initial: boolean;
+            /**
+             * Is Terminal
+             * @default false
+             */
+            is_terminal: boolean;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+            /**
+             * Record Count
+             * @default 0
+             */
+            record_count: number;
+            /**
+             * Can Retire
+             * @default false
+             */
+            can_retire: boolean;
+        };
+        /**
          * WorkflowShapeView
          * @description One state graph as a board sees it: its columns, in the operator's order.
          *
@@ -1340,9 +1857,11 @@ export interface components {
          *             common case and means no engagement type names it specifically: it is reached as the
          *             per-kind default. Plural because the binding table permits many types per graph — a
          *             single nullable field would silently drop rows.
-         *         states: Every node, ordered by the ``order`` an operator arranged in the admin, ``code``
-         *             breaking ties. Empty is a legitimate answer — a graph whose states nobody has
-         *             configured yet — and the board renders no columns rather than treating it as a failure.
+         *         states: Every node, ordered by the ``order`` an operator arranged, ``code`` breaking ties,
+         *             including the retired ones flagged ``is_active: false`` — see
+         *             :class:`WorkflowNodeView`. Empty is a legitimate answer — a graph whose states nobody
+         *             has configured yet — and the board renders no columns rather than treating it as a
+         *             failure.
          *         transitions: Every **active** edge of the graph, grouped by the source node in the same
          *             column order as ``states`` and then by the operator's own ``order`` within it. A
          *             deactivated edge is absent rather than flagged: ``is_active = False`` is how an operator
@@ -1377,12 +1896,140 @@ export interface components {
              * States
              * @default []
              */
-            states: components["schemas"]["StateRef"][];
+            states: components["schemas"]["WorkflowNodeView"][];
             /**
              * Transitions
              * @default []
              */
             transitions: components["schemas"]["WorkflowEdgeView"][];
+        };
+        /**
+         * WorkflowCreateIn
+         * @description Body of ``POST /api/v1/workflows``.
+         *
+         *     The graph arrives empty; states and transitions are added afterwards, each independently
+         *     retryable and independently recorded.
+         *
+         *     ``is_default`` is absent on purpose: which graph unbound work falls back to is a decision about
+         *     the whole portfolio, not a checkbox on the form that adds a lifecycle.
+         */
+        WorkflowCreateIn: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Applies To */
+            applies_to: string;
+            /** Engagement Types */
+            engagement_types?: string[];
+        };
+        /**
+         * WorkflowUpdateIn
+         * @description Body of ``PATCH /api/v1/workflows/{workflow_code}``. Absent means untouched.
+         *
+         *     ``code`` and ``applies_to`` are not here. The first is the address; the second would leave the
+         *     records already inside the graph governed by a lifecycle that claims to govern something else.
+         */
+        WorkflowUpdateIn: {
+            /** Name */
+            name?: string | null;
+            /** Is Active */
+            is_active?: boolean | null;
+        };
+        /**
+         * StateCreateIn
+         * @description Body of ``POST /api/v1/workflows/{workflow_code}/states``.
+         *
+         *     ``order`` is optional and absent **appends**: a new column belongs at the end of the arrangement
+         *     somebody already made, not at position zero in front of it.
+         */
+        StateCreateIn: {
+            /** Code */
+            code: string;
+            /** Label */
+            label: string;
+            /** Category */
+            category: string;
+            /**
+             * Color
+             * @default
+             */
+            color: string;
+            /** Order */
+            order?: number | null;
+        };
+        /**
+         * StateUpdateIn
+         * @description Body of ``PATCH /api/v1/workflows/{workflow_code}/states/{state_code}``. Absent = untouched.
+         *
+         *     ``is_active`` accepts only ``true``. Restoring a retired node is always safe; retiring one can be
+         *     refused by the records standing on it, so it is ``DELETE`` and not a field that sometimes fails
+         *     for a reason unrelated to itself.
+         */
+        StateUpdateIn: {
+            /** Label */
+            label?: string | null;
+            /** Category */
+            category?: string | null;
+            /** Color */
+            color?: string | null;
+            /** Order */
+            order?: number | null;
+            /** Is Active */
+            is_active?: true | null;
+        };
+        /**
+         * TransitionCreateIn
+         * @description Body of ``POST /api/v1/workflows/{workflow_code}/transitions``.
+         *
+         *     Both endpoints are state **codes inside this graph** — resolved against the workflow in the
+         *     path, which is what makes an edge across two lifecycles impossible to express rather than merely
+         *     rejected. ``guard`` is one of the codes ``GET /api/v1/workflows/guards`` lists.
+         */
+        TransitionCreateIn: {
+            /** From State */
+            from_state: string;
+            /** To State */
+            to_state: string;
+            /** Label */
+            label: string;
+            /**
+             * Requires Reason
+             * @default false
+             */
+            requires_reason: boolean;
+            /** Requires Fields */
+            requires_fields?: string[];
+            /**
+             * Guard
+             * @default
+             */
+            guard: string;
+            /** Order */
+            order?: number | null;
+        };
+        /**
+         * TransitionUpdateIn
+         * @description Body of ``PATCH .../transitions/{from_state_code}/{to_state_code}``. Absent = untouched.
+         *
+         *     The endpoints are the address and are not editable: an edge *is* its endpoints, so repointing an
+         *     arrow is withdrawing one move and declaring another. ``requires_fields`` is sent whole, because
+         *     patching one entry of a list has no unambiguous spelling. ``is_active`` accepts only ``true``,
+         *     which is how a withdrawn move comes back — withdrawing it is ``DELETE``.
+         */
+        TransitionUpdateIn: {
+            /** Label */
+            label?: string | null;
+            /** Requires Reason */
+            requires_reason?: boolean | null;
+            /** Requires Fields */
+            requires_fields?: string[] | null;
+            /** Guard */
+            guard?: string | null;
+            /** Order */
+            order?: number | null;
+            /** Is Active */
+            is_active?: true | null;
         };
         /**
          * QueueQuery
@@ -1644,6 +2291,43 @@ export interface components {
             flags: string[];
         };
         /**
+         * StateRef
+         * @description One workflow state, ready to render and safe to branch on.
+         *
+         *     ``category`` travels alongside ``code`` because ``code`` is unique only inside its workflow —
+         *     two workflows may both own ``bloqueada`` — so a client deciding "is this blocked" reads
+         *     ``category`` and never a list of codes it would have to keep in sync (DATA_MODEL §12).
+         */
+        StateRef: {
+            /** Code */
+            code: string;
+            /** Label */
+            label: string;
+            /** Category */
+            category: string;
+            /** Color */
+            color?: string | null;
+        };
+        /**
+         * ClientDirectoryView
+         * @description The counterparties a project can be registered against, as ``GET /api/v1/clients`` returns.
+         *
+         *     An ``{items: [...]}`` object rather than a bare array, for the reason
+         *     :class:`TeamLoadPage` gives: a top-level list cannot grow a sibling key without breaking every
+         *     client that parsed it as one.
+         *
+         *     Each entry is a :class:`~apps.shared.refs.TaxonomyRef` even though a client is not a taxonomy
+         *     row, because on the wire it answers the same question — which of these do I choose — and a
+         *     fourth reference shape would be one more thing the frontend has to learn for no gain.
+         */
+        ClientDirectoryView: {
+            /**
+             * Items
+             * @default []
+             */
+            items: components["schemas"]["TaxonomyRef"][];
+        };
+        /**
          * BlockerView
          * @description One impediment, open or cleared.
          *
@@ -1705,6 +2389,34 @@ export interface components {
             raw_label: string;
         };
         /**
+         * NoteView
+         * @description One chronological comment on a project, or on one task of it.
+         *
+         *     ``author`` is a bare code rather than an :class:`~apps.shared.refs.ActorRef` because the column
+         *     is a denormalized string that outlives its author's row and can hold ``system``: resolving it
+         *     to a person would fail for exactly the rows the denormalization exists to keep readable.
+         *
+         *     Nothing parses a note's text. A note is not a substitute for a :class:`BlockerView`, and the
+         *     moment something greps it for "blocked" the typed row stops being written.
+         */
+        NoteView: {
+            /** Id */
+            id: number;
+            /** Code */
+            code: string;
+            /** Body */
+            body: string;
+            /** Author */
+            author: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Task Code */
+            task_code?: string | null;
+        };
+        /**
          * OverrideView
          * @description A human's forced ranking decision, on the record.
          *
@@ -1742,6 +2454,20 @@ export interface components {
          *     one, between its ``project.created`` event and the recalculator's first pass. It is not
          *     flattened to zero, because "not scored yet" and "scored zero" rank the same and mean opposite
          *     things.
+         *
+         *     ``workflow`` names the graph that ``state`` and ``transitions`` come from, and whether an ops
+         *     lead assigned it to this project or it was inherited from the engagement type's binding. Two
+         *     projects of the same type may now follow different lifecycles, so "why does this one have a
+         *     button the other does not" is a question the payload has to be able to answer.
+         *
+         *     ``notes`` travels inside the detail for the reason
+         *     :class:`~apps.work.domain.views.TaskDetailView` already states: a surface that needs two
+         *     requests to render is two chances to render half a page, and two reads can straddle a write, so
+         *     a comment fetched separately can end up rendered beside a state it does not refer to. Newest
+         *     first, capped, and **including the notes written against this project's tasks** — the column is
+         *     copied onto them at write time and the ``note.added`` envelope names the project either way, so
+         *     excluding them would make a note vanish on reload after having appeared live. Empty means the
+         *     project has no commentary, never "we could not read it".
          */
         ProjectDetailView: {
             /** Code */
@@ -1761,6 +2487,7 @@ export interface components {
             project_type?: components["schemas"]["TaxonomyRef"] | null;
             stage?: components["schemas"]["TaxonomyRef"] | null;
             state: components["schemas"]["StateRef"];
+            workflow: components["schemas"]["WorkflowRef"];
             health: components["schemas"]["HealthRef"];
             /** Start Date */
             start_date?: string | null;
@@ -1823,6 +2550,11 @@ export interface components {
              */
             transitions: components["schemas"]["TransitionOption"][];
             /**
+             * Notes
+             * @default []
+             */
+            notes: components["schemas"]["NoteView"][];
+            /**
              * Updated At
              * Format: date-time
              */
@@ -1834,6 +2566,11 @@ export interface components {
          *
          *     ``state`` carries its ``category`` so the board can group by "blocked" without holding a list
          *     of state codes that two workflows could both own (DATA_MODEL §12).
+         *
+         *     ``is_archived`` is ``False`` on every row of an ordinary list, because the list is scoped to
+         *     the unremoved tasks. It travels anyway, and defaults to ``False`` rather than being omitted,
+         *     so the one screen that asks for removed tasks renders them as removed instead of inferring it
+         *     from the filter it happened to send (ADR 0012).
          */
         TaskView: {
             /** Code */
@@ -1855,6 +2592,11 @@ export interface components {
              * @default
              */
             last_progress: string;
+            /**
+             * Is Archived
+             * @default false
+             */
+            is_archived: boolean;
             /**
              * Dependencies
              * @default []
@@ -1888,6 +2630,39 @@ export interface components {
              * @default []
              */
             requires_fields: string[];
+        };
+        /**
+         * WorkflowRef
+         * @description The lifecycle one record follows, and whether somebody chose it for that record.
+         *
+         *     Served on the project and the task detail because those two facts answer different questions and
+         *     a client needs both. ``code``/``name`` say *which graph governs this record right now* — its
+         *     columns and its arrows are the ones this record obeys. ``source`` says *why*, and that is what
+         *     decides whether the UI offers "volver al flujo heredado": a record that inherited its lifecycle
+         *     has nothing to revert.
+         *
+         *     The identity here is always the graph that owns the state the record is standing on, never the
+         *     binding re-evaluated at read time. The two can legitimately disagree — an ops lead rebinds an
+         *     engagement type after a record was created, and the record keeps sitting on the graph it was
+         *     placed in, whose edges are still the ones ``validate_transition`` reads. Reporting the binding's
+         *     current answer would name a graph whose buttons the record will never be offered.
+         *
+         *     Attributes:
+         *         code: ``Workflow.code`` of the governing graph — the slug ``GET /api/v1/workflows``
+         *             publishes it under, so a client can look up its columns without a second request.
+         *         name: The operator's display name for it. Rendered; never compared against.
+         *         source: ``DIRECT`` | ``INHERITED``.
+         */
+        WorkflowRef: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "DIRECT" | "INHERITED";
         };
         /**
          * ProjectUpdateIn
@@ -1973,6 +2748,11 @@ export interface components {
              */
             summary: string;
             /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
              * Next Step
              * @default
              */
@@ -1995,6 +2775,27 @@ export interface components {
              * @default
              */
             reason: string;
+        };
+        /**
+         * WorkflowAssignmentIn
+         * @description Body of ``PUT /api/v1/projects/{code}/workflow`` and ``PUT /api/v1/tasks/{code}/workflow``.
+         *
+         *     One shape for both because it is one decision — "this record follows that lifecycle" — and the
+         *     only field it carries is a ``Workflow.code``, which is this context's vocabulary rather than the
+         *     portfolio's or the work context's. A copy in each of them would be two chances to disagree about
+         *     the length of a slug neither of them owns.
+         *
+         *     It lives among the *authoring* bodies while being posted to a *record*, and that is deliberate:
+         *     the write it feeds is neither a project edit nor a task edit but a statement about which graph
+         *     governs a record, ops-lead gated like everything else that decides how work is allowed to behave.
+         *
+         *     ``workflow`` is required. Going back to inheriting a lifecycle is ``DELETE`` on the same path,
+         *     not a ``null`` here: a body whose only field may be null makes two different decisions look like
+         *     one payload, so a client that forgot to fill it in would clear an assignment it meant to change.
+         */
+        WorkflowAssignmentIn: {
+            /** Workflow */
+            workflow: string;
         };
         /**
          * TeamLoadQuery
@@ -2135,6 +2936,12 @@ export interface components {
          *     ``is_overdue`` is a derived facet: it compares ``due_date`` against server time inside the
          *     query, so it can never disagree with the ``is_overdue`` rendered on the rows it returns. The
          *     source spreadsheet's own ``Si``/``No`` column is not imported and is not part of this contract.
+         *
+         *     ``is_archived`` is the **scope**, not a facet, and it is the same non-optional boolean
+         *     defaulting to ``False`` that ``QueueQuery`` uses: removed tasks are out of the operation's
+         *     attention by definition (ADR 0012), so the two sets are never mixed in one list. ``true`` is
+         *     what the restore screen asks for — without it a removed task would be unreachable from the
+         *     product and ``PATCH {"is_archived": false}`` would have no caller.
          */
         TaskQuery: {
             /**
@@ -2147,6 +2954,11 @@ export interface components {
              * @default 50
              */
             page_size: number;
+            /**
+             * Is Archived
+             * @default false
+             */
+            is_archived: boolean;
             /** Assignee */
             assignee?: string[];
             /** Priority */
@@ -2212,34 +3024,6 @@ export interface components {
             depends_on?: string[];
         };
         /**
-         * NoteView
-         * @description One chronological comment on a project, or on one task of it.
-         *
-         *     ``author`` is a bare code rather than an :class:`~apps.shared.refs.ActorRef` because the column
-         *     is a denormalized string that outlives its author's row and can hold ``system``: resolving it
-         *     to a person would fail for exactly the rows the denormalization exists to keep readable.
-         *
-         *     Nothing parses a note's text. A note is not a substitute for a :class:`BlockerView`, and the
-         *     moment something greps it for "blocked" the typed row stops being written.
-         */
-        NoteView: {
-            /** Id */
-            id: number;
-            /** Code */
-            code: string;
-            /** Body */
-            body: string;
-            /** Author */
-            author: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Task Code */
-            task_code?: string | null;
-        };
-        /**
          * TaskDetailView
          * @description One task in full, as ``GET /api/v1/tasks/{code}`` returns it.
          *
@@ -2263,6 +3047,15 @@ export interface components {
          *
          *     ``is_overdue`` is derived from ``due_date`` against the instant the request was served, never
          *     read from a column, for the same reason it is on :class:`TaskView`.
+         *
+         *     ``is_archived`` is always ``False`` on the ``GET`` route — a removed task is a 404 there
+         *     (ADR 0012) — and is the point of the field on the ``PATCH`` response, which reports the task as
+         *     it now stands whichever way the removal flag was just moved.
+         *
+         *     ``workflow`` names the graph ``state`` and ``transitions`` both come from, and whether an ops
+         *     lead chose it for this task. Two tasks of the same project can legitimately follow different
+         *     lifecycles, so a screen showing only the state would leave an operator unable to say why the
+         *     buttons differ from the task beside it.
          */
         TaskDetailView: {
             /** Code */
@@ -2283,6 +3076,7 @@ export interface components {
             assignee?: components["schemas"]["ActorRef"] | null;
             priority: components["schemas"]["TaxonomyRef"];
             state: components["schemas"]["StateRef"];
+            workflow: components["schemas"]["WorkflowRef"];
             /** Due Date */
             due_date?: string | null;
             /**
@@ -2295,6 +3089,11 @@ export interface components {
              * @default
              */
             last_progress: string;
+            /**
+             * Is Archived
+             * @default false
+             */
+            is_archived: boolean;
             /**
              * Dependencies
              * @default []
@@ -2358,6 +3157,21 @@ export interface components {
          *
          *     ``workflow_state`` is absent, as it is from every schema in this module: a state moves through
          *     ``POST /api/v1/tasks/{code}/transition`` and nowhere else (CLAUDE.md rule 2).
+         *
+         *     ``is_archived`` is the restore half of the soft delete (ADR 0012), the same way
+         *     ``MemberUpdateIn.is_active`` is the restore half of retiring a person: ``DELETE`` removes and
+         *     ``PATCH {"is_archived": false}`` puts back. Both directions are accepted here — a client that
+         *     could only ever set it one way would need a second endpoint to undo an undo — and the response
+         *     is the task as it now stands, removed or not.
+         *
+         *     ``depends_on`` is sent **whole** and replaces the entire prerequisite set, ``[]`` included,
+         *     which is how a task stops waiting on anything. That is the same decision
+         *     ``workflow.TransitionUpdateIn.requires_fields`` documents — patching one entry of a list has no
+         *     unambiguous spelling — and here it is stronger still: an edge that is only prose has no
+         *     identifier a delta could name it by. Absent leaves the edges alone; ``null`` is accepted and
+         *     means the same as absent, since ``[]`` already says "clear". Each entry is read exactly as at
+         *     creation: a task code of this project resolves to an edge, anything else is kept verbatim as
+         *     ``raw_label``.
          */
         TaskUpdateIn: {
             /**
@@ -2389,6 +3203,10 @@ export interface components {
             assignee?: string | null;
             /** Due Date */
             due_date?: string | null;
+            /** Is Archived */
+            is_archived?: boolean | null;
+            /** Depends On */
+            depends_on?: string[] | null;
         };
         /**
          * TaskTransitionIn
@@ -3045,6 +3863,230 @@ export interface operations {
             };
         };
     };
+    apps_workflow_api_routers_post_workflow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowCreateIn"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowShapeView"];
+                };
+            };
+        };
+    };
+    apps_workflow_api_routers_get_workflow_guards: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+        };
+    };
+    apps_workflow_api_routers_patch_workflow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowUpdateIn"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowShapeView"];
+                };
+            };
+        };
+    };
+    apps_workflow_api_routers_post_workflow_state: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StateCreateIn"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowShapeView"];
+                };
+            };
+        };
+    };
+    apps_workflow_api_routers_delete_workflow_state: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_code: string;
+                state_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowShapeView"];
+                };
+            };
+        };
+    };
+    apps_workflow_api_routers_patch_workflow_state: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_code: string;
+                state_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StateUpdateIn"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowShapeView"];
+                };
+            };
+        };
+    };
+    apps_workflow_api_routers_post_workflow_transition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransitionCreateIn"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowShapeView"];
+                };
+            };
+        };
+    };
+    apps_workflow_api_routers_delete_workflow_transition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_code: string;
+                from_state_code: string;
+                to_state_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowShapeView"];
+                };
+            };
+        };
+    };
+    apps_workflow_api_routers_patch_workflow_transition: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_code: string;
+                from_state_code: string;
+                to_state_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TransitionUpdateIn"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowShapeView"];
+                };
+            };
+        };
+    };
     apps_portfolio_api_routers_get_queue: {
         parameters: {
             query?: {
@@ -3076,6 +4118,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Page_QueueItemView_"];
+                };
+            };
+        };
+    };
+    apps_portfolio_api_routers_get_clients: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientDirectoryView"];
                 };
             };
         };
@@ -3178,6 +4240,54 @@ export interface operations {
             };
         };
     };
+    apps_portfolio_api_routers_put_project_workflow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowAssignmentIn"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectDetailView"];
+                };
+            };
+        };
+    };
+    apps_portfolio_api_routers_delete_project_workflow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectDetailView"];
+                };
+            };
+        };
+    };
     apps_portfolio_api_routers_get_team_load: {
         parameters: {
             query?: {
@@ -3210,6 +4320,7 @@ export interface operations {
             query?: {
                 page?: number;
                 page_size?: number;
+                is_archived?: boolean;
                 assignee?: string[];
                 priority?: string[];
                 state?: string | null;
@@ -3285,6 +4396,26 @@ export interface operations {
             };
         };
     };
+    apps_work_api_routers_delete_task: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     apps_work_api_routers_patch_task: {
         parameters: {
             query?: never;
@@ -3333,6 +4464,54 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskView"];
+                };
+            };
+        };
+    };
+    apps_work_api_routers_put_task_workflow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkflowAssignmentIn"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDetailView"];
+                };
+            };
+        };
+    };
+    apps_work_api_routers_delete_task_workflow: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDetailView"];
                 };
             };
         };

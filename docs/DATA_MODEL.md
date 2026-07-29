@@ -95,12 +95,18 @@ is one admin row away.
 
 ## 2. `backend/apps/workflow` — configurable state machines
 
+Four tables the operation edits **from the product**, on `/workflows`, through the ops-lead-only
+authoring routes (`ARCHITECTURE` §4.3, `API.md` §2.19). The Django admin registers the same models
+and remains a second door, not the only one — a lifecycle reshapeable only by somebody holding an
+admin account is configurable by engineering, not by the operation. Nothing here is ever deleted:
+retirement is `is_active = False`, because history and live records point at these rows.
+
 ### `workflow_workflow` — a named state graph, bound to one entity kind
 
 | Column | Type | Null | Default | Index | Meaning |
 |---|---|---|---|---|---|
 | `code` | `varchar(32)` | no | — | unique | Stable slug, e.g. `project_default`, `task_default`. |
-| `name` | `varchar(96)` | no | — | — | Admin-facing name. |
+| `name` | `varchar(96)` | no | — | — | Operator-facing name, shown wherever the graph is offered. Renamed from `/workflows`. |
 | `applies_to` | `varchar(8)` | no | — | part of partial unique | `PROJECT` \| `TASK`. `TextChoices` — structural, not operator data. |
 | `is_default` | `boolean` | no | `false` | partial unique with `applies_to` | Fallback when no `WorkflowBinding` matches. |
 | `is_active` | `boolean` | no | `true` | — | Retires a workflow without deleting its history. |
@@ -116,7 +122,8 @@ is one admin row away.
 | `category` | `varchar(16)` | no | — | `(category)` | `BACKLOG` \| `IN_PROGRESS` \| `BLOCKED` \| `DONE` \| `CANCELLED`. The closed vocabulary all logic branches on. |
 | `is_initial` | `boolean` | no | `false` | partial unique per workflow | Entry node. Exactly one per workflow. |
 | `is_terminal` | `boolean` | no | `false` | — | No outgoing transitions expected. |
-| `order` | `smallint` | no | `0` | `(workflow, order)` | Board/column order. |
+| `is_active` | `boolean` | no | `true` | — | `false` = retired: out of the graph for new work, still resolving for anything already on it. Retirement is refused while any project or task sits on the node (`409`, `docs/API.md` §2.19) and withdraws every transition touching it. Never a delete — the FKs below are `PROTECT`, and history points at the row. |
+| `order` | `smallint` | no | `0` | `(workflow, order)` | Board/column order. A state added through the API without one is **appended** after the last node of its graph. |
 | `color` | `varchar(7)` | no | `''` | — | Badge color. |
 
 ### `workflow_workflowtransition` — a legal edge
@@ -145,9 +152,31 @@ An edge that does not exist here, or exists but is inactive, makes the transitio
 | `engagement_type_id` | `bigint` FK → `catalog_engagementtype` | **yes** | `null` | unique with `applies_to` | Null means "the default binding for this entity kind". |
 | `is_active` | `boolean` | no | `true` | — | |
 
-Resolution order at project creation: binding for the project's `engagement_type` → binding with
-`engagement_type IS NULL` → `Workflow.is_default`. A Diagnostico can run a shorter lifecycle than a
-recurring maintenance engagement without any code change.
+**Resolution order** — `Workflow.objects.resolve`, most specific first:
+
+1. **the graph the record itself names**: `portfolio_project.workflow_id` / `work_task.workflow_id`,
+   handed to `resolve` as `assigned`;
+2. the active binding for the record's `engagement_type`;
+3. the binding whose `engagement_type IS NULL` — the per-kind default binding;
+4. `Workflow.is_default`.
+
+Steps 2–4 are what let a Diagnostico run a shorter lifecycle than a recurring maintenance
+engagement without any code change — and without an engineer, because the bindings are written from
+the product when the graph is created (`API.md` §2.19). An engagement type already bound elsewhere
+is refused with a `409` naming the graph holding it. Step 1 is what lets **one** Diagnostico differ
+from the rest, so an exceptional engagement stops being a reason to fork the engagement type every
+other project shares; it is written only by `assign_project_workflow` / `assign_task_workflow`
+(`API.md` §2.20), never by an ordinary edit, and `NULL` means "whatever the binding resolves to".
+Both ends of that answer are the operation's to decide, from the product.
+
+Two properties of step 1 are load-bearing:
+
+- **A record's own graph wins even when that graph is retired**, exactly as a retired *state* keeps
+  resolving for whoever stands on it. Retirement stops a lifecycle being offered to new work, and a
+  record already inside one is not new work. Refusing *arrivals* is `WorkflowRetired`, raised where
+  a record is moved into a graph rather than where an existing placement is read back.
+- **Creation cannot reach it.** A brand new project or task names no graph, so `create_project` and
+  `create_task` behave exactly as they did before the column existed.
 
 ---
 
@@ -201,7 +230,8 @@ the context that consumes it rather than on a manager.
 | `engagement_type_id` | `bigint` FK → `catalog_engagementtype` | no | — | FK index | Drives the score modifier and the workflow binding. |
 | `project_type_id` | `bigint` FK → `catalog_projecttype` | yes | `null` | FK index | Source `project_type_api`. |
 | `stage_id` | `bigint` FK → `catalog_stage` | yes | `null` | FK index | Descubrimiento / Ejecucion. |
-| `workflow_state_id` | `bigint` FK → `workflow_workflowstate` | no | — | `(is_archived, workflow_state)` | Current node. Assigned **only** by the transition service. `on_delete=PROTECT`. |
+| `workflow_state_id` | `bigint` FK → `workflow_workflowstate` | no | — | `(is_archived, workflow_state)` | Current node. Assigned **only** by the transition service, and by `assign_project_workflow` — which repoints it at the *same state code* in another graph and never at another state, so no route can reach a state no edge leads to. `on_delete=PROTECT`. |
+| `workflow_id` | `bigint` FK → `workflow_workflow` | **yes** | `null` | FK index | The lifecycle **this project** follows, when an ops lead chose one. `on_delete=PROTECT`. Null means nobody chose and the graph comes from the binding ladder below. Set, it is step 1 of that ladder and outranks the engagement type's binding. Invariant: when set it equals `workflow_state.workflow`; `Project.clean()` restates it for the admin, which is the one door that bypasses the service. |
 | `owner_id` | `bigint` FK → `accounts_user` | yes | `null` | `(owner, is_archived)` | `on_delete=SET_NULL`. Null owner is itself an operational signal. |
 | `start_date` | `date` | yes | `null` | — | Null on 9 source projects. Never backfilled. |
 | `target_date` | `date` | yes | `null` | `(target_date)` | Null on 5 source projects, and that null raises `NO_TARGET_DATE`. Never backfilled with `today()` or a sentinel. |
@@ -217,6 +247,15 @@ the context that consumes it rather than on a manager.
 There is no `status` column and no `health` column anywhere. Status is `workflow_state`; health is
 derived on read from the risk specifications, which are pure functions of this row and its tasks,
 blockers and activity ([ADR 0011](adr/0011-risk-flags-computed-on-read.md)).
+
+`workflow_id` and `workflow_state_id` are two facts, not one, and the pair carries the invariant of
+§2's step 1: `workflow_state_id` is *where the record stands* and is the enforcement truth — the
+graph that owns that node is the one whose edges `validate_transition` reads — while `workflow_id`
+records only that somebody chose it, so the ladder stops there. A reassignment writes both together
+and keeps the state **code** unchanged, which is why the pair can never disagree and why the
+operation needs no `WorkflowTransition` behind it. The detail payloads report the graph from
+`workflow_state.workflow` and the `DIRECT`/`INHERITED` tag from `workflow_id`; they do not re-run
+the ladder, because after a rebinding it would name a graph the record is not on.
 
 ### `portfolio_projectsnapshot` — the read model (CQRS-lite, `ARCHITECTURE` §8)
 
@@ -275,13 +314,25 @@ is a single indexed scan instead of a six-table join plus per-row aggregates.
 | `project_id` | `bigint` FK → `portfolio_project` | no | — | `(project, workflow_state)` | `on_delete=CASCADE`. Tasks have no life outside a project. |
 | `assignee_id` | `bigint` FK → `accounts_user` | yes | `null` | `(assignee, workflow_state)` | `on_delete=SET_NULL`. The owner-load numerator is computed from this column. |
 | `priority_id` | `bigint` FK → `catalog_priority` | no | — | FK index | `on_delete=PROTECT`. |
-| `workflow_state_id` | `bigint` FK → `workflow_workflowstate` | no | — | `(project, workflow_state)` | Assigned only by the transition service. |
+| `workflow_state_id` | `bigint` FK → `workflow_workflowstate` | no | — | `(project, workflow_state)` | Assigned only by the transition service, and by `assign_task_workflow` — which repoints it at the *same state code* in another graph and never at another state. |
+| `workflow_id` | `bigint` FK → `workflow_workflow` | **yes** | `null` | FK index | The lifecycle **this task** follows, when an ops lead chose one. `on_delete=PROTECT`. Null means nobody chose and the graph comes from the binding ladder. Set, it is step 1 of that ladder. Invariant: when set it equals `workflow_state.workflow`; `Task.clean()` restates it for the admin. |
 | `due_date` | `date` | yes | `null` | `(due_date)` | Overdue is derived from this against `now`. The source `is_overdue` string (`Si`/`No`) is not imported. |
 | `title` | `varchar(200)` | no | — | — | Also the match target for free-text dependencies. |
 | `detail` | `text` | no | `''` | — | |
 | `last_progress` | `varchar(255)` | no | `''` | — | Last recorded progress note from the source sheet. |
+| `is_archived` | `boolean` | no | `false` | `(project, is_archived)` | Soft delete ([ADR 0012](adr/0012-soft-delete-for-tasks.md)). Named after `portfolio_project.is_archived` because it is the same fact. Written only by `update_task`, through `DELETE /tasks/{code}` or `PATCH {"is_archived": false}`. |
 | `created_at` | `timestamptz` | no | `auto_now_add` | — | |
 | `updated_at` | `timestamptz` | no | `auto_now` | — | |
+
+**Removing a task never deletes the row.** `work_note.task_id` and `work_blocker.task_id` are both
+`CASCADE` and `work_taskdependency.task_id` is too, so a hard delete would take the conversation,
+the impediments and the prerequisite edges with it — and the append-only `activity_activityrecord`,
+which holds no foreign key, would be left naming a row that is gone. The scope is applied per read
+through `TaskQuerySet.active()`, never on the default manager, and three reads are deliberately
+**not** scoped: `next_code_for` (a code is never reused), `TaskDependencyQuerySet.adjacency()` /
+`.resolved()` (the graph keeps its removed nodes, or the cycle check could be tricked by
+archive-then-restore), and `Blocker.objects.for_project(...)` (a blocker on a removed task is still
+an open impediment on the project). ADR 0012 argues each one.
 
 There is not one completed task in the source (`Por hacer` 23, `En progreso` 21, `En revision` 21,
 `Bloqueada` 17). `hecha` exists in the task workflow anyway; any query that assumes a done row
@@ -724,7 +775,7 @@ outside.
 | `Blocker.task.project_id == Blocker.project_id`; same for `Note` | `backend/apps/work/services/` | A cross-row check needs a trigger. `project_id` is written by the service from the task, so a divergence requires bypassing the service, and the tests cover that path. |
 | `TaskDependency.depends_on` is in the same project as `task` | `backend/apps/work/services/`, and the fixture generator, which only matches titles within a project | Same cross-row problem; a trigger here would also fire on every seed row. |
 | The dependency graph is acyclic | `backend/apps/work/domain/` — reachability check before insert | Cycle detection is a recursive traversal. A `CHECK` cannot express it and a trigger doing a `WITH RECURSIVE` on every insert is a cost paid on 82 rows to catch a case the service already rejects. |
-| `WorkflowTransition.from_state.workflow_id == to_state.workflow_id == workflow_id` | `backend/apps/workflow/services/`, plus a model `clean()` so the admin refuses it | Cross-row again. The admin is the realistic entry point for a bad edge, and `clean()` catches it there with a readable message. |
+| `WorkflowTransition.from_state.workflow_id == to_state.workflow_id == workflow_id` | `backend/apps/workflow/services/`, plus a model `clean()` so the admin refuses it | Cross-row again. The authoring routes make a cross-graph edge inexpressible — both endpoints are resolved *inside* the workflow in the path (`API.md` §2.19) — and `clean()` catches it on the admin's second door with a readable message. |
 | A project's `workflow_state` belongs to the workflow its `WorkflowBinding` resolves to | transition service | The state's workflow is two joins away. Enforcing it in the database would also block the legitimate migration path when a binding is repointed. |
 | A state change follows an active `WorkflowTransition` | transition service, raising `TransitionNotAllowed` | The legal set is a table, not a column value. This is the single rule the whole workflow design exists for; putting a weaker version of it in a `CHECK` would suggest the service check is optional. |
 | `requires_reason` / `requires_fields` on a transition | transition service, raising `ReasonRequired` / `MissingRequiredFields` | The required fields are a JSONB list read at runtime. A `CHECK` cannot dereference it. |
@@ -788,6 +839,8 @@ LIMIT 50;
 - `activity_activityrecord (actor, occurred_at DESC)` — "what did this person change".
 - `work_task (project_id, workflow_state_id)` — the detail view's task list grouped by state, and
   the per-project task counts in the rebuild.
+- `work_task (project_id, is_archived)` — the leading pair of every task read in the product: the
+  list, the board and the counts aggregate are all one project's unremoved tasks (ADR 0012).
 - `work_note (project_id, created_at DESC)` — the notes section of the same page.
 
 ### 10.3 The outbox drain claim query
@@ -870,7 +923,7 @@ They answer different questions and both are needed.
 
 `code` is identity: it is unique within a workflow, it is what a fixture and an API payload name
 (`{"to_state": "bloqueada"}`), and it is what an operator effectively chooses when adding a state
-from the admin. It is open-ended — the whole point of `ARCHITECTURE` decision 6 is that the
+on `/workflows`. It is open-ended — the whole point of `ARCHITECTURE` decision 6 is that the
 operation adds states without a deploy.
 
 `category` is semantics: a closed `TextChoices` set of five values
@@ -884,7 +937,8 @@ extend. Every business rule branches on it and never on `code`:
   `ProjectSnapshot` and every signal input uses.
 
 Without `category`, adding `en_espera_cliente` to the project workflow would require finding every
-place that lists the blocked codes. With it, the operator picks `BLOCKED` in the admin and the risk
+place that lists the blocked codes. With it, the operator picks `BLOCKED` on the workflows screen
+and the risk
 specifications, the score signals and the snapshot counts are correct on the next event, with no
 migration and no deploy. The two-column split is what makes "the operation can change without a
 deploy" true rather than aspirational.
@@ -900,8 +954,9 @@ Python.
 - One migration per logical change, descriptively named:
   `uv run python manage.py makemigrations <app> -n add_blocker_severity`. Read the generated
   file before committing it.
-- Adding a workflow state, a transition, a taxonomy row or a priority is **data**, entered in the
-  admin or shipped as a fixture. It is never a migration. A `TextChoices` addition to
+- Adding a workflow state, a transition, a taxonomy row or a priority is **data**: workflow states
+  and transitions are entered on `/workflows`, taxonomy rows in the admin, and either can ship as a
+  fixture. It is never a migration. A `TextChoices` addition to
   `WorkflowState.category`, `Blocker.kind` or `ActivityRecord.verb` **is** a migration, because
   those are structural.
 - A new priority signal ships as a new `PriorityPolicy` row with a new `version`, not as an edit to

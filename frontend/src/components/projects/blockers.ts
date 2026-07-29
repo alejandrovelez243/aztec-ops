@@ -27,8 +27,9 @@ import { cloneTemplate, readString, setField, setPending } from "./dom";
 import { formatInstant } from "./format";
 import { blockerKindLabel, failureCopy } from "./messages";
 import { blockerMeta, resolvedBlockerMeta } from "./presentation";
+import { askBlocker } from "./raise-blocker-dialog";
 import { markEvent } from "./stale";
-import type { Blocker, BlockerKind } from "../../lib/api/domain";
+import type { Blocker } from "../../lib/api/domain";
 
 /** Topics that change what this panel shows. */
 const WATCHED: readonly Topic[] = ["blocker.raised", "blocker.resolved"];
@@ -48,7 +49,6 @@ export function mountBlockers(root: HTMLElement): () => void {
   const resolveForm = root.querySelector<HTMLFormElement>(
     "[data-resolve-form]",
   );
-  const raiseForm = root.querySelector<HTMLFormElement>("[data-raise-form]");
 
   /** Which blocker the open dialog is about; the numeric key the API wants. */
   let target: number | null = null;
@@ -59,6 +59,10 @@ export function mountBlockers(root: HTMLElement): () => void {
       const element = event.target;
       if (!(element instanceof Element)) return;
 
+      if (element.closest("[data-action='open-raise']") !== null) {
+        void raise(root, code);
+        return;
+      }
       if (element.closest("[data-action='close-resolve']") !== null) {
         dialog?.close();
         target = null;
@@ -97,15 +101,6 @@ export function mountBlockers(root: HTMLElement): () => void {
       const id = target;
       target = null;
       void resolve(root, code, id, resolution, resolveForm, dialog);
-    },
-    { signal },
-  );
-
-  raiseForm?.addEventListener(
-    "submit",
-    (event) => {
-      event.preventDefault();
-      void raise(root, code, raiseForm);
     },
     { signal },
   );
@@ -158,37 +153,27 @@ async function resolve(
   });
 }
 
-/** Raises a blocker against the project. */
-async function raise(
-  root: HTMLElement,
-  code: string,
-  form: HTMLFormElement,
-): Promise<void> {
-  const data = new FormData(form);
-  const kind = String(data.get("kind") ?? "");
-  const description = String(data.get("description") ?? "").trim();
-  const errorLine = root.querySelector<HTMLElement>(
-    "[data-field='raise-error']",
+/**
+ * Asks for a blocker and raises it against the project.
+ *
+ * The kind and the description are validated inside the dialog, which is the
+ * only place the operator can still fix them; by the time this resumes, the
+ * draft is one the API accepts and the modal is gone. The in-flight state
+ * therefore lands on the button that opened it — the only control still on
+ * screen — because a surface that goes quiet after a click reads as broken.
+ */
+async function raise(root: HTMLElement, code: string): Promise<void> {
+  const draft = await askBlocker(root);
+  if (draft === null) return;
+
+  const button = root.querySelector<HTMLButtonElement>(
+    "[data-action='open-raise']",
   );
-
-  if (description === "" || kind === "") {
-    if (errorLine !== null) {
-      errorLine.hidden = false;
-      errorLine.textContent = "Elige el tipo y describe qué está detenido.";
-    }
-    return;
-  }
-  if (errorLine !== null) errorLine.hidden = true;
-
-  const button = form.querySelector<HTMLButtonElement>("[data-action='raise']");
   if (button !== null) setPending(button, true);
 
-  // The select is populated from the generated `BlockerKind` union, so its
-  // values are the four the API accepts; an unknown one is refused by the
-  // server with a typed validation error rather than guessed at here.
   const result = await postProjectBlocker(code, {
-    kind: toBlockerKind(kind),
-    description,
+    kind: draft.kind,
+    description: draft.description,
   });
 
   if (button !== null) setPending(button, false);
@@ -198,27 +183,12 @@ async function raise(
     return;
   }
 
-  form.reset();
   await refresh(root, code);
   toast({
     kind: "success",
     title: "Bloqueo registrado",
     detail: "Aparece en el panel y pesa en la prioridad del proyecto.",
   });
-}
-
-/** Narrows the select's value onto the wire union without asserting it. */
-function toBlockerKind(value: string): BlockerKind {
-  switch (value) {
-    case "ACCESS":
-      return "ACCESS";
-    case "DECISION":
-      return "DECISION";
-    case "TECHNICAL":
-      return "TECHNICAL";
-    default:
-      return "EXTERNAL_DEPENDENCY";
-  }
 }
 
 /** Re-reads the project and rebuilds both lists from the panel's templates. */

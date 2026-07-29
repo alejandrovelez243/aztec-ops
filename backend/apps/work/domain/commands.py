@@ -132,6 +132,18 @@ class UpdateTaskCommand(WorkCommand):
     ``workflow_state`` is deliberately absent: a state change goes through
     ``transition_task`` and the workflow app's transition service, never through a field
     assignment (``CLAUDE.md`` rule 2). Only the fields present in the payload are touched.
+
+    ``is_archived`` carries both directions of a soft delete (ADR 0012), exactly as
+    ``UpdateMemberCommand.is_active`` carries retire and restore. ``DELETE /tasks/{code}``
+    builds this command with ``is_archived=True`` rather than reaching for a service of its
+    own, so removing and putting back are one code path and cannot come to disagree about
+    what else a removal touches.
+
+    ``dependencies`` is the **whole** prerequisite set, not a delta: absent leaves the edges
+    alone, and any tuple — the empty one included — replaces them. A set has no unambiguous
+    patch spelling, which is the reasoning ``TransitionUpdateIn.requires_fields`` already
+    states about its own list; a delta would additionally need "remove this one" to name an
+    edge, and an edge that is still only prose has no identity to name it by.
     """
 
     task_code: str = Field(min_length=1, max_length=16)
@@ -142,6 +154,8 @@ class UpdateTaskCommand(WorkCommand):
     priority_code: str = Field(default="", min_length=1, max_length=32)
     assignee_code: str | None = None
     due_date: date | None = None
+    is_archived: bool | None = None
+    dependencies: tuple[DependencySpec, ...] | None = None
 
 
 class TransitionTaskCommand(WorkCommand):

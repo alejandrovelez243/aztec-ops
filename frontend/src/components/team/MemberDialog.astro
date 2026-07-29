@@ -14,7 +14,13 @@
  * Field errors are rendered from the API's `details.fields`, never guessed here — the server
  * decides that a role code is unknown or a capacity out of range, and a second opinion in the
  * browser is a rule that goes stale the day the backend's changes.
+ *
+ * Rol is a `MenuSelect`, never a `<select>` (`FRONTEND.md` §10): the native popup is the
+ * operating system's, so it lands as a grey system list inside a paper dialog. It also means the
+ * role is not a form control — `form.reset()` cannot reach it and `FormData` cannot read it, so
+ * the island writes and reads its `data-value` instead.
  */
+import MenuSelect from "../ui/MenuSelect.astro";
 import type { TaxonomyRef } from "../../lib/api/domain";
 
 export interface Props {
@@ -23,6 +29,11 @@ export interface Props {
 }
 
 const { roles } = Astro.props;
+
+const roleOptions = [
+  { value: "", label: "Sin rol" },
+  ...roles.map((role) => ({ value: role.code, label: role.label })),
+];
 ---
 
 <dialog class="dialog" data-member-dialog aria-labelledby="member-dialog-title">
@@ -60,14 +71,15 @@ const { roles } = Astro.props;
     </label>
 
     <div class="pair">
-      <label class="field">
-        <span class="label">Rol</span>
-        <select class="input" name="role">
-          <option value="">Sin rol</option>
-          {roles.map((role) => <option value={role.code}>{role.label}</option>)}
-        </select>
+      <div class="field">
+        <MenuSelect
+          facet="member-role"
+          label="Rol"
+          options={roleOptions}
+          value=""
+        />
         <span class="small error" data-error="role" hidden></span>
-      </label>
+      </div>
 
       <label class="field">
         <span class="label">Capacidad semanal</span>
@@ -140,12 +152,6 @@ const { roles } = Astro.props;
 
   .lead {
     color: var(--tinta-media);
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
   }
 
   /* `.field` sets `display: flex`, and an author rule beats the user agent's

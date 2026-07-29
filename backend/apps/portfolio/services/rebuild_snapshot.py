@@ -68,7 +68,9 @@ def rebuild_snapshot(
     if project is None:
         raise ProjectNotFound(project_code)
 
-    counts = Task.objects.for_project(project.pk).counts(today=now.date())
+    # Scoped to the unremoved tasks (ADR 0012): the queue ranks on these counts, so a removed task
+    # still counted here would keep a project in the overdue column for work nobody is doing.
+    counts = Task.objects.active().for_project(project.pk).counts(today=now.date())
     blockers = Blocker.objects.for_project(project.pk).open().summary()
     score = PriorityScore.objects.for_project(project.pk).first()
     override = _live_override(project_id=project.pk, now=now)

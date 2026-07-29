@@ -117,13 +117,33 @@ class WorkflowManager(_WorkflowManagerBase["Workflow"]):
     `Manager.from_queryset` exists for.
     """
 
-    def resolve(self, *, applies_to: str, engagement_type_id: int | None = None) -> "Workflow":
+    def resolve(
+        self,
+        *,
+        applies_to: str,
+        engagement_type_id: int | None = None,
+        assigned: "Workflow | None" = None,
+    ) -> "Workflow":
         """The workflow an aggregate of this kind and engagement type follows (DATA_MODEL §2).
 
-        Resolution order, most specific first: the active binding for that engagement type, then
-        the binding whose `engagement_type` is null (the per-kind default binding), then
-        `is_default` on this table. That order is what lets a Diagnostico run a shorter lifecycle
-        than a recurring maintenance engagement by inserting one row.
+        Resolution order, most specific first:
+
+        1. **the graph the record itself names** — `Project.workflow` / `Task.workflow`, passed in
+           as `assigned`. One record can run a lifecycle nothing else runs, which is what makes an
+           exceptional engagement configurable rather than a reason to fork an engagement type;
+        2. the active binding for that engagement type;
+        3. the binding whose `engagement_type` is null — the per-kind default binding;
+        4. `is_default` on this table.
+
+        Steps 2 to 4 are what let a Diagnostico run a shorter lifecycle than a recurring maintenance
+        engagement by inserting one row; step 1 is what lets *one* Diagnostico differ from the rest
+        without touching the engagement type every other project shares.
+
+        A record's own graph wins even when it is retired, deliberately and for the same reason a
+        retired *state* keeps resolving for whoever stands on it: retirement stops a lifecycle being
+        offered to new work, and a record already inside one is not new work. Refusing arrivals is
+        :class:`~apps.workflow.domain.errors.WorkflowRetired`, raised where a record is *moved* into
+        a graph, not here where an existing placement is read back.
 
         Materialises: it answers with a single row and ends the chain.
 
@@ -131,6 +151,9 @@ class WorkflowManager(_WorkflowManagerBase["Workflow"]):
             applies_to: `AppliesTo` value — `PROJECT` or `TASK`.
             engagement_type_id: `catalog.EngagementType` primary key, or `None` to ask only for the
                 per-kind default.
+            assigned: The graph the record carries in its own nullable `workflow` column, or `None`
+                when it carries none. `None` is the common case and means "fall through to the
+                bindings"; it is a value, not a flag, because that is exactly what the column holds.
 
         Returns:
             The active workflow to bind the aggregate to.
@@ -138,6 +161,9 @@ class WorkflowManager(_WorkflowManagerBase["Workflow"]):
         Raises:
             WorkflowNotConfigured: Neither a binding nor a default answers for this entity kind.
         """
+        if assigned is not None:
+            return assigned
+
         bindings = list(
             WorkflowBinding.objects.active()
             .for_kind(applies_to)
@@ -261,6 +287,19 @@ class WorkflowStateQuerySet(models.QuerySet["WorkflowState"]):
     def initial(self) -> Self:
         """The entry nodes; a partial unique constraint allows at most one per workflow."""
         return self.filter(is_initial=True)
+
+    def codes(self) -> tuple[str, ...]:
+        """The slugs of the selected nodes, in the operator's order. Materialises: ends the chain.
+
+        What a refusal carries when it has to say which states *would* have worked — the same
+        service :meth:`WorkflowTransitionQuerySet.target_codes` performs for an illegal move.
+        Codes rather than rows because the caller is building an error, not rendering a board: a
+        rejection that shipped whole states would invite a client to draw a graph from an exception.
+
+        Returns:
+            ``WorkflowState.code`` for every selected node, ordered by ``Meta.ordering``.
+        """
+        return tuple(str(code) for code in self.values_list("code", flat=True))
 
     def next_order(self) -> int:
         """The ``order`` a node appended to the selected set would take. Materialises.

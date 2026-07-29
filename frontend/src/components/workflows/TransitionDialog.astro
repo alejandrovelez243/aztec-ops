@@ -1,0 +1,234 @@
+---
+/**
+ * Declaring a move between two states, and editing one.
+ *
+ * The ordered pair **is** the move's address, so on an edit the two ends are shown and not
+ * asked: repointing an arrow is withdrawing one move and declaring another — two decisions, two
+ * lines in the trail. On a create they are the first two questions, and both pickers are filled
+ * per workflow when the dialog opens, because which states exist changes while the operator
+ * works.
+ *
+ * `guard` is offered from `GET /api/v1/workflows/guards` rather than from a list written here,
+ * which is what keeps CLAUDE.md rule 8 true across the wire: a guard is one function plus one
+ * decorator on the backend, and this picker follows with no second edit. It is also the one part
+ * of a move whose outcome nothing may predict — a client cannot compute whether it will pass, so
+ * it appears only where a move is *authored*.
+ *
+ * The restore button below the error is the answer to a refusal nothing else could resolve: a
+ * withdrawn move is absent from every read, a second row for the same pair is forbidden by
+ * constraint, so `POST` can only ever answer 409 — and "ya existe" about something invisible is
+ * a dead end unless the way out is right there.
+ */
+import Icon from "../ui/Icon.astro";
+import GraphPicker from "./GraphPicker.astro";
+---
+
+<dialog class="dialog" data-move-dialog aria-labelledby="move-dialog-title">
+  <form data-move-form novalidate>
+    <h2 class="h2" id="move-dialog-title" data-field="move-dialog-title">
+      Nuevo movimiento
+    </h2>
+    <p class="small lead" data-field="move-dialog-lead">
+      Declarar un movimiento no cambia ningún registro: abre el paso desde el
+      estado de origen, y cada proyecto o tarea sigue decidiéndose por separado.
+    </p>
+
+    <div class="pair" data-field="move-ends-field">
+      <GraphPicker
+        facet="move-from"
+        label="Desde"
+        placeholder="Elige un estado"
+      />
+      <GraphPicker
+        facet="move-to"
+        label="Hacia"
+        placeholder="Elige un estado"
+      />
+    </div>
+
+    <p class="field ends" data-field="move-ends-line" hidden>
+      <span class="label">Movimiento</span>
+      <span class="ends-value">
+        <code class="chip chip-code" data-field="move-from-value"></code>
+        <Icon name="chevron-right" size={16} />
+        <code class="chip chip-code" data-field="move-to-value"></code>
+      </span>
+      <span class="small hint">
+        Los dos extremos son la dirección del movimiento y no se editan: para
+        repuntar la flecha, retira este movimiento y declara otro.
+      </span>
+    </p>
+
+    <label class="field">
+      <span class="label">Etiqueta</span>
+      <input
+        class="input"
+        name="label"
+        maxlength="64"
+        required
+        autocomplete="off"
+        placeholder="Ej.: Enviar a revisión"
+      />
+      <span class="small hint">
+        Es el texto del botón que verá quien mueva el registro.
+      </span>
+    </label>
+
+    <label class="check">
+      <input type="checkbox" name="requires_reason" />
+      <span>Pide un motivo escrito</span>
+    </label>
+    <p class="small hint">
+      Con esto marcado, el movimiento no se ejecuta sin una razón, y la razón
+      queda en la bitácora.
+    </p>
+
+    <label class="field">
+      <span class="label">Campos requeridos</span>
+      <input
+        class="input"
+        name="requires_fields"
+        autocomplete="off"
+        placeholder="Ej.: target_date, next_step"
+      />
+      <span class="small hint">
+        Nombres de campos del registro, separados por comas. El movimiento no se
+        ofrece mientras alguno esté vacío en ese registro.
+      </span>
+    </label>
+
+    <div class="pair">
+      <GraphPicker
+        facet="move-guard"
+        label="Condición"
+        placeholder="Sin condición"
+        hint="Una comprobación registrada en el servidor, que puede rechazar el paso."
+      />
+
+      <label class="field">
+        <span class="label">Orden</span>
+        <input
+          class="input"
+          type="number"
+          name="order"
+          min="0"
+          max="32767"
+          autocomplete="off"
+          inputmode="numeric"
+        />
+        <span class="small hint">
+          Déjalo vacío para ponerlo al final de los que salen de ese estado.
+        </span>
+      </label>
+    </div>
+
+    <p class="small error" data-field="move-error" hidden></p>
+
+    <p class="restore" data-field="move-restore" hidden>
+      <button
+        class="btn btn-secondary"
+        type="button"
+        data-action="restore-move"
+      >
+        <Icon name="refresh" size={16} />
+        Restaurar el movimiento retirado
+      </button>
+    </p>
+
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" type="button" data-action="close-dialog">
+        Cancelar
+      </button>
+      <button class="btn btn-primary" type="submit" data-action="submit-move">
+        <Icon name="check" size={16} />
+        <span data-field="move-submit">Declarar movimiento</span>
+      </button>
+    </div>
+  </form>
+</dialog>
+
+<style>
+  .dialog {
+    width: min(600px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+  }
+
+  .dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .lead {
+    color: var(--tinta-media);
+  }
+
+  .field[hidden],
+  .error[hidden],
+  .restore[hidden] {
+    display: none;
+  }
+
+  .pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+    align-items: start;
+  }
+
+  .pair[hidden] {
+    display: none;
+  }
+
+  .ends-value {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--tinta-suave);
+  }
+
+  .check {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 32px;
+    font-size: var(--text-small-size);
+  }
+
+  .check input {
+    accent-color: var(--cobalto);
+    width: 16px;
+    height: 16px;
+    flex: none;
+  }
+
+  .hint {
+    color: var(--tinta-media);
+  }
+
+  .error {
+    color: var(--rojo-ink);
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  @media (max-width: 560px) {
+    .pair {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

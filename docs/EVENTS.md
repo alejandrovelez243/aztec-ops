@@ -158,8 +158,12 @@ command center gains a row.
 ### `project.updated`
 
 **Emitted by** `backend/apps/portfolio/services/update_project.py` on any field update that is not a workflow
-transition. `workflow_state` can never appear in `changes` — state moves only through
-`project.state_changed` (`CLAUDE.md` rule 2). Version 1.
+transition, and by `backend/apps/portfolio/services/assign_project_workflow.py` when a project is
+put on a lifecycle of its own or handed back to its engagement type's (`API.md` §2.20), as
+`changes: {"workflow": {"from": "<code>", "to": "<code>"}}`. `workflow_state` can never appear in
+`changes` — state moves only through `project.state_changed` (`CLAUDE.md` rule 2), and a
+reassignment does not move the project: it keeps the state `code` it was standing on, so there is
+no before-and-after to name. Version 1.
 
 | Field | Type | Required |
 |---|---|---|
@@ -362,9 +366,12 @@ counts and owner load are on screen.
 ### `task.updated`
 
 **Emitted by** `backend/apps/work/services/update_task.py` on any field edit that is not a workflow
-transition. `workflow_state` can never appear in `changes` — state moves only through
-`task.state_changed` (`CLAUDE.md` rule 2). An edit that changes nothing emits nothing, exactly as
-`project.updated`: a no-op event teaches consumers to recompute for nothing. Version 1.
+transition, and by `backend/apps/work/services/assign_task_workflow.py` when a task is put on a
+lifecycle of its own or handed back to the inherited one (`API.md` §2.20), as
+`changes: {"workflow": {"from": "<code>", "to": "<code>"}}`. `workflow_state` can never appear in
+`changes` — state moves only through `task.state_changed` (`CLAUDE.md` rule 2), and a reassignment
+keeps the state `code` the task was standing on. An edit that changes nothing emits nothing, exactly
+as `project.updated`: a no-op event teaches consumers to recompute for nothing. Version 1.
 
 | Field | Type | Required |
 |---|---|---|
@@ -372,9 +379,15 @@ transition. `workflow_state` can never appear in `changes` — state moves only 
 | `changes` | object mapping field name → `{"from": any, "to": any}` | yes, non-empty |
 
 Keys of `changes` are model field names (`title`, `detail`, `last_progress`, `due_date`,
-`priority`, `assignee`). Values are rendered the same way as in `project.updated`: a foreign key
+`priority`, `assignee`, `workflow`). Values are rendered the same way as in `project.updated`: a foreign key
 as the referenced row's business `code`, a `Decimal` as a number, a `date` as an ISO string, and
 `null` when the field is empty — `null` and `""` are different facts.
+
+`depends_on` is the one key that is not a column: it names the task's prerequisite set, which
+`PATCH /api/v1/tasks/{code}` replaces whole, and its `from`/`to` are therefore **arrays of strings**
+— the prerequisite's task `code` when the edge resolved, the operation's own words when it did not.
+A set-valued field's honest before/after is the set; flattening it to a count or to a joined line
+would make "did this task stop waiting on PRJ-01-T02" unanswerable without re-reading the graph.
 
 **Consumed by** `priority-recalculator`, `snapshot-builder`. **SSE**: yes — a
 priority or due-date edit reorders the queue, and without this topic the score goes stale
@@ -439,6 +452,57 @@ task entering `BLOCKED` can change the whole project's health, which is visible 
     "transition": "todo__in_progress",
     "reason": null,
     "last_progress": "Reproduced the issue on the pilot tenant"
+  },
+  "version": 1
+}
+```
+
+---
+
+### `task.archive_changed`
+
+**Emitted by** `backend/apps/work/services/update_task.py` when a task is removed from the
+operation's attention (`DELETE /api/v1/tasks/{code}`) or put back
+(`PATCH {"is_archived": false}`). Version 1.
+
+**One topic for both directions**, carrying `is_archived`, rather than a `task.deleted` and a
+`task.restored`. A subscriber's question is a boolean — "does this task still count?" — and
+answering it with a topic name would force every subscription to list both and handle them
+identically, which is the shape of the bug the first time somebody adds only one of them.
+`member.activation_changed` is the same decision for the same reason.
+
+Removal is a **soft delete** ([ADR 0012](adr/0012-soft-delete-for-tasks.md)). The row, its
+dependency edges, its notes and its blockers all survive, so a consumer must never read
+`is_archived: true` as "this code no longer exists": the code is never reused, and the task can
+come back on this same topic.
+
+| Field | Type | Required |
+|---|---|---|
+| `project_code` | string | yes |
+| `title` | string | yes |
+| `is_archived` | boolean | yes |
+
+`project_code` travels so a consumer aggregates without a foreign key into `work`: the counts that
+move when a task is removed — open, overdue, urgent, blocked — are read per project.
+
+**Emitted only when the flag actually moves.** Removing an already-removed task writes nothing, so
+this topic never carries a non-change and a redelivery is the only way to see it twice.
+
+**Consumed by** `priority-recalculator`, `snapshot-builder`. **SSE**: yes — a removed task has to
+leave the board and the project's counts without a refresh.
+
+```json
+{
+  "id": "1f5a3c88-4b21-4d6e-8a70-9c2e5b7f0031",
+  "topic": "task.archive_changed",
+  "occurred_at": "2026-07-29T11:04:07Z",
+  "actor": "camila.torres",
+  "correlation_id": "1f5a3c88-4b21-4d6e-8a70-9c2e5b7f0031",
+  "entity": {"type": "task", "id": "PRJ-01-T02"},
+  "payload": {
+    "project_code": "PRJ-01",
+    "title": "Validar checklist de release con Legal",
+    "is_archived": true
   },
   "version": 1
 }
@@ -664,7 +728,7 @@ API: renaming a deployed handler replays history for it.
 
 | Handler (registry name) | Declared in | Subscribes to | What it does | Emits | Idempotency key |
 |---|---|---|---|---|---|
-| `priority-recalculator` | `apps/prioritization/handlers.py` | `project.created`, `project.updated`, `project.state_changed`, `task.created`, `task.updated`, `task.state_changed`, `blocker.raised`, `blocker.resolved`, `note.added`, `clock.ticked` | Recomputes `PriorityScore` for the affected project under the active `PriorityPolicy`, persisting `value`, `policy_version` and `breakdown` | `project.priority.recalculated`, only when value or breakdown changed | `(event.id, "priority-recalculator")` |
+| `priority-recalculator` | `apps/prioritization/handlers.py` | `project.created`, `project.updated`, `project.state_changed`, `task.created`, `task.updated`, `task.state_changed`, `task.archive_changed`, `blocker.raised`, `blocker.resolved`, `note.added`, `clock.ticked` | Recomputes `PriorityScore` for the affected project under the active `PriorityPolicy`, persisting `value`, `policy_version` and `breakdown` | `project.priority.recalculated`, only when value or breakdown changed | `(event.id, "priority-recalculator")` |
 | `snapshot-builder` | `apps/portfolio/handlers.py` | every topic except `clock.ticked` (§8 read model) | Rebuilds the `ProjectSnapshot` row for the project named by `entity.id` or `payload.project_code`: score, owner load, task and blocker counts. **Facts only** — flags and health are derived when the queue is read | nothing | `(event.id, "snapshot-builder")` |
 | `sse-fanout` | `apps/events/handlers.py` | every topic on the allowlist | `PUBLISH aztec.sse` with the envelope unchanged, for `GET /api/stream` to frame | nothing | `(event.id, "sse-fanout")` |
 

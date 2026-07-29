@@ -1,0 +1,545 @@
+---
+/**
+ * Registering a project, asked in one right-anchored sheet.
+ *
+ * A modal, for the third case `DESIGN.md` grants one beside confirmation and
+ * destructive intent: a short self-contained act, started deliberately from a
+ * button, on a surface — the whole portfolio — that has no room to carry a
+ * twelve-field form permanently. It is a full-height sheet rather than a
+ * centered card because the fields are a *sequence* an operator walks down, and
+ * a centered card that tall becomes a page pretending to be a dialog.
+ *
+ * **Every control here is one of this interface's own.** No `<select>` and no
+ * `<input type="date">`: those two widgets are drawn by the operating system, so
+ * they cannot carry a token, they render differently in every browser and their
+ * internal text is the OS locale rather than the Spanish this screen owes
+ * (`docs/standards/FRONTEND.md` §10). `MenuSelect` and `DateField` are the
+ * app's answers and are used unmodified.
+ *
+ * Every option is rendered by the server, so this dialog has **no loading arm**
+ * and cannot show an empty picker at the moment the operator needs it. What it
+ * can show is a *dead* one: an empty client directory means the trigger on the
+ * page never opens this at all, which is the page's business, not the form's.
+ */
+import DateField from "../ui/DateField.astro";
+import Icon from "../ui/Icon.astro";
+import MenuSelect from "../ui/MenuSelect.astro";
+import type { MenuOption } from "../ui/MenuSelect.astro";
+import {
+  CREATE_PROJECT_NO_NEXT_STEP_HINT,
+  CREATE_PROJECT_NO_TARGET_HINT,
+  CREATE_PROJECT_NO_VALUE_HINT,
+  CREATE_PROJECT_TEAM_FAILED,
+} from "./create-project-copy";
+import type {
+  CurrencyRef,
+  TaxonomyRef,
+  TeamLoadEntry,
+} from "../../lib/api/domain";
+
+export interface Props {
+  /** Counterparties still being delivered to; empty means the page kept the trigger dead. */
+  clients: readonly TaxonomyRef[];
+  /** Engagement types, which decide the lifecycle the project starts on. */
+  engagementTypes: readonly TaxonomyRef[];
+  /** Optional classification; an empty list simply offers "Sin tipo". */
+  projectTypes: readonly TaxonomyRef[];
+  /** Optional delivery stage; an empty list simply offers "Sin etapa". */
+  stages: readonly TaxonomyRef[];
+  /** Currencies the amount can be stated in; the first is the offered default. */
+  currencies: readonly CurrencyRef[];
+  /** The roster, for the owner picker; empty when that read failed. */
+  members: readonly TeamLoadEntry[];
+  /** True when the roster read failed, as opposed to a company of nobody. */
+  isTeamUnavailable: boolean;
+}
+
+const {
+  clients,
+  engagementTypes,
+  projectTypes,
+  stages,
+  currencies,
+  members,
+  isTeamUnavailable,
+} = Astro.props;
+
+/**
+ * The code both `DateField`s are addressed by while the project does not exist.
+ *
+ * A `DateField` is normally the editor of the row it names, and its `code` is
+ * what the delegated writer PATCHes. Here there is no row yet, so the only
+ * writer wired inside this dialog is the **local** one `create-project.ts`
+ * installs — it repaints the chip and leaves the value in the DOM until the POST
+ * carries it. No request is ever addressed to this code, which is why it is a
+ * named constant with this paragraph attached rather than a sentinel string
+ * dropped into the markup for a reader to decode.
+ */
+const DRAFT_PROJECT_CODE = "";
+
+const clientOptions: MenuOption[] = clients.map((client) => ({
+  value: client.code,
+  label: client.label,
+}));
+
+const engagementOptions: MenuOption[] = engagementTypes.map((type) => ({
+  value: type.code,
+  label: type.label,
+}));
+
+/**
+ * The roster, with the explicit absence first.
+ *
+ * "Sin responsable" is an answer, not a blank: a project nobody owns is a real
+ * operational state and the picker has to be able to say it. When the roster
+ * read failed it is also the *only* entry, and the note under the control says
+ * why — a picker with one option and no explanation reads as a broken list.
+ */
+const ownerOptions: MenuOption[] = [
+  { value: "", label: "Sin responsable" },
+  ...members.map((member) => ({ value: member.alias, label: member.label })),
+];
+
+const projectTypeOptions: MenuOption[] = [
+  { value: "", label: "Sin tipo" },
+  ...projectTypes.map((type) => ({ value: type.code, label: type.label })),
+];
+
+const stageOptions: MenuOption[] = [
+  { value: "", label: "Sin etapa" },
+  ...stages.map((stage) => ({ value: stage.code, label: stage.label })),
+];
+
+const currencyOptions: MenuOption[] = currencies.map((currency) => ({
+  value: currency.code,
+  label: currency.label,
+}));
+
+/** Defaults are the first thing the server offers, never a code written here. */
+const defaultClient = clientOptions[0]?.value ?? "";
+const defaultEngagement = engagementOptions[0]?.value ?? "";
+const defaultCurrency = currencyOptions[0]?.value ?? "";
+
+/** One dialog per page, so its ids are constants rather than per-record keys. */
+const targetHintId = "create-project-target-hint";
+const nextStepHintId = "create-project-next-step-hint";
+const valueHintId = "create-project-value-hint";
+const teamNoteId = "create-project-team-note";
+---
+
+<dialog
+  class="sheet"
+  data-create-project-dialog
+  aria-labelledby="create-project-title"
+>
+  <form data-create-project-form>
+    <div class="head">
+      <h2 class="h2" id="create-project-title">Nuevo proyecto</h2>
+      <button
+        class="btn btn-ghost btn-icon"
+        type="button"
+        data-action="close-create-project"
+        aria-label="Cerrar"
+      >
+        <Icon name="close" size={18} />
+      </button>
+    </div>
+
+    {
+      /* The order of these six fields is a decision, not a preference.
+        A project created with no next step and no target date satisfies
+        HasNoNextStep, HasNoTargetDate and IsStale the instant it exists, so it
+        lands in tomorrow morning's triage as a problem somebody has to chase —
+        created, in other words, already broken. Putting both above the fold,
+        each with the consequence written under it, is the cheapest moment in
+        the project's life to avoid that: ten seconds here against a flag that
+        outlives the week. Everything the operation can answer later lives in
+        «Más detalles» below, and nothing that raises a flag hides in there. */
+    }
+    <div class="body">
+      <label class="field">
+        <span class="label">Nombre</span>
+        <input
+          class="input"
+          type="text"
+          name="name"
+          maxlength="200"
+          required
+          autocomplete="off"
+          placeholder="Ej.: Automatización de facturación"
+        />
+      </label>
+
+      <div class="row">
+        <MenuSelect
+          facet="create-project-client"
+          label="Cliente"
+          options={clientOptions}
+          value={defaultClient}
+        />
+        <MenuSelect
+          facet="create-project-engagement"
+          label="Tipo de encargo"
+          options={engagementOptions}
+          value={defaultEngagement}
+        />
+      </div>
+
+      <div class="owner">
+        <MenuSelect
+          facet="create-project-owner"
+          label="Responsable"
+          options={ownerOptions}
+          value=""
+        />
+        {
+          isTeamUnavailable && (
+            <p class="small note" id={teamNoteId}>
+              {CREATE_PROJECT_TEAM_FAILED}
+            </p>
+          )
+        }
+      </div>
+
+      <div class="field" data-field-date="target">
+        <span class="label">Fecha objetivo</span>
+        <DateField
+          scope="project"
+          code={DRAFT_PROJECT_CODE}
+          date={null}
+          label="Fecha objetivo"
+        />
+        <p class="small note" id={targetHintId}>
+          {CREATE_PROJECT_NO_TARGET_HINT}
+        </p>
+      </div>
+
+      <label class="field">
+        <span class="label">Próximo paso</span>
+        <input
+          class="input"
+          type="text"
+          name="next_step"
+          maxlength="255"
+          autocomplete="off"
+          placeholder="Qué hay que hacer a continuación"
+          aria-describedby={nextStepHintId}
+        />
+        <span class="small note" id={nextStepHintId}>
+          {CREATE_PROJECT_NO_NEXT_STEP_HINT}
+        </span>
+      </label>
+
+      <details class="more">
+        <summary class="label">Más detalles</summary>
+
+        <div class="more-body">
+          <label class="field">
+            <span class="label">Resumen</span>
+            <input
+              class="input"
+              type="text"
+              name="summary"
+              maxlength="280"
+              autocomplete="off"
+              placeholder="Una línea que diga de qué va"
+            />
+          </label>
+
+          <div class="field" data-field-date="start">
+            <span class="label">Fecha de inicio</span>
+            <DateField
+              scope="project"
+              code={DRAFT_PROJECT_CODE}
+              date={null}
+              label="Fecha de inicio"
+            />
+          </div>
+
+          <div class="row">
+            <label class="field">
+              <span class="label">Valor de negocio</span>
+              <input
+                class="input"
+                type="text"
+                name="business_value"
+                inputmode="decimal"
+                autocomplete="off"
+                placeholder="0"
+                aria-describedby={valueHintId}
+              />
+            </label>
+            <MenuSelect
+              facet="create-project-currency"
+              label="Moneda"
+              options={currencyOptions}
+              value={defaultCurrency}
+            />
+          </div>
+          <p class="small note" id={valueHintId}>
+            {CREATE_PROJECT_NO_VALUE_HINT}
+          </p>
+
+          <div class="row">
+            <MenuSelect
+              facet="create-project-type"
+              label="Tipo de proyecto"
+              options={projectTypeOptions}
+              value=""
+            />
+            <MenuSelect
+              facet="create-project-stage"
+              label="Etapa"
+              options={stageOptions}
+              value=""
+            />
+          </div>
+
+          {
+            /* A plain `<textarea>` and not `RichText`, for one reason: that
+              component addresses an aggregate by `scope` + `code` and autosaves
+              into it, and this project has no code until the POST returns — a
+              draft would be autosaving into `PATCH /api/v1/projects/`. Nothing
+              in `RichText.astro` or `rich-text.ts` needed changing to reach that
+              conclusion, and nothing was changed. The day the editor grows a
+              draft mode that reports its Markdown through the DOM instead of
+              writing it, the swap is this element for `<RichText />` plus one
+              read in `create-project.ts` — zero island lines beyond that,
+              because the description is already sent as a plain string. */
+          }
+          <label class="field">
+            <span class="label">Descripción</span>
+            <textarea
+              class="input"
+              name="description"
+              rows="6"
+              placeholder="Contexto, alcance, supuestos…"></textarea>
+          </label>
+        </div>
+      </details>
+
+      {
+        /* The duplicate warning. It never blocks: `Project.name` is not unique
+          and a second phase for the same client legitimately shares a name, so
+          the only person who can tell a duplicate from a sequel is the one
+          reading this. */
+      }
+      <div class="warn well" data-field="create-project-duplicate" hidden>
+        <p class="small" data-field="create-project-duplicate-text"></p>
+        <div class="warn-actions">
+          <button
+            class="btn btn-ghost"
+            type="button"
+            data-action="review-duplicate"
+          >
+            Revisar
+          </button>
+          <button
+            class="btn btn-secondary"
+            type="button"
+            data-action="create-anyway"
+          >
+            Crear igualmente
+          </button>
+        </div>
+      </div>
+
+      <p class="small error" data-field="create-project-error" hidden></p>
+    </div>
+
+    <div class="foot">
+      <button
+        class="btn btn-ghost"
+        type="button"
+        data-action="close-create-project"
+      >
+        Cancelar
+      </button>
+      <button
+        class="btn btn-primary"
+        type="submit"
+        data-action="create-project"
+      >
+        Crear proyecto
+      </button>
+    </div>
+  </form>
+</dialog>
+
+<style>
+  /* A "volante": full height, anchored to the right edge, rounded only on the
+     side that faces the page. `margin: 0 0 0 auto` is what pins it there — a
+     `<dialog>` is centered by auto margins on both sides. */
+  .sheet {
+    margin: 0 0 0 auto;
+    width: min(520px, 100vw);
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    padding: 0;
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card) 0 0 var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+    overflow: hidden;
+  }
+
+  .sheet::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .sheet[open] {
+    animation: sheet-in var(--motion-panel-duration) var(--motion-panel-ease);
+  }
+
+  @keyframes sheet-in {
+    from {
+      transform: translateX(24px);
+      opacity: 0;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
+
+  /* The sheet is a column: a head that stays, a body that scrolls, a foot that
+     stays. Without the fixed rows the actions leave with the scroll and a long
+     form ends with "Crear" somewhere below the fold. */
+  form {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .head,
+  .foot {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex: none;
+    padding: var(--space-4) var(--space-5);
+    background-color: var(--carta);
+  }
+
+  .head {
+    justify-content: space-between;
+    border-bottom: var(--border-width) solid var(--hairline);
+  }
+
+  .foot {
+    justify-content: flex-end;
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  /* `.card` carries no padding and neither does the sheet: the scrolling region
+     owns its own inset, so nothing renders flush against the border. */
+  .body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    flex: 1;
+    min-height: 0;
+    padding: var(--space-5);
+    overflow-y: auto;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--space-3);
+    align-items: end;
+  }
+
+  .owner {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .note {
+    color: var(--tinta-media);
+  }
+
+  .more summary {
+    cursor: pointer;
+    padding: var(--space-2) 0;
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .more-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    padding-top: var(--space-3);
+  }
+
+  .warn {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .warn[hidden] {
+    display: none;
+  }
+
+  .warn-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
+
+  .error {
+    color: var(--rojo-ink);
+  }
+
+  .error[hidden] {
+    display: none;
+  }
+
+  /* Below the table breakpoint the sheet is a bottom sheet: a 520px panel on a
+     360px screen is a full-screen modal with a hairline of page behind it. */
+  @media (max-width: 767px) {
+    .sheet {
+      width: 100vw;
+      height: auto;
+      max-height: 90dvh;
+      margin: auto 0 0;
+      border-radius: var(--radius-card) var(--radius-card) 0 0;
+    }
+
+    .sheet[open] {
+      animation-name: sheet-up;
+    }
+
+    @keyframes sheet-up {
+      from {
+        transform: translateY(24px);
+        opacity: 0;
+      }
+      to {
+        transform: none;
+        opacity: 1;
+      }
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sheet[open] {
+      animation: sheet-fade var(--motion-micro-duration) linear;
+    }
+
+    @keyframes sheet-fade {
+      from {
+        opacity: 0;
+      }
+      to {
+        opacity: 1;
+      }
+    }
+  }
+</style>

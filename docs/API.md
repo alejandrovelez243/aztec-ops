@@ -121,9 +121,9 @@ object-level "only your own" rules, and there should not be: a colleague must be
 project while its owner is on holiday. "My tickets" is a **filter** — `?assignee=camila.torres` on
 the task list, `?owner=` on the queue — exactly as it is in Jira. A filter, never a restriction.
 
-**Level 2 — ops lead.** Two capabilities. The first overrules the engine rather than feeding it;
-the second decides who is in the operation at all, which is upstream of everything the engine
-ranks:
+**Level 2 — ops lead.** Three capabilities, and each one is upstream of the work rather than part
+of it: the first overrules the engine rather than feeding it, the second decides who is in the
+operation at all, and the third shapes the lifecycles every record then has to obey.
 
 | Route | Why it is gated |
 |---|---|
@@ -133,8 +133,14 @@ ranks:
 | `POST` / `PATCH` / `DELETE /team/members{,/…}` | Who is on the roster, and what capacity they are judged against — the divisor of every `OWNER_OVERLOADED` flag. |
 | `POST /team/members/{code}/password` | Replacing somebody else's credential. |
 | `POST /catalog/roles`, `PATCH /catalog/roles/{code}` | The one taxonomy writable outside `/admin/` (§2.16). |
+| `POST` / `PATCH` / `DELETE /workflows/…` | Authoring a lifecycle changes what everybody else may do with every record on it (§2.19). |
+| `PUT` / `DELETE /tasks/{code}/workflow` | Which lifecycle one task follows (§2.20). |
 
-The 403 names which of the two was refused in `details.action`, so an operator who pressed
+Deliberately **not** gated: `PUT`/`DELETE /projects/{code}/workflow`. Putting one project on an
+existing lifecycle is reachable anyway by editing its `engagement_type` through §2.4, which is any
+member's — so gating one of the two doors protected nothing. §2.20 argues it in full.
+
+The 403 names which of the three was refused in `details.action`, so an operator who pressed
 "Añadir persona" is not told they lack permission to override a ranking.
 
 An ops lead is `accounts.User.is_staff`. **Why that and not the `role` foreign key:** `catalog.Role`
@@ -213,7 +219,12 @@ an index. An unknown flag code matches nothing rather than erroring.
 | `q` | str | Case-insensitive substring over `code`, `name`, `client.alias`. |
 
 Task-list filters: `assignee`, `priority` (`Priority.code`), `state`, `state_category`,
-`is_overdue` (bool, derived from `due_date`, never from a stored flag), `q`.
+`is_overdue` (bool, derived from `due_date`, never from a stored flag), `is_archived`, `q`.
+
+`is_archived` on a task list is the **scope**, not a facet, and it works exactly as it does on the
+project surfaces: it defaults to `false`, and `true` returns the removed tasks *instead of* the
+live ones rather than in addition to them ([ADR 0012](adr/0012-soft-delete-for-tasks.md)). It is
+the only way back to a removed task, and therefore the read the restore control is built on.
 
 Ordering is a single `order_by` param taking a signed field name from a per-endpoint allowlist.
 `-` means descending. Anything outside the allowlist is `422`. Ordering is always stabilised by
@@ -404,9 +415,15 @@ Response `200: ProjectDetailOut` = every field of `QueueItemOut` plus:
 tasks: TaskOut[]                 # all non-archived tasks, ordered by priority weight then due_date
 blockers: BlockerOut[]           # open first, then resolved, newest first
 transitions: Transition[]        # the legal transitions from the current state, for this workflow
+workflow: WorkflowRef            # {code, name, source: "DIRECT"|"INHERITED"} — §2.20
+notes: NoteOut[]                 # the project's comments, newest first, up to 100
 summary: str | null
 start_date: date | null
 is_archived: bool
+```
+
+```
+NoteOut { id: int, code: str, body: str, author: str, created_at: datetime, task_code: str | null }
 ```
 
 ```json
@@ -462,6 +479,12 @@ is_archived: bool
      "label": "Pasar a revision", "requires_reason": false, "requires_fields": ["next_step"]},
     {"to_state": {"code": "pausado", "label": "Pausado", "category": "BACKLOG", "color": "#8B8D98"},
      "label": "Pausar", "requires_reason": true, "requires_fields": []}
+  ],
+  "notes": [
+    {"id": 391, "code": "NOTE-0391", "body": "Accesos solicitados al equipo legal; respuesta esperada el lunes.",
+     "author": "camila", "created_at": "2026-07-28T10:04:00Z", "task_code": null},
+    {"id": 388, "code": "NOTE-0388", "body": "El cliente confirmo el alcance del piloto.",
+     "author": "daniel", "created_at": "2026-07-27T16:20:00Z", "task_code": "PRJ-01-T02"}
   ]
 }
 ```
@@ -470,7 +493,41 @@ is_archived: bool
 state codes and never guesses legality. A `requires_fields` entry that is currently empty on the
 project means the button renders disabled with the field named.
 
+`notes` carries the project's comments newest first, capped at 100 — a ceiling, not a page, so the
+panel never needs a second request to learn there is no second page. It **includes the notes
+written against this project's tasks** (`task_code` names the task; `null` means the note was
+written against the project itself), because `project` is copied onto a task note when it is
+written and the `note.added` envelope names the project either way — a project-only read would make
+a note that had appeared live disappear on reload. `author` is a bare string, not an `ActorRef`: it
+is a denormalized code that outlives its author's row and can be `system`. An empty array means the
+project has no commentary. Notes travel inside the detail rather than behind their own read for the
+same reason `tasks` and `blockers` do: two reads can straddle a write, and the second request is
+the one that fails after the first has already painted.
+
 Errors: `404 not_found`.
+
+### 2.2.1 `GET /api/v1/clients` — the counterparties a project can be registered against
+
+Authentication: any member. Query: none.
+
+```json
+{"items": [{"code": "atlas-foods", "label": "Atlas Foods", "color": null}]}
+```
+
+Each entry is the same `{code, label, color}` reference shape as a taxonomy value (§1.6). A client
+is not a taxonomy row, but on the wire it answers the same question — which of these do I choose —
+and a fourth reference shape would be one more thing the frontend has to learn for no gain.
+
+**Why here and not on `GET /api/v1/catalog`.** `Client` is a portfolio aggregate. The catalog is
+the operator-editable *vocabulary*; a counterparty is a party. Publishing it from §2.17 would make
+the catalog context read a model another context owns (ARCHITECTURE §3.3).
+
+Retired counterparties (`is_active = false`) are absent, for the reason §2.17 gives: retirement
+exists to take a value out of the pickers, so serving one would let an operator choose it again.
+The projects already pointing at a retired client keep resolving through their foreign key.
+
+An `{items: [...]}` object rather than a bare array, so the endpoint can grow a sibling key without
+becoming a breaking change for a client that parsed the top level as a list.
 
 ### 2.3 `POST /api/v1/projects` — create a project
 
@@ -478,18 +535,23 @@ Authentication: any member. Body `ProjectCreateIn`:
 
 ```
 name: str                       # required, 1..200
-client: str                     # required, Client.alias
+client: str                     # required, Client.code — see GET /api/v1/clients (§2.2.1)
 engagement_type: str            # required, EngagementType.code
-project_type: str               # required, ProjectType.code
-stage: str                      # required, Stage.code
-owner: str                      # required, accounts.User.code
+project_type: str | null        # ProjectType.code
+stage: str | null               # Stage.code
+owner: str | null               # accounts.User.code
 start_date: date | null
 target_date: date | null
 business_value: int             # >= 0
 currency: str                   # Currency.code (ISO-4217), default "USD"
-summary: str | null
-next_step: str | null
+summary: str                    # one line, default ""
+description: str                # long-form Markdown, default ""
+next_step: str                  # default ""
 ```
+
+`description` is Markdown and is stored as Markdown, never as HTML — the editor that writes it
+disables HTML pass-through, which is the sanitization boundary. It is the empty string when absent,
+not null: a project without a description has an empty document, not a missing one.
 
 `code` is **not** accepted; the service allocates the next `PRJ-NN`. `workflow_state` is not
 accepted either — the project starts in the `is_initial` state of the workflow that
@@ -520,6 +582,10 @@ fields are untouched, explicit `null` clears a nullable field.
 
 `workflow_state`, `health`, `score` and `code` are rejected with `422 validation_error`. State
 moves through §2.5 only; health and score are derived, never written.
+
+`description` is updatable here and is **not** one of the nullable fields: the column is NOT NULL
+with an empty default, so clearing a description is sending `""`. An explicit `null` is ignored
+rather than turned into an empty string that would look like a deliberate blanking.
 
 Response `200: ProjectDetailOut`. Emits one `ActivityRecord` per meaningful changed field
 (`OWNER_CHANGED`, `NEXT_STEP_SET`, otherwise a generic update record) and topic
@@ -630,6 +696,9 @@ Response `200: Paginated[TaskOut]`, `TaskOut` as shown in §2.2.
 `is_overdue` is derived from `due_date` against server time. The dataset's `Si`/`No` column is
 not imported and is not part of this contract.
 
+Removed tasks are absent from both `items` and `count`. `?is_archived=true` returns them instead
+(§1.4), each carrying `is_archived: true`, which is the screen a task is restored from.
+
 ### 2.8 `POST /api/v1/projects/{code}/tasks` — create a task
 
 Authentication: any member. Body:
@@ -655,7 +724,105 @@ Response `201: TaskOut`. Emits `ActivityRecord(verb=TASK_ADDED)` on the project 
 ```
 
 Errors: `422 validation_error` — unknown `priority`, `depends_on` referencing a task in another
-project, or a dependency cycle (`details.fields.depends_on`).
+project, or a dependency cycle (`details.fields.depends_on`). `404 not_found` — a `depends_on`
+naming a task that was removed: a new task may not be made to wait on work nothing will ever move.
+
+### 2.8.1 `GET /api/v1/tasks/{code}` — one task, whole
+
+Authentication: any member. No query parameters.
+
+Response `200: TaskDetailOut` — the task's own fields plus `project` (`{code, name}`),
+`dependencies`, **`transitions`**, `workflow` and `notes` (its own comments, newest first, up to
+100). `transitions` is the only source of the state buttons on the task screen and is read from
+`WorkflowTransition`, the same table §2.8.3's transition route validates against, so the two can
+never disagree. An empty `transitions` means the task sits in a terminal state.
+
+`workflow` is `{code, name, source: "DIRECT"|"INHERITED"}` — the lifecycle this task follows and
+whether an ops lead chose it (§2.20). Two tasks of one project may legitimately follow different
+graphs, so the screen has to be able to say why the buttons differ from the task beside it.
+
+`notes` travels inside rather than behind a second route: a screen that needs two requests to
+render is two chances to render half a page, and two reads can straddle a write.
+
+Errors: `404 not_found` — the code names no task, **or names one that was removed**. A removed
+task has no screen and no legal moves ([ADR 0012](adr/0012-soft-delete-for-tasks.md)); it is
+reached through `GET /projects/{code}/tasks?is_archived=true`.
+
+### 2.8.2 `PATCH /api/v1/tasks/{code}` — edit a task
+
+Authentication: any member. Body — every field optional, absent means untouched, explicit `null`
+clears:
+
+```
+title: str
+detail: str
+description: str
+last_progress: str
+priority: str            # Priority.code
+assignee: str | null     # accounts.User.code; null unassigns
+due_date: date | null
+is_archived: bool        # false restores a removed task — see §2.8.3
+depends_on: [str] | null # the WHOLE prerequisite set; the list replaces it, [] clears it
+```
+
+`workflow_state` is not a field of this payload: a state moves through §2.9 and nowhere else.
+Neither is `is_overdue`, which is derived. `null` is accepted only where the column is nullable —
+sending `null` for `title`, `detail`, `last_progress` or `priority` is a `422`.
+
+`depends_on` is the one field that is **not** a patch of a scalar: it is a set, sent whole, and the
+list it carries becomes the task's entire prerequisite set — entries not re-sent are removed, and
+`[]` leaves the task waiting on nothing. Patching one entry of a list has no unambiguous spelling,
+which is the same reasoning §2.19 gives for `requires_fields`, and here it is stronger: an edge that
+is still only prose has no identifier a delta could name it by. Absent leaves the edges alone, and
+`null` means the same as absent since `[]` already says "clear". Each entry is read exactly as in
+§2.8 — a task code of the same project resolves to a real edge, anything else is kept verbatim as
+the operation's own words. Re-sending an edge the task already has keeps its row, so an edit that
+only adds a prerequisite does not restart the clock on the others.
+
+Response `200: TaskDetailOut`, the whole detail rather than the changed fields, because the screen
+that issued the edit is the screen that has to redraw. It is read back **unscoped**: a `PATCH`
+that just moved `is_archived` in either direction returns the task as it now stands, never a 404.
+
+Moving `priority` or `assignee` emits `ActivityRecord(verb=PRIORITY_CHANGED | OWNER_CHANGED)` on
+the task and redrawing `depends_on` emits `DEPENDENCIES_CHANGED`, whose `metadata.before` /
+`metadata.after` carry the full lists; a text or date edit emits none, on purpose. Any real change
+emits topic `task.updated` naming every field that moved, with `changes.depends_on` carrying the two
+lists rather than two scalars. Moving `is_archived` emits `task.archive_changed` **instead of**
+carrying it inside `task.updated`'s `changes`, and a request doing both emits both.
+
+Errors: `404 not_found` — unknown task code, unknown `priority`, unknown `assignee`, or a
+`depends_on` code naming a task that does not exist or was removed. `409 conflicting_state` — a
+`depends_on` entry that would close a loop in the project's dependency graph, checked against the
+graph **as it would stand after the replacement**. `422 validation_error` — an empty `title` or
+`priority`, or a `depends_on` entry naming a task of another project.
+
+### 2.8.3 `DELETE /api/v1/tasks/{code}` — remove a task
+
+Authentication: any member. No body.
+
+Response `204`, no content. The effect is `is_archived = true`, not a row deletion
+([ADR 0012](adr/0012-soft-delete-for-tasks.md)): the task keeps its code forever, its dependency
+edges still constrain the project's graph, and its notes and blockers survive. `PATCH` with
+`{"is_archived": false}` (§2.8.2) puts it back.
+
+**Idempotent.** Removing an already-removed task is the same `204`, with no second activity record
+and no second event, so a retry after a dropped response is safe.
+
+Emits `ActivityRecord(verb=TASK_REMOVED)` **on the project** — mirroring `TASK_ADDED`, because the
+project timeline is where a task appearing and disappearing reads as one story — and topic
+`task.archive_changed` with `is_archived: true`. Restoring writes `TASK_RESTORED` and the same
+topic with `is_archived: false`.
+
+Any member may remove a task, not only an ops lead: removal is reversible and fully audited, so
+gating it would stop the person who created a task by mistake from undoing it.
+
+What a removed task disappears from: the task list and its `count`, the project detail and its
+`open_tasks` / `overdue_tasks` / `blocked_tasks`, the owner-load counts, the priority signals, and
+the snapshot. What it deliberately does **not** free: its code, which is never reused; its
+dependency edges, which still close cycles; and blockers raised against it, which stay open on the
+project.
+
+Errors: `404 not_found` — the code names no task at all.
 
 ### 2.9 `POST /api/v1/tasks/{code}/transition` — transition a task
 
@@ -1036,7 +1203,8 @@ Response `200: CatalogOut`:
 
 ```
 CatalogOut {
-  engagement_types, project_types, stages, priorities, roles: TaxonomyRef[]
+  project_types, stages, priorities, roles: TaxonomyRef[]
+  engagement_types: EngagementTypeRef[]
   currencies: CurrencyRef[]
 }
 CurrencyRef {                    # TaxonomyRef plus one field
@@ -1044,6 +1212,12 @@ CurrencyRef {                    # TaxonomyRef plus one field
   label: str
   color: str | null
   minor_units: int               # 0..4 — decimal places the amount is written with
+}
+EngagementTypeRef {              # TaxonomyRef plus one field
+  code: str
+  label: str
+  color: str | null
+  weight: str                    # decimal, > 0 — the ranking multiplier (ARCHITECTURE §4.1)
 }
 ```
 
@@ -1062,6 +1236,14 @@ picker where somebody could choose it again.
 `minor_units` is the reason currencies are a taxonomy at all. It is the one field a client cannot
 derive — `28000` is `$280.00` in USD and `$28.000` in CLP — so a frontend formatting with a
 hardcoded 2 is wrong by two orders of magnitude for every zero-decimal currency.
+
+`weight` travels for the same kind of reason: it is what makes converting a project from one
+engagement type to another move it in the queue, and the dialog that asks somebody to confirm that
+has to be able to say so. The alternative is a map from `diagnostico` to `1.10` held in the
+frontend — the business enum in code hard rule 1 forbids, and wrong the day an operator edits a
+weight in the admin. It is a **string**, the way every decimal on this API travels; parse it,
+do not read it as a number off the wire. It is the multiplier the weighted signal sum is
+multiplied by, never an addend, so `1.00` is the neutral value and the database refuses `0`.
 
 **Workflow states are deliberately absent.** A state code is unique only inside its workflow, and
 the legal moves out of the state a project is actually in are `transitions` on the project detail
@@ -1086,8 +1268,20 @@ WorkflowShape {
   is_default: bool               # the fallback graph for its applies_to
   is_active: bool                # false = retired; still served, see below
   engagement_types: TaxonomyRef[]
-  states: StateRef[]             # every node, in the operator's `order`
+  states: WorkflowNode[]         # every node, in the operator's `order`
   transitions: WorkflowEdge[]    # every ACTIVE edge, grouped by source column
+}
+WorkflowNode {                   # a StateRef plus what shaping the graph needs
+  code: str                      # unique inside THIS graph only
+  label: str
+  category: "BACKLOG"|"IN_PROGRESS"|"BLOCKED"|"DONE"|"CANCELLED"
+  color: str | null
+  order: int                     # the operator's arrangement, as a number
+  is_initial: bool               # where new aggregates of this graph start
+  is_terminal: bool              # the operator marked it as an end
+  is_active: bool                # false = retired, still published (see below)
+  record_count: int              # projects + tasks currently sitting on it
+  can_retire: bool               # whether DELETE on it would succeed right now
 }
 WorkflowEdge {
   from_state: str                # WorkflowState.code of the source, inside this graph
@@ -1103,9 +1297,13 @@ WorkflowEdge {
                 "applies_to": "PROJECT", "is_default": true, "is_active": true,
                 "engagement_types": [],
                 "states": [{"code": "descubrimiento", "label": "Descubrimiento",
-                            "category": "BACKLOG", "color": "#f59e0b"},
+                            "category": "BACKLOG", "color": "#f59e0b", "order": 1,
+                            "is_initial": true, "is_terminal": false, "is_active": true,
+                            "record_count": 4, "can_retire": false},
                            {"code": "bloqueado", "label": "Bloqueado",
-                            "category": "BLOCKED", "color": "#ef4444"}],
+                            "category": "BLOCKED", "color": "#ef4444", "order": 4,
+                            "is_initial": false, "is_terminal": false, "is_active": true,
+                            "record_count": 0, "can_retire": true}],
                 "transitions": [{"from_state": "descubrimiento", "to_state": "ejecucion",
                                  "label": "Iniciar ejecucion", "requires_reason": false,
                                  "requires_fields": ["next_step"]},
@@ -1159,6 +1357,151 @@ those projects from the screen entirely.
 `engagement_types` lists the types whose active binding names this graph; empty is the common case
 and means the graph is reached as the per-kind default rather than by name. `states` is empty for a
 graph nobody has configured states for, which is an answer and not an error.
+
+**A retired node is published, flagged `is_active: false`** — the opposite treatment from a
+withdrawn edge, and the asymmetry is the argument. An edge is a *move*, so publishing one nothing
+can take would be a lie; a node is a *place*, and a record may still be standing in it, so a board
+that could not draw the column would lose those records from the screen. Clients must not offer a
+retired node as a drop target or in a picker.
+
+`record_count` and `can_retire` are what let this one document render an *editor* and not only a
+board: `can_retire` is the server's answer to "would `DELETE` on this column succeed right now"
+(it is in service and nothing occupies it), and `record_count` is the number an operator is shown
+when it would not. Neither says anything about legality — which move a *record* may make is still
+computed per record, in §2.2.
+
+### 2.19 Authoring a lifecycle — `POST/PATCH/DELETE /api/v1/workflows/...`
+
+**Every route here is ops lead only** (`User.is_ops_lead`, the same rule as §2.6 and §2.15), and
+every one of them writes an `ActivityRecord` under `entity_type: "workflow"`, `entity_id` = the
+graph's `code`. Reading (§2.18) stays open to any authenticated member: reading the shape of the
+operation is not the same permission as deciding it. The Django admin remains a second door, not the
+only one — a lifecycle reshapeable only by somebody holding an admin account is configurable by
+engineering, not by the operation.
+
+**Every write answers with the whole graph** — `200 WorkflowShape`, or `201 WorkflowShape` on a
+create — in exactly the shape §2.18 publishes. An editor that added a state gets back the
+arrangement including the `order` it did not send, the occupancy that decides which columns may now
+be retired, and the arrows a retirement withdrew; none of that is derivable from an echo of the
+request.
+
+| Route | Body | Success | Errors |
+|---|---|---|---|
+| `POST /workflows` | `{code, name, applies_to, engagement_types?}` | `201` | `409 conflicting_state` (code taken; or an engagement type already bound — `details.workflow` names the graph holding it), `422 validation_error` (`applies_to` outside `PROJECT`\|`TASK`, unknown engagement type), `403` |
+| `PATCH /workflows/{code}` | `{name?, is_active?}` | `200` | `404 not_found`, `422`, `403` |
+| `POST /workflows/{code}/states` | `{code, label, category, color?, order?}` | `201` | `404 not_found` (no such graph), `409 conflicting_state` (state code taken in this graph, retired or not), `422` (category outside the five — `details.allowed` lists them), `403` |
+| `PATCH /workflows/{code}/states/{state_code}` | `{label?, category?, color?, order?, is_active?}` | `200` | `404 not_found`, `422`, `403` |
+| `DELETE /workflows/{code}/states/{state_code}` | — | `200` | `404 not_found`, `409 conflicting_state` (records occupy it), `403` |
+| `POST /workflows/{code}/transitions` | `{from_state, to_state, label, requires_reason?, requires_fields?, guard?, order?}` | `201` | `404 not_found` (no such graph, or an endpoint is not a state **of this graph**), `409 conflicting_state` (the ordered pair already has an edge), `422` (unregistered guard), `403` |
+| `PATCH /workflows/{code}/transitions/{from}/{to}` | `{label?, requires_reason?, requires_fields?, guard?, order?, is_active?}` | `200` | `404 not_found`, `422`, `403` |
+| `DELETE /workflows/{code}/transitions/{from}/{to}` | — | `200` | `404 not_found`, `403` |
+| `GET /workflows/guards` | — | `200 str[]` | `403` |
+
+Seven things are load-bearing:
+
+* **`DELETE` retires; it never deletes.** States are `PROTECT`ed by every project and task standing
+  on them and edges are named by the trail and by every event that traversed them, so a row removed
+  underneath either would turn a readable audit into codes nothing resolves. The effect is
+  `is_active = false`, and `PATCH` with `is_active: true` is the way back. `is_active` on a `PATCH`
+  body accepts **only `true`** — retiring can be refused by records the request never looked at, and
+  a field that sometimes fails for reasons unrelated to itself is a field a form cannot explain.
+* **Retiring an occupied state is refused, and the refusal counts what is in the way.**
+  `409 conflicting_state` with
+  `details: {entity, id, workflow, current: "occupied", records, projects, tasks}` — for example
+  `"State 'ejecucion' of workflow 'project_default' still holds 14 project(s) and 0 task(s)."` A
+  record parked on a column outside the graph would have nowhere to be drawn and no move to make, so
+  the operator moves them first. `can_retire` in §2.18 is the same rule, answered before the click.
+* **Retiring a state withdraws every arrow touching it**, in and out, in the same transaction and
+  under the same `correlation_id`; the trail entry lists them in
+  `metadata.withdrawn_transitions`. An arrow into a column that left the graph is a move nothing may
+  take.
+* **Withdrawing the last move *out of* a state is allowed.** That is how a terminal state is
+  declared — nothing leaves `entregado`, so `entregado` is where the lifecycle ends. No record is
+  harmed by losing a move it had not taken.
+* **A graph stays coherent by construction.** Both endpoints of a transition are resolved *inside*
+  the workflow in the path, so an edge across two lifecycles cannot be expressed — a state code is
+  unique only inside its graph, and "a state of another graph" is answered `404`, the same as "no
+  such state". `category` must be one of the five; `guard`, if given, must be one of
+  `GET /workflows/guards`, checked at authoring time so a typo cannot sit in the graph claiming to
+  enforce a check that evaporated.
+* **`order` appends.** A state created without one goes after the last column of that graph, not to
+  position `0` in front of an arrangement somebody already made. The same holds for an edge among
+  the moves leaving its source. The first state of an empty graph becomes its entry node, because a
+  graph authored entirely from the product could otherwise hold no new work.
+* **Authoring never grants a move.** Nothing on these routes is read by the transition service,
+  which re-reads the rows every time it decides. Declaring an edge makes a move *available* from the
+  state it leaves; whether a given project or task may take it still depends on the row it sits on,
+  the fields filled in on it and the guard, and still comes from §2.2. `guard` is accepted as input
+  here and is published on **no** read — naming it would invite a client to predict an answer it
+  cannot compute.
+
+### 2.20 Which lifecycle one record follows — `PUT/DELETE /api/v1/{projects,tasks}/{code}/workflow`
+
+**Any member for a project; ops lead for a task.** Every successful write appends an
+`ActivityRecord` with verb `WORKFLOW_ASSIGNED` naming **both** graphs in `from_value`/`to_value`,
+plus a `project.updated` / `task.updated` event through the outbox.
+
+The project routes were ops-lead and are not any more. What made that untenable is that the same
+act reaches the operation by a second, unguarded door: changing a project's `engagement_type`
+through §2.4 re-resolves the binding and therefore the graph, and that field is any member's. One
+act behind two doors, one locked and one open, is not a permission model — it is a lock on the door
+nobody was using. Closing the other door instead would take the engagement type away from the
+people who own it. **Authoring a graph (§2.19) is still ops lead**: shaping a lifecycle and putting
+one record on an existing one are different acts, and only the first changes what everybody else
+can do.
+
+| Route | Body | Success | Errors |
+|---|---|---|---|
+| `PUT /projects/{code}/workflow` | `{workflow}` | `200 ProjectDetailOut` | `404 not_found` (no such project, or no such workflow), `409 conflicting_state`, `422 validation_error` |
+| `DELETE /projects/{code}/workflow` | — | `200 ProjectDetailOut` | `404`, `409`, `422` |
+| `PUT /tasks/{code}/workflow` | `{workflow}` | `200 TaskDetailOut` | `404 not_found` (no such task, or no such workflow), `409 conflicting_state`, `422 validation_error`, `403` |
+| `DELETE /tasks/{code}/workflow` | — | `200 TaskDetailOut` | `404`, `409`, `422`, `403` |
+
+`PUT` sets the assignment; `DELETE` removes it and the record inherits one again — its engagement
+type's binding, the per-kind default binding, or the default graph, in that order (`DATA_MODEL` §2).
+`DELETE` removes the *assignment*, never a workflow and never the record; the task-removal route is
+`DELETE /tasks/{code}`, one path segment up.
+
+Both details report the answer, and it is two facts rather than one:
+
+```json
+"workflow": {"code": "ciclo-corto", "name": "Ciclo corto", "source": "DIRECT"}
+```
+
+`source` is `DIRECT` when somebody chose this graph for this record and `INHERITED` when nobody
+did. The UI needs the difference: only a `DIRECT` record has anything to revert. `code`/`name` are
+always the graph that owns the state the record is standing on — the graph whose edges `transitions`
+comes from — and never the binding re-evaluated at read time, which after a rebinding would name a
+lifecycle the record is not on.
+
+Five things are load-bearing:
+
+* **It changes the graph, never the state.** The record keeps the state `code` it was standing on
+  and is repointed at that same code inside the target graph. So this route cannot reach a state no
+  edge leads to, `POST /{projects,tasks}/{code}/transition` remains the only way a record *moves*,
+  and CLAUDE.md rule 2 is untouched.
+* **An incompatible target is refused, and that is the whole decision.** When the target graph has
+  no **active** state carrying the record's current state code, the answer is
+  `409 conflicting_state` with
+  `details: {entity: "workflow_state", id, record, workflow, current_workflow, current: "incompatible", available}` —
+  for example `"PRJ-01 sits on state 'blocked', which workflow 'ciclo-corto' does not contain."`,
+  `available: ["execution", "entregado"]`. The alternative considered and rejected was letting the
+  caller name a landing state in the target: there is no edge from a node of one graph to a node of
+  another — an edge joins two states of one graph, by construction — so a landing state could be
+  validated against nothing, and the route would become an unrestricted `UPDATE workflow_state` over
+  HTTP. The operator has two honest ways forward and `available` is what makes them visible: add the
+  missing column to the target (§2.19), or move the record along its current graph to a state the
+  target does contain, then reassign.
+* **A refusal changes nothing.** No column is written, no `ActivityRecord`, no event. A record is
+  never left standing on a state its own workflow does not contain.
+* **Inheriting is checked like anything else.** `DELETE` resolves the target through the binding
+  ladder and then applies the same compatibility rule, so a record cannot be dropped back onto a
+  lifecycle with no column for where it stands.
+* **The other refusals.** `422 validation_error` with `details.fields.workflow` when the named graph
+  governs the other kind of aggregate — a project cannot follow a task lifecycle. `409` with
+  `details.current: "retired"` when the target is out of service: retirement means "no more
+  arrivals", while records already inside a retired graph stay and keep obeying it. A reassignment
+  that changes nothing is `200` and writes nothing.
 
 ## 3. `GET /api/stream` — server-sent events
 

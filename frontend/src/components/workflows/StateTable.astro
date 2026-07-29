@@ -1,0 +1,389 @@
+---
+/**
+ * Every state of one workflow as a row: the arrangement, and where it is edited from.
+ *
+ * The diagram above draws the lifecycle but cannot be the place it is shaped — it is
+ * `aria-hidden`, so a control inside it would be focus landing somewhere a screen reader
+ * refuses to describe. This table is the editable twin: one row per state, in the operator's
+ * order, carrying the four facts a card cannot show (where it sits, whether it is the entry
+ * node, whether it is still in the graph, how many records are standing on it) and the two
+ * controls that change them.
+ *
+ * **Retired states are here and nowhere else.** They are not drawn — a retired state has no
+ * arrows and cannot be occupied — but this is the only surface their restoration can be offered
+ * from, and a retirement nothing can undo from the product would be a delete wearing manners.
+ *
+ * "Retirar" renders dead rather than absent when the server says `can_retire: false`, with the
+ * occupancy named beside it (`docs/standards/FRONTEND.md` §10): a control that disappears
+ * teaches the operator that the capability does not exist, and the count *is* the instruction —
+ * move those records first.
+ */
+import EmptyState from "../ui/EmptyState.astro";
+import Icon from "../ui/Icon.astro";
+import StateTag from "./StateTag.astro";
+import type { StateRow } from "./graph";
+import { categoryLabel } from "../projects/tone";
+import { plural } from "./authoring";
+// The shared data-table grammar (`src/styles/table.css`): the card is its own scroll container,
+// the header sticks to it, rows are ruled with hairlines.
+import "../../styles/table.css";
+
+export interface Props {
+  /** Name of the workflow, for the table's own caption. */
+  name: string;
+  /** Every state, retired ones included, in the order the operator arranged them. */
+  states: readonly StateRow[];
+}
+
+const { name, states } = Astro.props;
+
+/** Column headers, also used as the stacked row's per-cell labels. */
+const COLUMNS = ["Orden", "Estado", "Categoría", "Marcas"] as const;
+
+/** What the "Retirar" button says when the server has already refused it. */
+const occupiedHint = (row: StateRow): string =>
+  `${row.recordCount} ${plural(row.recordCount, "registro")} ${row.recordCount === 1 ? "está" : "están"} en este estado`;
+---
+
+<div class="card table-wrap" data-states-card hidden={states.length === 0}>
+  <table class="data-table states">
+    <caption class="small">
+      Estados de <b lang="es" data-field="states-caption">{name}</b>: el orden
+      en que se dibujan y lo que cada uno lleva encima.
+    </caption>
+    <thead>
+      <tr>
+        {
+          COLUMNS.map((column) => (
+            <th scope="col" class="label">
+              {column}
+            </th>
+          ))
+        }
+        <th scope="col" class="label right col-actions">
+          <span class="visually-hidden">Acciones</span>
+        </th>
+      </tr>
+    </thead>
+    <tbody data-state-rows>
+      {
+        states.map((row) => (
+          <tr
+            data-state-row
+            data-code={row.state.code}
+            data-state-label={row.state.label}
+            data-category={row.state.category}
+            data-color={row.state.color ?? ""}
+            data-order={row.order}
+            data-active={String(row.isActive)}
+            data-can-retire={String(row.canRetire)}
+            data-records={row.recordCount}
+          >
+            <td data-label={COLUMNS[0]}>
+              <span class="figure" data-field="state-order">
+                {row.order}
+              </span>
+            </td>
+            <td data-label={COLUMNS[1]}>
+              <span class="named">
+                <StateTag
+                  hook="state-label"
+                  label={row.state.label}
+                  toneClass={row.toneClass}
+                  toneStyle={row.toneStyle}
+                />
+                <code class="chip chip-code" data-field="state-code">
+                  {row.state.code}
+                </code>
+              </span>
+            </td>
+            <td data-label={COLUMNS[2]} data-field="state-category">
+              {categoryLabel(row.state.category)}
+            </td>
+            <td data-label={COLUMNS[3]}>
+              <span class="marks">
+                <span
+                  class="chip tone-cielo"
+                  data-mark="initial"
+                  hidden={!row.isInitial}
+                >
+                  Entrada
+                </span>
+                <span
+                  class="chip"
+                  data-mark="final"
+                  title="Marcado como final por quien configuró el flujo"
+                  hidden={!row.isTerminal}
+                >
+                  Final
+                </span>
+                <span
+                  class="chip"
+                  data-mark="terminal"
+                  hidden={row.role !== "terminal"}
+                >
+                  Sin salida
+                </span>
+                <span
+                  class="chip"
+                  data-mark="isolated"
+                  hidden={row.role !== "isolated"}
+                >
+                  Sin movimientos
+                </span>
+                <span
+                  class="chip tone-ambar"
+                  data-mark="retired"
+                  hidden={row.isActive}
+                >
+                  Retirado
+                </span>
+                <span
+                  class="chip"
+                  data-mark="records"
+                  hidden={row.recordCount === 0}
+                >
+                  <span data-field="state-records">{row.recordCount}</span>
+                  <span data-field="state-records-noun">
+                    {plural(row.recordCount, "registro")}
+                  </span>
+                </span>
+              </span>
+            </td>
+            <td class="right" data-label="Acciones">
+              <span class="row-actions" data-wf-actions hidden>
+                <button
+                  class="btn btn-secondary btn-small"
+                  type="button"
+                  data-state-action="edit"
+                  data-focus-key={`state:${row.state.code}:edit`}
+                >
+                  <Icon name="pencil" size={14} />
+                  Editar
+                </button>
+                <button
+                  class="btn btn-secondary btn-small"
+                  type="button"
+                  data-state-action="retire"
+                  data-focus-key={`state:${row.state.code}:retire`}
+                  hidden={!row.isActive}
+                  disabled={!row.canRetire}
+                  title={row.canRetire ? undefined : occupiedHint(row)}
+                >
+                  <Icon name="trash" size={14} />
+                  Retirar
+                </button>
+                <button
+                  class="btn btn-secondary btn-small"
+                  type="button"
+                  data-state-action="restore"
+                  data-focus-key={`state:${row.state.code}:restore`}
+                  hidden={row.isActive}
+                >
+                  <Icon name="refresh" size={14} />
+                  Restaurar
+                </button>
+              </span>
+            </td>
+          </tr>
+        ))
+      }
+    </tbody>
+  </table>
+</div>
+
+<div class="card empty-card" data-states-empty hidden={states.length > 0}>
+  <EmptyState
+    scene="quiet"
+    title="Este flujo todavía no tiene estados"
+    description="Un flujo sin estados no puede recibir trabajo: el primero que añadas será el estado de entrada, donde aterriza todo lo nuevo."
+    compact
+  >
+    <span class="empty-actions" data-wf-actions hidden>
+      <button class="btn btn-primary" type="button" data-wf-action="add-state">
+        <Icon name="plus" size={16} />
+        Añadir el primer estado
+      </button>
+    </span>
+  </EmptyState>
+</div>
+
+{
+  /* The editor's hands: one state row, cloned so it keeps this component's styles. */
+}
+<template data-template="state-row">
+  <tr data-state-row>
+    <td data-label="Orden"
+      ><span class="figure" data-field="state-order"></span></td
+    >
+    <td data-label="Estado">
+      <span class="named">
+        <StateTag
+          hook="state-label"
+          label=""
+          toneClass="tone-piedra"
+          toneStyle={null}
+        />
+        <code class="chip chip-code" data-field="state-code"></code>
+      </span>
+    </td>
+    <td data-label="Categoría" data-field="state-category"></td>
+    <td data-label="Marcas">
+      <span class="marks">
+        <span class="chip tone-cielo" data-mark="initial" hidden>Entrada</span>
+        <span
+          class="chip"
+          data-mark="final"
+          title="Marcado como final por quien configuró el flujo"
+          hidden>Final</span
+        >
+        <span class="chip" data-mark="terminal" hidden>Sin salida</span>
+        <span class="chip" data-mark="isolated" hidden>Sin movimientos</span>
+        <span class="chip tone-ambar" data-mark="retired" hidden>Retirado</span>
+        <span class="chip" data-mark="records" hidden>
+          <span data-field="state-records"></span>
+          <span data-field="state-records-noun"></span>
+        </span>
+      </span>
+    </td>
+    <td class="right" data-label="Acciones">
+      <span class="row-actions" data-wf-actions hidden>
+        <button
+          class="btn btn-secondary btn-small"
+          type="button"
+          data-state-action="edit"
+        >
+          <Icon name="pencil" size={14} />
+          Editar
+        </button>
+        <button
+          class="btn btn-secondary btn-small"
+          type="button"
+          data-state-action="retire"
+        >
+          <Icon name="trash" size={14} />
+          Retirar
+        </button>
+        <button
+          class="btn btn-secondary btn-small"
+          type="button"
+          data-state-action="restore"
+          hidden
+        >
+          <Icon name="refresh" size={14} />
+          Restaurar
+        </button>
+      </span>
+    </td>
+  </tr>
+</template>
+
+<style>
+  caption {
+    padding: var(--space-3) var(--space-4);
+    text-align: left;
+    border-bottom: var(--border-width) solid var(--hairline);
+  }
+
+  .states th {
+    white-space: nowrap;
+  }
+
+  .named {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .marks {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  /* `.chip` and the action groups are inline-flex, and an author rule beats the user agent's
+     `[hidden] { display: none }` — without this every mark would render on every row. */
+  .marks .chip[hidden],
+  .row-actions[hidden],
+  .row-actions .btn[hidden],
+  .empty-actions[hidden] {
+    display: none;
+  }
+
+  .row-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
+
+  /* A row control is smaller than a page control: four of them in a cell at 40px would make the
+     table a stack of buttons with rows between them. */
+  .btn-small {
+    height: 32px;
+    padding: 0 var(--space-3);
+    font-size: var(--text-small-size);
+  }
+
+  .empty-card {
+    padding: var(--space-5);
+  }
+
+  .empty-card[hidden],
+  [data-states-card][hidden] {
+    display: none;
+  }
+
+  /* --- Below 1024px each row becomes a card (DESIGN.md §Layout) --- */
+
+  @media (max-width: 1023px) {
+    .states,
+    .states thead,
+    .states tbody,
+    .states tr,
+    .states td {
+      display: block;
+    }
+
+    /* Clipped, never `display: none`: removing the header row from the accessibility tree
+       would leave every stacked cell without its header. */
+    .states thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .states caption {
+      border-bottom: 0;
+    }
+
+    .states tbody tr {
+      padding: var(--space-3) 0;
+    }
+
+    .states td {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: var(--space-1) var(--space-3);
+      padding: var(--space-1) var(--space-4);
+      text-align: left;
+    }
+
+    .states td::before {
+      content: attr(data-label);
+      flex: none;
+      min-width: 11ch;
+      font-size: var(--text-label-size);
+      font-weight: var(--text-label-weight);
+      line-height: var(--text-label-line);
+      letter-spacing: var(--text-label-tracking);
+      text-transform: uppercase;
+      color: var(--tinta-suave);
+    }
+  }
+</style>

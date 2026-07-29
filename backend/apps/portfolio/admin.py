@@ -53,12 +53,17 @@ class ProjectAdmin(admin.ModelAdmin[Project]):
     date_hierarchy = "target_date"
     ordering = ("code",)
     actions = ("recompute_priority",)
-    readonly_fields = ("workflow_state", "created_at", "updated_at")
+    # ``workflow`` joins ``workflow_state`` in being shown and never edited here. Assigning a
+    # lifecycle decides how a record is allowed to behave, so it writes an ``ActivityRecord`` and
+    # publishes an event; an editable select would be the one path around all three. The column is
+    # displayed because "which lifecycle is this project on" is the first question an operator opens
+    # the admin to answer, and the write is ``PUT /api/v1/projects/{code}/workflow`` (API §2.20).
+    readonly_fields = ("workflow_state", "workflow", "created_at", "updated_at")
     fieldsets = (
         (None, {"fields": ("code", "name", "client", "summary")}),
         (
             "Classification",
-            {"fields": ("engagement_type", "project_type", "stage", "workflow_state")},
+            {"fields": ("engagement_type", "project_type", "stage", "workflow", "workflow_state")},
         ),
         ("Delivery", {"fields": ("owner", "start_date", "target_date", "next_step")}),
         ("Commercial", {"fields": ("business_value", "currency")}),

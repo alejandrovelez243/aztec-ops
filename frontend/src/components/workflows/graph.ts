@@ -96,6 +96,20 @@ export type ArcDirection = "forward" | "back";
  */
 export type StateRole = "connected" | "terminal" | "isolated";
 
+/**
+ * What a card says about itself when the edge set leaves it stranded; `connected` says nothing,
+ * because the arrows on the card already speak for it.
+ *
+ * Here rather than in the component because both the server's first paint and the editor's
+ * repaint write it, and two copies of the same three words is how a diagram ends up saying "sin
+ * salida" in one half and "terminal" in the other.
+ */
+export const ROLE_NOTE: Readonly<Record<StateRole, string | null>> = {
+  connected: null,
+  terminal: "sin salida",
+  isolated: "sin movimientos",
+};
+
 /** A state ready to paint: the ref plus the tone binding it renders through. */
 export interface StateChip {
   readonly state: StateRef;
@@ -103,6 +117,14 @@ export interface StateChip {
   readonly toneClass: string;
   /** Inline `--tone-solid` for `tone-data`; `null` when the class carries its own colours. */
   readonly toneStyle: string | null;
+  /**
+   * The operator's colour behind that inline style, or `null` for a semantic tone.
+   *
+   * The same fact as {@link toneStyle} in the form the *editor* needs it: an Astro attribute
+   * takes the declaration, while repainting a cloned row takes the value. Deriving one from the
+   * other by parsing a CSS string would be a second spelling of the same rule.
+   */
+  readonly toneSolid: string | null;
 }
 
 /** One state as a column of the diagram: where its card sits and what it is attached to. */
@@ -111,6 +133,33 @@ export interface NodeView extends StateChip {
   readonly x: number;
   /** Top edge of the card, in diagram coordinates. */
   readonly y: number;
+  readonly role: StateRole;
+}
+
+/**
+ * One state as the editor reads it: the chip, plus what shaping it needs.
+ *
+ * Wider than {@link NodeView} and narrower in a different direction: it carries no geometry
+ * because it is a row rather than a column, and it carries the authoring facts the diagram has
+ * no way to draw — where the operator put it, whether it is the entry node, whether it is still
+ * part of the graph, how many records are standing on it and whether it may be retired **right
+ * now**. `canRetire` is the server's answer, never derived here: a client that computed it
+ * would offer an action the API then refuses.
+ */
+export interface StateRow extends StateChip {
+  /** The operator's arrangement; what the reorder field is pre-filled with. */
+  readonly order: number;
+  /** The entry node new work is placed on; at most one per graph. */
+  readonly isInitial: boolean;
+  /** The operator marked this state as an end of the lifecycle. Descriptive. */
+  readonly isTerminal: boolean;
+  /** `false` means retired: out of the graph for new work, restorable from its row. */
+  readonly isActive: boolean;
+  /** Projects and tasks currently standing here — the reason a retirement is refused. */
+  readonly recordCount: number;
+  /** Whether `DELETE` on this state would succeed right now. */
+  readonly canRetire: boolean;
+  /** What the edge set says about it: `terminal` and `isolated` are conclusions, not flags. */
   readonly role: StateRole;
 }
 
@@ -131,6 +180,10 @@ export interface EdgeRow {
   readonly key: string;
   readonly from: StateChip;
   readonly to: StateChip;
+  /** Source state code: half of the edge's address, which is what the editor writes to. */
+  readonly fromCode: string;
+  /** Target state code: the other half. An edge *is* its endpoints, so neither is editable. */
+  readonly toCode: string;
   /** The operator's own wording for the move; rendered, never compared against. */
   readonly label: string;
   readonly requiresReason: boolean;
@@ -142,11 +195,22 @@ export interface EdgeRow {
 export interface WorkflowView {
   readonly code: string;
   readonly name: string;
+  /** `PROJECT` | `TASK`, as the wire spells it; the editor sends it back unchanged. */
+  readonly appliesTo: string;
   /** Spanish name of what the graph governs; the raw value if it is unknown. */
   readonly appliesToLabel: string;
   readonly isDefault: boolean;
   readonly isActive: boolean;
   readonly engagementTypes: readonly TaxonomyRef[];
+  /**
+   * Every state the graph owns, retired ones included, in the operator's order.
+   *
+   * The editor's list, and deliberately wider than {@link nodes}: a retired state is not part
+   * of the lifecycle and is therefore not drawn, but it is the only place its restoration can
+   * be offered from — omitting it would make a retirement irreversible from the product.
+   */
+  readonly states: readonly StateRow[];
+  /** The states the diagram draws: the active ones, in column order. */
   readonly nodes: readonly NodeView[];
   readonly arcs: readonly ArcView[];
   readonly rows: readonly EdgeRow[];
@@ -315,7 +379,12 @@ function arrowMarkerId(code: string): string {
 /** The tone binding for one state: its own colour, or its category's semantic tone. */
 function chipOf(state: StateRef): StateChip {
   const tone = stateTone(state);
-  return { state, toneClass: tone.className, toneStyle: toneStyle(tone) };
+  return {
+    state,
+    toneClass: tone.className,
+    toneStyle: toneStyle(tone),
+    toneSolid: tone.solid,
+  };
 }
 
 /**
@@ -343,15 +412,25 @@ function unknownState(code: string): StateRef {
  * written for nobody.
  */
 export function buildWorkflowView(shape: WorkflowShape): WorkflowView {
+  // Only the active states are columns. A retired state is out of the lifecycle — every arrow
+  // touching it was withdrawn when it left, and it cannot be occupied, since the retirement is
+  // refused while a record stands there — so drawing it would put a column in the picture that
+  // nothing can enter, leave or sit in. It keeps its row in the states table, which is where it
+  // is restored from.
+  const drawn = shape.states.filter((state) => state.is_active);
+
   const indexByCode = new Map<string, number>();
   const chipByCode = new Map<string, StateChip>();
-  shape.states.forEach((state, index) => {
+  drawn.forEach((state, index) => {
     indexByCode.set(state.code, index);
     chipByCode.set(state.code, chipOf(state));
   });
+  for (const state of shape.states) {
+    if (!chipByCode.has(state.code)) chipByCode.set(state.code, chipOf(state));
+  }
 
-  const outgoing = shape.states.map(() => 0);
-  const incoming = shape.states.map(() => 0);
+  const outgoing = drawn.map(() => 0);
+  const incoming = drawn.map(() => 0);
 
   const drawables: DrawableEdge[] = [];
   const rows: EdgeRow[] = [];
@@ -367,6 +446,8 @@ export function buildWorkflowView(shape: WorkflowShape): WorkflowView {
         chipByCode.get(edge.from_state) ??
         chipOf(unknownState(edge.from_state)),
       to: chipByCode.get(edge.to_state) ?? chipOf(unknownState(edge.to_state)),
+      fromCode: edge.from_state,
+      toCode: edge.to_state,
       label: edge.label,
       requiresReason: edge.requires_reason,
       requiresFields: edge.requires_fields,
@@ -466,16 +547,33 @@ export function buildWorkflowView(shape: WorkflowShape): WorkflowView {
   const nodeY = GRAPH.padding + aboveExtent;
   const bottomY = nodeY + GRAPH.nodeHeight;
 
-  const nodes: NodeView[] = shape.states.map((state, index) => {
+  const roleOf = (index: number): StateRole => {
     const out = outgoing[index] ?? 0;
     const into = incoming[index] ?? 0;
-    const role: StateRole =
-      out === 0 && into === 0
-        ? "isolated"
-        : out === 0
-          ? "terminal"
-          : "connected";
-    return { ...chipOf(state), x: columnX(index), y: nodeY, role };
+    if (out === 0 && into === 0) return "isolated";
+    return out === 0 ? "terminal" : "connected";
+  };
+
+  const nodes: NodeView[] = drawn.map((state, index) => ({
+    ...chipOf(state),
+    x: columnX(index),
+    y: nodeY,
+    role: roleOf(index),
+  }));
+
+  const states: StateRow[] = shape.states.map((state) => {
+    const index = indexByCode.get(state.code);
+    return {
+      ...chipOf(state),
+      order: state.order,
+      isInitial: state.is_initial,
+      isTerminal: state.is_terminal,
+      isActive: state.is_active,
+      recordCount: state.record_count,
+      canRetire: state.can_retire,
+      // A retired state has no column and therefore no edges to conclude anything from.
+      role: index === undefined ? "isolated" : roleOf(index),
+    };
   });
 
   const arcs: ArcView[] = [];
@@ -507,7 +605,7 @@ export function buildWorkflowView(shape: WorkflowShape): WorkflowView {
   emit(above, aboveLanes, nodeY, -1);
   emit(below, belowLanes, bottomY, 1);
 
-  const columns = shape.states.length;
+  const columns = drawn.length;
   const width =
     columns === 0
       ? GRAPH.padding * 2
@@ -518,10 +616,12 @@ export function buildWorkflowView(shape: WorkflowShape): WorkflowView {
   return {
     code: shape.code,
     name: shape.name,
+    appliesTo: shape.applies_to,
     appliesToLabel: appliesToLabel(shape.applies_to),
     isDefault: shape.is_default,
     isActive: shape.is_active,
     engagementTypes: shape.engagement_types,
+    states,
     nodes,
     arcs,
     rows,
@@ -542,4 +642,25 @@ export function buildWorkflowViews(
   catalog: WorkflowCatalog,
 ): readonly WorkflowView[] {
   return catalog.workflows.map(buildWorkflowView);
+}
+
+/**
+ * A graph with nothing in it, for the `<template>` the editor clones a new section from.
+ *
+ * Built through {@link buildWorkflowView} rather than written out as a literal, so the blank
+ * scaffold is the same shape a real graph produces — a hand-written stand-in would stop
+ * matching the moment a field was added, and the drift would only show up as a section that
+ * renders wrong the first time somebody creates a workflow.
+ */
+export function emptyWorkflowView(): WorkflowView {
+  return buildWorkflowView({
+    code: "",
+    name: "",
+    applies_to: "PROJECT",
+    is_default: false,
+    is_active: true,
+    engagement_types: [],
+    states: [],
+    transitions: [],
+  });
 }

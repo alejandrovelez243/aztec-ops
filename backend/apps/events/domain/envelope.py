@@ -28,6 +28,11 @@ TOPIC_PROJECT_PRIORITY_RECALCULATED: Final[str] = "project.priority.recalculated
 TOPIC_TASK_CREATED: Final[str] = "task.created"
 TOPIC_TASK_UPDATED: Final[str] = "task.updated"
 TOPIC_TASK_STATE_CHANGED: Final[str] = "task.state_changed"
+# Removal and restoration share one topic carrying ``is_archived``, for the same reason
+# ``member.activation_changed`` does: the subscriber's question is a boolean, and two topics would
+# make every subscription list both and handle them identically. Removal is a soft delete
+# (ADR 0012) — the row, its edges and its history survive — so this is never "the task is gone".
+TOPIC_TASK_ARCHIVE_CHANGED: Final[str] = "task.archive_changed"
 TOPIC_BLOCKER_RAISED: Final[str] = "blocker.raised"
 TOPIC_BLOCKER_RESOLVED: Final[str] = "blocker.resolved"
 TOPIC_NOTE_ADDED: Final[str] = "note.added"
@@ -50,6 +55,7 @@ ALL_TOPICS: Final[frozenset[str]] = frozenset(
         TOPIC_TASK_CREATED,
         TOPIC_TASK_UPDATED,
         TOPIC_TASK_STATE_CHANGED,
+        TOPIC_TASK_ARCHIVE_CHANGED,
         TOPIC_BLOCKER_RAISED,
         TOPIC_BLOCKER_RESOLVED,
         TOPIC_NOTE_ADDED,
