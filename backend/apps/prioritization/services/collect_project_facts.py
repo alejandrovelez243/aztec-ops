@@ -66,7 +66,10 @@ def collect_project_facts(*, project_code: str, now: datetime) -> ProjectFacts:
     if project is None:
         raise ProjectNotFound(project_code)
 
-    task_counts = Task.objects.for_project(project.pk).counts(today=now.date())
+    # Scoped to the unremoved tasks (ADR 0012). The engine ranks on these four counts, so a task
+    # an operator removed must stop pushing the score up — otherwise removing work would leave a
+    # project ranked for a backlog it no longer has.
+    task_counts = Task.objects.active().for_project(project.pk).counts(today=now.date())
     blockers = Blocker.objects.for_project(project.pk).open().summary()
     last_activity_at = _last_activity_at(project.code)
     owner_load, owner_capacity = _owner_load(project)
@@ -130,8 +133,17 @@ def _has_task_in_progress(project_id: int) -> bool:
     would put a second definition of "in progress" outside the context that owns tasks. The
     existence check stays in the database — the previous listing loaded every task of the project
     to look at the first one that matched.
+
+    Scoped to the unremoved tasks (ADR 0012), for the reason ``HasNoNextStep`` exists at all: a
+    removed task cannot be the thing anybody is currently doing, and counting one would make a
+    project look like it had a next step when nothing is moving.
     """
-    return Task.objects.for_project(project_id).in_state_category(IN_PROGRESS_CATEGORY).exists()
+    return (
+        Task.objects.active()
+        .for_project(project_id)
+        .in_state_category(IN_PROGRESS_CATEGORY)
+        .exists()
+    )
 
 
 def _last_activity_at(project_code: str) -> datetime | None:

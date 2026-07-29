@@ -6,6 +6,8 @@ database (``ARCHITECTURE`` §7). They are Pydantic models rather than dataclasse
 the same fields in an ``*Out`` class.
 """
 
+from decimal import Decimal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.shared.refs import TaxonomyRef
@@ -34,6 +36,30 @@ class CurrencyRef(TaxonomyRef):
     minor_units: int = Field(ge=0, le=MAX_MINOR_UNITS)
 
 
+class EngagementTypeRef(TaxonomyRef):
+    """One engagement type, ready to render *and* to explain what it does to the ranking.
+
+    ``TaxonomyRef`` plus the one fact a client cannot derive: the multiplier this type applies to
+    the weighted signal sum (``ARCHITECTURE`` §4.1). Extending the shared reference rather than
+    defining a parallel one keeps an engagement type renderable by the same chip component as every
+    other taxonomy — a client that only wants ``{code, label, color}`` reads exactly those.
+
+    It travels because of a sentence the product owes the operator. Converting a project from one
+    engagement type to another moves it in the priority queue, and a dialog that asks somebody to
+    confirm that without saying so is asking them to confirm something they cannot see. The
+    alternative — a map from ``diagnostico`` to ``1.10`` held in the frontend — is the business enum
+    in code that CLAUDE.md rule 1 forbids, and it would be wrong the day an operator edits a weight.
+
+    Attributes:
+        weight: Strictly positive; the database refuses zero or negative, because a zero would
+            silently erase every signal's effect rather than de-prioritizing the work.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    weight: Decimal = Field(gt=0)
+
+
 class CatalogView(BaseModel):
     """Every taxonomy the frontend renders a picker for, in one response.
 
@@ -49,7 +75,7 @@ class CatalogView(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    engagement_types: tuple[TaxonomyRef, ...] = ()
+    engagement_types: tuple[EngagementTypeRef, ...] = ()
     project_types: tuple[TaxonomyRef, ...] = ()
     stages: tuple[TaxonomyRef, ...] = ()
     priorities: tuple[TaxonomyRef, ...] = ()

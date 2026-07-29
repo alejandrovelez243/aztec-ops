@@ -18,7 +18,7 @@ from typing import ClassVar, Self
 from django.db import models
 
 from apps.catalog.domain.errors import UnknownCode
-from apps.catalog.domain.value_objects import CurrencyRef
+from apps.catalog.domain.value_objects import CurrencyRef, EngagementTypeRef
 from apps.shared.refs import TaxonomyRef
 
 #: Default multiplier for the taxonomies the prioritization engine reads. A weight of 1.00 is the
@@ -220,6 +220,26 @@ class EngagementType(TaxonomyBase):
                 condition=models.Q(weight__gt=0),
                 name="catalog_engagementtype_weight_positive",
             ),
+        )
+
+    def to_engagement_ref(self) -> EngagementTypeRef:
+        """Describe this row as the reference a client needs to *explain* a ranking effect.
+
+        Separate from :meth:`TaxonomyBase.to_ref` for the reason :meth:`Currency.to_currency_ref`
+        is: the extra field is load-bearing. Converting a project from one engagement type to
+        another moves it in the queue, and a client handed a plain ``{code, label}`` can only tell
+        the operator that by holding its own map from ``diagnostico`` to ``1.10`` — the business
+        enum in code that CLAUDE.md rule 1 forbids, and wrong the day somebody edits a weight.
+        Issues no query.
+
+        Returns:
+            The reference, with an unset color normalized to ``None``.
+        """
+        return EngagementTypeRef(
+            code=self.code,
+            label=self.label,
+            color=self.color or None,
+            weight=self.weight,
         )
 
 

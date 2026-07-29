@@ -118,9 +118,16 @@ def raise_blocker(command: RaiseBlockerCommand) -> Blocker:
 
 
 def _resolve_task(task_code: str | None, *, project_id: int, project_code: str) -> Task | None:
+    """Resolve the task an impediment is raised against, refusing one that was removed.
+
+    Scoped to the unremoved tasks (ADR 0012): nobody is going to clear a blocker on work that is
+    out of the operation's attention, and raising one there would inflate the project's blockage
+    signal for an impediment nobody can act on. Blockers raised *before* the removal are a
+    different case and stay visible — see ``BlockerQuerySet.for_project``.
+    """
     if task_code is None:
         return None
-    task = Task.objects.for_code(task_code).first()
+    task = Task.objects.active().for_code(task_code).first()
     if task is None:
         raise TaskNotFound(task_code)
     if task.project_id != project_id:

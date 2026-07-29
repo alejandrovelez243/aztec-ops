@@ -39,11 +39,18 @@ class TaskFilters(BaseModel):
     ``None`` means "do not filter". ``is_overdue`` is a *derived* facet: it compares ``due_date``
     against ``as_of`` inside the query, so it can never disagree with the ``is_overdue`` rendered
     on the rows it returns.
+
+    ``is_archived`` is the one facet that is **not** optional and defaults to ``False``: removed
+    tasks are out of the operation's attention by definition (ADR 0012), so "both at once" is not
+    an answer this endpoint offers — a list mixing them would show an operator work that no longer
+    counts toward anything the same size as work that does. ``true`` is what the restore screen
+    asks for, and it is the only way back to a removed task.
     """
 
     model_config = ConfigDict(frozen=True)
 
     project_code: str
+    is_archived: bool = False
     assignee_codes: tuple[str, ...] = ()
     priority_codes: tuple[str, ...] = ()
     state_code: str | None = None
@@ -85,8 +92,13 @@ def read_project_tasks(filters: TaskFilters, *, as_of: date) -> Page[TaskView]:
 
 
 def _matching(filters: TaskFilters, *, as_of: date) -> TaskQuerySet:
-    """Apply the facets. A facet left ``None`` or empty does not filter."""
-    tasks = Task.objects.for_project(filters.project_code)
+    """Apply the facets. A facet left ``None`` or empty does not filter.
+
+    ``is_archived`` is applied first and always, because it is the scope rather than a facet: every
+    other predicate narrows within the set of tasks the caller asked to see.
+    """
+    scoped = Task.objects.for_project(filters.project_code)
+    tasks = scoped.archived() if filters.is_archived else scoped.active()
     if filters.assignee_codes:
         tasks = tasks.filter(assignee__code__in=filters.assignee_codes)
     if filters.priority_codes:

@@ -47,13 +47,15 @@ def transition_task(command: TransitionTaskCommand) -> Task:
         The task carrying its new state.
 
     Raises:
-        TaskNotFound: ``task_code`` does not resolve.
+        TaskNotFound: ``task_code`` does not resolve, or names a task that was removed. A removed
+            task has no legal moves at all (ADR 0012): it is out of the operation's attention, and
+            answering with a state change would put work back on a board nobody is looking at.
         TransitionNotAllowed: No active edge leads from the current state to the target.
         ReasonRequired: The edge sets ``requires_reason`` and no reason was given.
         RequiredFieldMissing: A field named in ``requires_fields`` is empty on the task.
         GuardRejected: The edge's registered guard refused the move.
     """
-    task = Task.objects.locked().with_relations().for_code(command.task_code).first()
+    task = Task.objects.active().locked().with_relations().for_code(command.task_code).first()
     if task is None:
         raise TaskNotFound(command.task_code)
 

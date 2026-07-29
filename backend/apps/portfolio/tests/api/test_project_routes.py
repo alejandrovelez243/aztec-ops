@@ -12,6 +12,7 @@ are ``TransactionTestCase``.
 """
 
 import json
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from django.test import TestCase
@@ -20,7 +21,11 @@ from apps.accounts.models import User
 from apps.accounts.tests.support import bearer, make_member
 from apps.activity.models import ActivityRecord
 from apps.catalog.models import Role
+from apps.portfolio.models import Client as ClientModel
+from apps.portfolio.models import Project
+from apps.portfolio.services.read_project_detail import PROJECT_NOTE_LIMIT
 from apps.portfolio.tests.scenario import OWNER_CODE, PROJECT_CODE, PortfolioScenario
+from apps.work.models import Note, Task
 
 
 class ProjectDetailRouteTestCase(TestCase):
@@ -64,6 +69,122 @@ class ProjectDetailRouteTestCase(TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json()["code"], "authentication_required")
+
+
+class ProjectDetailNotesTestCase(TestCase):
+    """The project's commentary is *read back*, not only received over the stream.
+
+    Notes were written and persisted long before anything published them, so the panel could
+    only ever show what arrived while the page stayed open — a reload emptied it. These tests
+    pin the read: newest first, task-scoped notes included, scoped to this project, capped, and
+    an empty list that means "no commentary" rather than "we cannot show it".
+    """
+
+    scenario: PortfolioScenario
+    auth: dict[str, str]
+
+    @classmethod
+    def setUpTestData(cls) -> None:
+        cls.scenario = PortfolioScenario()
+        cls.auth = bearer(username=OWNER_CODE)
+
+    @staticmethod
+    def _note(
+        *,
+        project: Project,
+        body: str,
+        created_at: datetime,
+        task: Task | None = None,
+        author: str = OWNER_CODE,
+    ) -> Note:
+        """Write one note at a fixed instant.
+
+        ``created_at`` is ``auto_now_add``, so it is forced afterwards: two notes created in the
+        same microsecond would make "newest first" a coin toss and the ordering assertion would
+        pass or fail by scheduling.
+        """
+        note = Note.objects.create(project=project, task=task, body=body, author=author)
+        Note.objects.filter(pk=note.pk).update(created_at=created_at)
+        note.refresh_from_db()
+        return note
+
+    def _detail(self) -> dict[str, Any]:
+        response = self.client.get(f"/api/v1/projects/{PROJECT_CODE}", **self.auth)
+        self.assertEqual(response.status_code, 200)
+        body: dict[str, Any] = response.json()
+        return body
+
+    def test_a_note_written_before_the_page_opened_is_still_there_after_a_reload(self) -> None:
+        self._note(
+            project=self.scenario.project,
+            body="Accesos solicitados al equipo legal.",
+            created_at=datetime(2026, 7, 20, 9, 0, tzinfo=UTC),
+        )
+
+        notes = self._detail()["notes"]
+
+        self.assertEqual([note["body"] for note in notes], ["Accesos solicitados al equipo legal."])
+        self.assertEqual(notes[0]["author"], OWNER_CODE)
+        self.assertIsNone(notes[0]["task_code"])
+
+    def test_notes_arrive_newest_first_the_way_the_panel_stacks_them(self) -> None:
+        for day, body in ((20, "primera"), (21, "segunda"), (22, "tercera")):
+            self._note(
+                project=self.scenario.project,
+                body=body,
+                created_at=datetime(2026, 7, day, 9, 0, tzinfo=UTC),
+            )
+
+        self.assertEqual(
+            [note["body"] for note in self._detail()["notes"]],
+            ["tercera", "segunda", "primera"],
+        )
+
+    def test_a_note_written_against_a_task_belongs_to_the_project_timeline_too(self) -> None:
+        task = self.scenario.add_task(code=f"{PROJECT_CODE}-T1")
+        self._note(
+            project=self.scenario.project,
+            task=task,
+            body="Depende del proveedor.",
+            created_at=datetime(2026, 7, 23, 9, 0, tzinfo=UTC),
+        )
+
+        notes = self._detail()["notes"]
+
+        # The live half already renders this one — `note.added` names the project for a task note —
+        # so excluding it here is what would make a note disappear on reload.
+        self.assertEqual([note["body"] for note in notes], ["Depende del proveedor."])
+        self.assertEqual(notes[0]["task_code"], task.code)
+
+    def test_another_project_s_commentary_never_leaks_into_this_one(self) -> None:
+        self._note(
+            project=self.scenario.other_project,
+            body="No es de este proyecto.",
+            created_at=datetime(2026, 7, 24, 9, 0, tzinfo=UTC),
+        )
+
+        self.assertEqual(self._detail()["notes"], [])
+
+    def test_a_project_with_no_commentary_answers_with_an_empty_list_not_a_null(self) -> None:
+        body = self._detail()
+
+        self.assertIn("notes", body)
+        self.assertEqual(body["notes"], [])
+
+    def test_the_list_is_capped_so_one_project_cannot_return_an_unbounded_response(self) -> None:
+        base = datetime(2026, 7, 1, 9, 0, tzinfo=UTC)
+        for index in range(PROJECT_NOTE_LIMIT + 3):
+            self._note(
+                project=self.scenario.project,
+                body=f"nota {index}",
+                created_at=base + timedelta(minutes=index),
+            )
+
+        notes = self._detail()["notes"]
+
+        self.assertEqual(len(notes), PROJECT_NOTE_LIMIT)
+        # The cap keeps the newest, because the panel reads downwards from the most recent.
+        self.assertEqual(notes[0]["body"], f"nota {PROJECT_NOTE_LIMIT + 2}")
 
 
 class ProjectTransitionRouteTestCase(TestCase):
@@ -227,6 +348,68 @@ class ProjectWriteRouteTestCase(TestCase):
 
         self.assertIsNone(response.json()["target_date"])
 
+    def test_a_description_sent_at_creation_survives_to_the_detail(self) -> None:
+        markdown = "## Alcance\n\n- Un punto\n- Otro punto"
+
+        created = self.client.post(
+            "/api/v1/projects",
+            data=json.dumps(
+                {
+                    "name": "Descriptive project",
+                    "client": "atlas",
+                    "engagement_type": "proyecto",
+                    "description": markdown,
+                }
+            ),
+            content_type="application/json",
+            **self.auth,
+        ).json()
+
+        self.assertEqual(created["description"], markdown)
+
+    def test_patching_a_description_is_written_rather_than_silently_dropped(self) -> None:
+        """A PATCH that says 200 has to have written something.
+
+        The regression this guards: ``ProjectUpdateIn`` declared ``description`` and
+        ``_SCALAR_FIELDS`` listed it, but ``UpdateProjectCommand`` did not carry the field, so
+        pydantic's default ``extra="ignore"`` discarded it and the route answered 200 having
+        written nothing.
+        """
+        markdown = "Contexto **largo** del encargo."
+
+        response = self.client.patch(
+            f"/api/v1/projects/{PROJECT_CODE}",
+            data=json.dumps({"description": markdown}),
+            content_type="application/json",
+            **self.auth,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["description"], markdown)
+        self.assertEqual(Project.objects.get(code=PROJECT_CODE).description, markdown)
+
+    def test_an_empty_string_is_how_a_description_is_cleared(self) -> None:
+        """Clearing a description is sending the empty string, never ``null``.
+
+        ``description`` is deliberately absent from ``_CLEARABLE_FIELDS``: the column is NOT NULL
+        with an empty default, so a ``null`` is not an instruction the domain can honour.
+        """
+        self.client.patch(
+            f"/api/v1/projects/{PROJECT_CODE}",
+            data=json.dumps({"description": "Algo escrito."}),
+            content_type="application/json",
+            **self.auth,
+        )
+
+        body = self.client.patch(
+            f"/api/v1/projects/{PROJECT_CODE}",
+            data=json.dumps({"description": ""}),
+            content_type="application/json",
+            **self.auth,
+        ).json()
+
+        self.assertEqual(body["description"], "")
+
     def test_workflow_state_is_not_a_field_of_the_update_payload(self) -> None:
         self.client.patch(
             f"/api/v1/projects/{PROJECT_CODE}",
@@ -237,6 +420,32 @@ class ProjectWriteRouteTestCase(TestCase):
 
         detail = self.client.get(f"/api/v1/projects/{PROJECT_CODE}", **self.auth).json()
         self.assertEqual(detail["state"]["code"], "execution")
+
+
+class ClientDirectoryRouteTestCase(TestCase):
+    """``GET /api/v1/clients`` — the picker the create-project form cannot be drawn without."""
+
+    scenario: PortfolioScenario
+    auth: dict[str, str]
+
+    @classmethod
+    def setUpTestData(cls) -> None:
+        cls.scenario = PortfolioScenario()
+        cls.auth = bearer(username=OWNER_CODE)
+
+    def test_clients_are_delivered_as_the_reference_shape_every_picker_renders(self) -> None:
+        body = self.client.get("/api/v1/clients", **self.auth).json()
+
+        self.assertEqual(body["items"], [{"code": "atlas", "label": "Atlas Foods", "color": None}])
+
+    def test_a_retired_client_is_absent_so_nobody_can_choose_it_again(self) -> None:
+        ClientModel.objects.create(code="retirado", alias="Cliente retirado", is_active=False)
+
+        codes = [
+            item["code"] for item in self.client.get("/api/v1/clients", **self.auth).json()["items"]
+        ]
+
+        self.assertNotIn("retirado", codes)
 
 
 class TeamLoadRouteTestCase(TestCase):

@@ -170,7 +170,11 @@ def _link_dependencies(*, task: Task, dependencies: Sequence[DependencySpec]) ->
             rows.append(TaskDependency(task=task, raw_label=spec.raw_label, is_resolved=False))
             continue
 
-        target = Task.objects.for_code(spec.depends_on_code).first()
+        # Scoped to the unremoved tasks: a new task may not be made to wait on work that was
+        # removed from the operation, because nothing will ever move it and the prerequisite would
+        # never clear (ADR 0012). The *existing* edges below are read unscoped — see
+        # ``TaskDependencyQuerySet`` — so the acyclicity check still sees the whole graph.
+        target = Task.objects.active().for_code(spec.depends_on_code).first()
         if target is None:
             raise TaskNotFound(spec.depends_on_code)
         if target.project_id != task.project_id:
