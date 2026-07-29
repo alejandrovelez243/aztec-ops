@@ -1,0 +1,202 @@
+---
+import type { RailSectionModel } from "./board-model";
+import Icon from "../ui/Icon.astro";
+import ProjectCard from "./ProjectCard.astro";
+
+/**
+ * One PROJECT workflow state as a band of the rail: a labelled header over a sunken well of
+ * cards, stacked above and below the neighbouring states.
+ *
+ * The section is the only place the rendered taxonomy of a project state exists in the DOM —
+ * its label, its tone and its inline colour — which is why the runtime reads them back from
+ * `data-*` here when it patches a card's state chip or the board's header: the
+ * `project.state_changed` payload carries a state `code` and no label or colour.
+ *
+ * It renders **whether or not anybody is in it**. A state with no section is a state a card
+ * cannot be dropped into, and the operator would have no way to tell "nothing is blocked"
+ * from "blocked does not exist" — which is exactly the gap `GET /api/v1/workflows` closes.
+ *
+ * The card list is the accessibility container as well as the layout one: `role="grid"` with
+ * one `row` per card, which is what lets a card carry `aria-selected` while keeping its
+ * "Mover a…" button reachable (see `ProjectCard.astro`). The empty line and the lock chip sit
+ * *outside* the grid, because a grid may only own rows.
+ *
+ * The lock chip and the empty line are rendered here (hidden) rather than built in JS, so the
+ * copy stays in the template with the rest of the Spanish and never ships as a string literal
+ * inside the island.
+ */
+export interface Props {
+  section: RailSectionModel;
+  /** The project rendered as selected, when it happens to live in this state. */
+  selectedCode?: string | null;
+}
+
+const { section, selectedCode = null } = Astro.props;
+const { state, tone, cards } = section;
+const headingId = `rail-${state.code}`;
+---
+
+<section
+  class:list={["rsection", tone.className]}
+  style={tone.style}
+  data-column
+  data-state-code={state.code}
+  data-state-label={state.label}
+  data-state-category={state.category}
+  data-tone-class={tone.className}
+  data-tone-style={tone.style ?? ""}
+  data-drop="idle"
+  aria-labelledby={headingId}
+>
+  <header class="rsection-head">
+    <span class="rsection-rail" aria-hidden="true"></span>
+    <span class="dot" aria-hidden="true"></span>
+    <h2 class="label rsection-title" id={headingId} lang="es">{state.label}</h2>
+    <span class="chip figure rsection-count" data-column-count
+      >{cards.length}</span
+    >
+  </header>
+
+  <p class="chip rsection-lock" data-column-lock hidden role="status">
+    <Icon name="lock" size={14} />
+    <span data-column-lock-text lang="es"></span>
+  </p>
+
+  <div class="well rsection-well">
+    <div
+      class="rsection-cards"
+      data-column-body
+      role="grid"
+      aria-label={`Proyectos en ${state.label}`}
+    >
+      {
+        cards.map((card) => (
+          <ProjectCard
+            card={card}
+            stateToneClass={tone.className}
+            stateToneStyle={tone.style}
+            selected={card.code === selectedCode}
+          />
+        ))
+      }
+    </div>
+    <p
+      class="small rsection-empty"
+      data-column-empty
+      hidden={cards.length > 0}
+      lang="es"
+    >
+      Sin proyectos en este estado.
+    </p>
+  </div>
+</section>
+
+<style>
+  .rsection {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+    /* The rail is the scroller; a section is exactly as tall as its own cards, so
+       the stack reads as a column of zones rather than as equal boxes. */
+    scroll-snap-align: start;
+    transition: opacity var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .rsection-head {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+    min-height: var(--space-6);
+  }
+
+  /* The marker stripe of the wall card, at zone scale: the state's own colour,
+     3px, never a fill (DESIGN.md §Shapes — rails mark, washes cover). */
+  .rsection-rail {
+    position: absolute;
+    inset-block: var(--space-1);
+    left: 0;
+    width: var(--rail-width);
+    border-radius: var(--radius-full);
+    background-color: var(--tone-solid);
+  }
+
+  .rsection-title {
+    color: var(--tinta);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .rsection-count {
+    margin-left: auto;
+    background-color: var(--pozo);
+    color: var(--tinta-media);
+  }
+
+  .rsection-lock {
+    align-self: flex-start;
+    background-color: var(--pozo);
+    color: var(--tinta-media);
+    white-space: normal;
+  }
+
+  .rsection-lock[hidden] {
+    display: none;
+  }
+
+  .rsection-well {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    transition: box-shadow var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .rsection-cards {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .rsection-cards:empty {
+    display: none;
+  }
+
+  .rsection-empty {
+    padding: var(--space-2);
+    color: var(--tinta-suave);
+    text-align: center;
+  }
+
+  .rsection-empty[hidden] {
+    display: none;
+  }
+
+  /* --- Drag legality (DESIGN.md §Motion, "the board announces legality") --- */
+
+  /* A zone that cannot receive the card steps back instead of pretending. */
+  .rsection[data-drop="illegal"],
+  .rsection[data-drop="blocked"] {
+    opacity: 0.55;
+  }
+
+  .rsection[data-drop="legal"] .rsection-well {
+    box-shadow: inset 0 0 0 2px var(--cobalto-papel);
+  }
+
+  .rsection[data-drop="legal"][data-hover="true"] .rsection-well {
+    box-shadow: inset 0 0 0 2px var(--cobalto);
+  }
+
+  /* Below the rail's own width it becomes a horizontal strip of zones. */
+  @media (max-width: 1023px) {
+    .rsection {
+      min-width: 264px;
+      max-width: 300px;
+      flex: none;
+    }
+  }
+</style>

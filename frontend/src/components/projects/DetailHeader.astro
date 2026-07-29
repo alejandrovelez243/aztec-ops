@@ -1,0 +1,204 @@
+---
+/**
+ * The identity card of one project: what it is, whose it is, where it stands,
+ * and the legal moves out of here.
+ *
+ * The title carries `transition:name` so the card the operator clicked on
+ * `/projects` becomes this heading instead of the page cutting to it — the
+ * shared element that makes the two surfaces feel like one object being opened.
+ *
+ * Absences are named, never blank: no deadline is an ámbar "Sin fecha", and an
+ * unowned project says so instead of leaving the cell empty.
+ *
+ * Two of those facts are also *editable here*, because naming an absence and
+ * offering no cure is only half the job. The responsable is a menu over the
+ * team, and the próximo paso — the one field a risk flag actively asks for — is
+ * written in place. Both go through `PATCH /api/v1/projects/{code}` and both
+ * repaint the whole header, the transition bar and the risk list from the
+ * response, which is the project re-read after the write.
+ */
+import DateField from "../ui/DateField.astro";
+import NextStepField from "./NextStepField.astro";
+import OwnerMenu from "./OwnerMenu.astro";
+import StateChip from "./StateChip.astro";
+import TransitionBar from "./TransitionBar.astro";
+import { healthTone, taxonomyTone, toneStyle } from "./tone";
+import type { Transition } from "../../lib/api/domain";
+
+export interface Props {
+  code: string;
+  name: string;
+  /** One-line description; `null` when nobody wrote one. */
+  summary: string | null;
+  clientLabel: string;
+  ownerAlias: string | null;
+  ownerLabel: string | null;
+  engagementLabel: string;
+  engagementColor: string | null;
+  stateLabel: string;
+  stateCategory: string;
+  stateColor: string | null;
+  healthCode: string;
+  healthLabel: string;
+  targetDate: string | null;
+  /** What happens next; `null` is the `NO_NEXT_STEP` signal itself. */
+  nextStep: string | null;
+  isArchived: boolean;
+  /** The read's `updated_at`; every live patch is compared against it. */
+  updatedAt: string;
+  /** The only source of transition buttons (`docs/API.md` §2.2). */
+  transitions: readonly Transition[];
+  /** Aggregate attributes that are currently empty, from the same read. */
+  emptyFields: readonly string[];
+}
+
+const {
+  code,
+  name,
+  summary,
+  clientLabel,
+  ownerAlias,
+  ownerLabel,
+  engagementLabel,
+  engagementColor,
+  stateLabel,
+  stateCategory,
+  stateColor,
+  healthCode,
+  healthLabel,
+  targetDate,
+  nextStep,
+  isArchived,
+  updatedAt,
+  transitions,
+  emptyFields,
+} = Astro.props;
+
+const engagement = taxonomyTone(engagementColor);
+const health = healthTone(healthCode);
+---
+
+<header class="head card" data-project-header data-updated-at={updatedAt}>
+  <div class="top">
+    <span class="chip chip-code">{code}</span>
+    <StateChip label={stateLabel} category={stateCategory} color={stateColor} />
+    <span class:list={["chip", health]} data-health-chip>{healthLabel}</span>
+    {isArchived && <span class="chip tone-piedra">Archivado</span>}
+  </div>
+
+  <h1 class="h1 name" transition:name={`proj-${code}`}>{name}</h1>
+  {
+    summary !== null && summary !== "" && (
+      <p class="body-text summary">{summary}</p>
+    )
+  }
+
+  <dl class="facts">
+    <div class="fact">
+      <dt class="label">Cliente</dt>
+      <dd class="title">{clientLabel}</dd>
+    </div>
+    <div class="fact">
+      <dt class="label">Responsable</dt>
+      <dd>
+        <OwnerMenu
+          scope="project"
+          code={code}
+          alias={ownerAlias}
+          label={ownerLabel}
+        />
+      </dd>
+    </div>
+    <div class="fact">
+      <dt class="label">Tipo de contrato</dt>
+      <dd>
+        <span
+          class:list={["chip", engagement.className]}
+          style={toneStyle(engagement)}
+        >
+          {engagementLabel}
+        </span>
+      </dd>
+    </div>
+    <div class="fact">
+      <dt class="label">Fecha objetivo</dt>
+      <dd>
+        <DateField
+          scope="project"
+          code={code}
+          date={targetDate}
+          label="Fecha objetivo"
+        />
+      </dd>
+    </div>
+    <div class="fact wide">
+      <dt class="label">Próximo paso</dt>
+      <dd>
+        <NextStepField projectCode={code} nextStep={nextStep} />
+      </dd>
+    </div>
+  </dl>
+
+  <TransitionBar
+    projectCode={code}
+    transitions={transitions}
+    emptyFields={emptyFields}
+    updatedAt={updatedAt}
+  />
+</header>
+
+<script>
+  import { mountHeaderControls } from "./header-controls";
+  import { onPage } from "./island";
+
+  onPage("[data-project-header]", mountHeaderControls);
+</script>
+
+<style>
+  .head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-5);
+  }
+
+  .top {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .name {
+    margin-top: var(--space-1);
+    overflow-wrap: anywhere;
+  }
+
+  .summary {
+    color: var(--tinta-media);
+  }
+
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--space-4);
+    margin-top: var(--space-2);
+    padding-top: var(--space-4);
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .fact {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .fact.wide {
+    grid-column: 1 / -1;
+  }
+
+  dd {
+    margin: 0;
+  }
+</style>

@@ -1,383 +1,145 @@
 ---
-import OpenBlockersPanel, {
-  type BlockerLine,
-} from "../components/command-center/OpenBlockersPanel.astro";
-import NoNextStepPanel, {
-  type NoNextStepLine,
-} from "../components/command-center/NoNextStepPanel.astro";
-import OwnerLoadPanel from "../components/command-center/OwnerLoadPanel.astro";
-import PriorityQueue from "../islands/PriorityQueue.astro";
-import Shell from "../layouts/Shell.astro";
-import { getQueue, getTeamLoad } from "../lib/api/client";
-import type { QueueItem, QueuePage, TeamLoad } from "../lib/api/domain";
-import { assertNever, toViewState } from "../lib/view-state";
-import type { ViewState } from "../lib/view-state";
-
 /**
- * Command center (`/`): the full-bleed status matrix plus its server-rendered summary panels.
+ * Resumen — the landing surface (`/`), comp C "Zonas del día".
  *
- * First paint is fetched here in frontmatter (`GET /api/v1/queue`, `GET /api/v1/team/load`);
- * the `PriorityQueue` island keeps the rows live over SSE and never refetches to populate
- * itself. The panels are static server renders — they re-render on navigation, per the
- * hydration table in docs/standards/FRONTEND.md §4.
+ * The day arrives as three density zones instead of a band of hero metrics:
+ * "Atender hoy" holds the top of the queue as full cards, "Esta semana" the next
+ * band, "Radar" the rest as slim rows. Counts live in the zone headings, which
+ * is the whole reason the KPI-tile template was refused — a number nobody can
+ * act on is not a landing screen. Beside them: who is carrying the load, and the
+ * activity region the API cannot feed yet.
+ *
+ * This file is the container (`docs/standards/PATTERNS_FRONTEND.md` §5): it
+ * performs the two reads for the first paint, maps each onto the view-state
+ * union, and composes. It renders no card markup of its own — `overview/markup`
+ * is the single renderer, shared with the island, so a server-rendered zone and
+ * a live-patched one cannot drift apart.
+ *
+ * Ranks are continuous across all three zones: Radar starts where Esta semana
+ * stopped, never at one. Zone membership is a rank band over the API's own
+ * ordering, never a list of workflow states — a state added from the admin
+ * changes nothing here (CLAUDE.md rule 1).
  */
+import { TEASER_COPY } from "../components/activity/copy";
+import LatestActivity from "../components/overview/LatestActivity.astro";
+import OwnerLoadTeaser from "../components/overview/OwnerLoadTeaser.astro";
+import { PAGE_COPY, QUEUE_COPY, TEAM_COPY } from "../components/overview/copy";
+import {
+  renderQueueRegion,
+  type RegionKey,
+} from "../components/overview/markup";
+import { QUEUE_PAGE_SIZE } from "../components/overview/model";
+import OverviewLive from "../islands/OverviewLive.astro";
+import Shell from "../layouts/Shell.astro";
+import { ACTIVITY_TEASER_SIZE } from "../lib/activity/filters";
+import { buildDirectory, toRows } from "../lib/activity/model";
+import { getPortfolioActivity, getQueue, getTeamLoad } from "../lib/api/client";
+import { toViewState } from "../lib/view-state";
+import "../components/overview/overview.css";
 
-/**
- * Fixed legend positions of the matrix's risk block, first cell leftmost (DESIGN.md, Layout).
- * Display order only — a flag outside this list still renders, appended after the fixed cells.
- */
-const LEGEND_ORDER = [
-  "BLOCKED",
-  "OVERDUE",
-  "NO_NEXT_STEP",
-  "NO_TARGET_DATE",
-  "STALE",
-  "OWNER_OVERLOADED",
-] as const;
+/** One reference instant for the whole render, so two cards cannot straddle midnight. */
+const now = new Date();
 
-const queueResult = await getQueue();
-const teamResult = await getTeamLoad();
+// The three reads are independent; serialising them would add round trips to
+// the first paint for nothing.
+const [queueResult, teamResult, activityResult] = await Promise.all([
+  getQueue({ page_size: QUEUE_PAGE_SIZE }),
+  getTeamLoad(),
+  getPortfolioActivity({ page: 1, page_size: ACTIVITY_TEASER_SIZE }),
+]);
 
-/** The matrix's view state; `"connecting"` because the stream has no meaning during SSR. */
+// `"connecting"` is the only honest stream status during a server render: no
+// island has hydrated, so nothing is subscribed and nothing has gone stale yet.
+// The `disconnected` arm belongs to the island, which is what learns the stream
+// dropped.
 const queueState = toViewState(queueResult, "connecting", {
-  isEmpty: (data) => data.items.length === 0,
-  emptyMessage:
-    "No projects in the queue. Register the first project to put the board on the air.",
+  isEmpty: (page) => page.items.length === 0,
+  emptyMessage: QUEUE_COPY.emptyBody,
   lastEventAt: null,
 });
 
-const teamPageState = toViewState(teamResult, "connecting", {
-  isEmpty: (data) => data.items.length === 0,
-  emptyMessage: "No active owners on the roster.",
+const teamState = toViewState(teamResult, "connecting", {
+  isEmpty: (page) => page.items.length === 0,
+  emptyMessage: TEAM_COPY.emptyBody,
   lastEventAt: null,
 });
 
 /**
- * Derives a panel's view state from a fetched page: the panels read the same fetch, so a fetch
- * failure is a panel failure, and a panel-specific emptiness (`no open blockers`) is its own
- * `empty` arm with its own copy.
+ * The trail's last movements, already mapped onto rows.
+ *
+ * Codes resolve to names through the two reads this page already made: the
+ * record stores a business code because it outlives the row it describes, and a
+ * denormalized name on the wire would be a second source of truth for it. A
+ * record's kind decides which list answers for it — a person is looked up among
+ * people, never matched against project codes.
  */
-function mapPanel<S, T>(
-  state: ViewState<S>,
-  pick: (data: S) => T[],
-  emptyMessage: string,
-): ViewState<readonly T[]> {
-  switch (state.kind) {
-    case "loading":
-      return { kind: "loading" };
-    case "error":
-      return { kind: "error", code: state.code, message: state.message };
-    case "empty":
-      return { kind: "empty", message: emptyMessage };
-    case "ready":
-    case "disconnected": {
-      const lines = pick(state.data);
-      if (lines.length === 0) {
-        return { kind: "empty", message: emptyMessage };
-      }
-      return state.kind === "ready"
-        ? { kind: "ready", data: lines, lastEventAt: state.lastEventAt }
-        : { kind: "disconnected", data: lines, lastEventAt: state.lastEventAt };
-    }
-    default:
-      return assertNever(state);
-  }
-}
-
-/** The roster page flattened to its entries for the owner-load panel. */
-function pickTeamEntries(page: TeamLoad): NonNullable<TeamLoad["items"]> {
-  return page.items;
-}
-
-const teamState = mapPanel(
-  teamPageState,
-  pickTeamEntries,
-  "No active owners on the roster.",
-);
-
-/** Projects carrying open blockers, worst count first, with the `BLOCKED` flag's reason. */
-function pickBlockerLines(items: readonly QueueItem[]): BlockerLine[] {
-  return items
-    .filter((item) => item.open_blockers > 0)
-    .map((item) => ({
-      code: item.code,
-      name: item.name,
-      openBlockers: item.open_blockers,
-      reason:
-        item.risk_flags.find((flag) => flag.code === "BLOCKED")?.reason ?? null,
-    }))
-    .sort((a, b) => b.openBlockers - a.openBlockers);
-}
-
-/** Projects flagged `NO_NEXT_STEP`, with the specification's reason and the owner's label. */
-function pickNoNextStepLines(items: readonly QueueItem[]): NoNextStepLine[] {
-  const lines: NoNextStepLine[] = [];
-  for (const item of items) {
-    const flag = item.risk_flags.find(
-      (candidate) => candidate.code === "NO_NEXT_STEP",
-    );
-    if (flag !== undefined) {
-      lines.push({
+const activityDirectory = buildDirectory(
+  queueResult.ok
+    ? queueResult.data.items.map((item) => ({
         code: item.code,
         name: item.name,
-        ownerLabel: item.owner?.label ?? null,
-        reason: flag.reason,
-      });
-    }
-  }
-  return lines;
-}
-
-const blockersState = mapPanel(
-  queueState,
-  (page: QueuePage) => pickBlockerLines(page.items),
-  "No open blockers. Every project on the board is moving.",
+      }))
+    : [],
+  teamResult.ok
+    ? teamResult.data.items.map((person) => ({
+        alias: person.alias,
+        label: person.label,
+      }))
+    : [],
 );
 
-const noNextStepState = mapPanel(
-  queueState,
-  (page: QueuePage) => pickNoNextStepLines(page.items),
-  "Every project has a next step recorded.",
+const activityState = toViewState(
+  activityResult.ok
+    ? {
+        ok: true as const,
+        data: toRows(activityResult.data.items, activityDirectory, now),
+      }
+    : activityResult,
+  "connecting",
+  {
+    isEmpty: (rows) => rows.length === 0,
+    emptyMessage: TEASER_COPY.emptyBody,
+    lastEventAt: null,
+  },
 );
 
-const skeletonRows = [0, 1, 2, 3, 4, 5, 6, 7];
+/**
+ * Regions the island must read again from the browser.
+ *
+ * `src/middleware.ts` hands this render the access token from the mirror cookie
+ * but cannot renew it — the refresh token stays in the browser by design — so an
+ * expired token is refused here and repaired there. Only a region that actually
+ * failed is listed; one that painted rows is never re-fetched.
+ */
+const hydrate: RegionKey[] = [];
+if (queueState.kind === "error") hydrate.push("queue");
+if (teamState.kind === "error") hydrate.push("team");
 ---
 
-<Shell title="Command Center">
-  <div class="board">
-    <header class="board-header">
-      <h1 class="headline">Status matrix</h1>
-      {
-        queueState.kind === "ready" && (
-          <span class="figure board-count">
-            {queueState.data.count} projects
-          </span>
-        )
-      }
+<Shell
+  title={PAGE_COPY.title}
+  active="overview"
+  crumbs={[{ label: PAGE_COPY.crumb }]}
+>
+  <div class="ov-page">
+    <header>
+      <h1 class="h1">{PAGE_COPY.title}</h1>
+      <p class="body-text ov-lead">{PAGE_COPY.lead}</p>
     </header>
 
-    {
-      (() => {
-        switch (queueState.kind) {
-          case "loading":
-            return (
-              <table class="matrix" aria-busy="true">
-                <thead>
-                  <tr>
-                    <th scope="col" class="label">
-                      Code
-                    </th>
-                    <th scope="col" class="label">
-                      Project / Client
-                    </th>
-                    <th scope="col" class="label col-owner">
-                      Owner
-                    </th>
-                    <th scope="col" class="label">
-                      Risk legend
-                    </th>
-                    <th scope="col" class="label col-countdown">
-                      Countdown
-                    </th>
-                    <th scope="col" class="label">
-                      Score
-                    </th>
-                    <th scope="col" class="label">
-                      Verdict
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {skeletonRows.map((row) => (
-                    <tr class="page-skeleton-row" data-skeleton={row}>
-                      <td colspan="7">
-                        <div class="page-skeleton-bar" />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            );
-          case "empty":
-            return (
-              <section class="board-note" aria-label="Empty queue">
-                <p class="body-text">{queueState.message}</p>
-              </section>
-            );
-          case "error":
-            return (
-              <section class="board-note" role="alert">
-                <p class="body-text">
-                  The priority queue could not be fetched ({queueState.code}).
-                  The board cannot render without it.
-                </p>
-                <a class="label board-retry" href="/">
-                  Retry
-                </a>
-              </section>
-            );
-          case "ready":
-          case "disconnected":
-            return (
-              <>
-                {queueState.kind === "disconnected" && (
-                  <p class="label board-stale" role="status">
-                    Stream disconnected — rows may be stale
-                    {queueState.lastEventAt !== null &&
-                      ` · last event ${queueState.lastEventAt}`}
-                  </p>
-                )}
-                <div class="matrix-scroll">
-                  <table class="matrix">
-                    <thead>
-                      <tr>
-                        <th scope="col" class="label">
-                          Code
-                        </th>
-                        <th scope="col" class="label">
-                          Project / Client
-                        </th>
-                        <th scope="col" class="label col-owner">
-                          Owner
-                        </th>
-                        <th scope="col" class="label">
-                          Risk legend
-                        </th>
-                        <th scope="col" class="label col-countdown">
-                          Countdown
-                        </th>
-                        <th scope="col" class="label">
-                          Score
-                        </th>
-                        <th scope="col" class="label">
-                          Verdict
-                        </th>
-                      </tr>
-                    </thead>
-                    <PriorityQueue
-                      items={queueState.data.items}
-                      legendOrder={LEGEND_ORDER}
-                    />
-                  </table>
-                </div>
-              </>
-            );
-          default:
-            return assertNever(queueState);
-        }
-      })()
-    }
-
-    <div class="panels">
-      <OwnerLoadPanel state={teamState} />
-      <OpenBlockersPanel state={blockersState} />
-      <NoNextStepPanel state={noNextStepState} />
-    </div>
+    <OverviewLive hydrate={hydrate}>
+      <div class="ov-columns">
+        <div
+          class="ov-queue"
+          data-ov-region="queue"
+          data-state={queueState.kind}
+          set:html={renderQueueRegion(queueState, now)}
+        />
+        <aside class="ov-aside">
+          <OwnerLoadTeaser state={teamState} />
+          <LatestActivity state={activityState} />
+        </aside>
+      </div>
+    </OverviewLive>
   </div>
 </Shell>
-
-<style>
-  .board {
-    padding: var(--space-4);
-  }
-
-  .board-header {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-3);
-    margin-bottom: var(--space-3);
-  }
-
-  .board-header h1 {
-    margin: 0;
-    color: var(--color-legend);
-  }
-
-  .board-count {
-    color: var(--color-legend-dim);
-  }
-
-  .matrix-scroll {
-    overflow-x: auto;
-  }
-
-  .matrix {
-    width: 100%;
-    min-width: 960px;
-    border-collapse: collapse;
-    border-top: 1px solid var(--color-rule);
-  }
-
-  .matrix th {
-    text-align: left;
-    color: var(--color-legend-dim);
-    padding: var(--space-2) var(--space-3);
-    border-bottom: 1px solid var(--color-rule);
-  }
-
-  .board-note {
-    border: 1px solid var(--color-rule);
-    padding: var(--space-4);
-    color: var(--color-legend-dim);
-  }
-
-  .board-retry {
-    display: inline-block;
-    margin-top: var(--space-2);
-    color: var(--color-legend);
-    border: 1px solid var(--color-rule);
-    padding: var(--space-1) var(--space-2);
-    text-decoration: none;
-  }
-
-  .board-retry:hover {
-    background: var(--color-plate);
-  }
-
-  .board-stale {
-    color: var(--color-caution);
-    margin: 0 0 var(--space-2);
-  }
-
-  .page-skeleton-row {
-    height: 40px;
-  }
-
-  .page-skeleton-row td {
-    border-bottom: 1px solid var(--color-rule);
-    padding: var(--space-1) var(--space-3);
-  }
-
-  .page-skeleton-bar {
-    height: 20px;
-    background: var(--color-plate);
-    border: 1px solid var(--color-rule);
-  }
-
-  .panels {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: var(--space-4);
-    margin-top: var(--space-6);
-  }
-
-  /* Column shedding below 1024px, in the DESIGN.md order: client, owner, then countdown.
-     The td rules live in the cell components (global styles); these hide the headers. */
-  @media (max-width: 900px) {
-    .col-owner {
-      display: none;
-    }
-  }
-
-  @media (max-width: 768px) {
-    .col-countdown {
-      display: none;
-    }
-  }
-
-  @media (max-width: 1024px) {
-    .panels {
-      grid-template-columns: 1fr;
-    }
-  }
-</style>

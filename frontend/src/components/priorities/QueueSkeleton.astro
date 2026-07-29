@@ -1,0 +1,134 @@
+---
+/**
+ * The loading arm, drawn in the exact geometry of the loaded queue: eight rows with
+ * a rank plate, a title, a client line, an avatar, a risk strip, a due chip and a
+ * score, beside a panel block. Whole-page spinners are forbidden (DESIGN.md
+ * §Motion), and a skeleton that does not match the final layout produces the jump it
+ * exists to prevent.
+ */
+export interface Props {
+  /** How many placeholder rows to draw; the queue's usual first screen. */
+  rows?: number;
+}
+
+const { rows = 8 } = Astro.props;
+const placeholders = Array.from({ length: rows }, (_, index) => index);
+---
+
+<div class="skeleton-board" aria-hidden="true">
+  <ul class="rows">
+    {
+      placeholders.map(() => (
+        <li class="row card">
+          <span class="skeleton plate" />
+          <span class="lines">
+            <span class="skeleton line-title" />
+            <span class="skeleton line-meta" />
+          </span>
+          <span class="skeleton disc" />
+          <span class="skeleton strip" />
+          <span class="skeleton chip-ghost" />
+          <span class="skeleton figure-ghost" />
+        </li>
+      ))
+    }
+  </ul>
+  <div class="panel card">
+    <span class="skeleton line-title"></span>
+    <span class="skeleton arc"></span>
+    <span class="skeleton line-meta"></span>
+    <span class="skeleton line-meta"></span>
+    <span class="skeleton line-meta"></span>
+  </div>
+</div>
+
+<style>
+  .skeleton-board {
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  .rows {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns:
+      var(--space-6)
+      minmax(0, 1fr)
+      var(--space-6)
+      calc(var(--space-8) + var(--space-5))
+      calc(var(--space-8) + var(--space-7))
+      var(--space-7);
+    align-items: center;
+    gap: var(--space-3);
+    min-height: calc(var(--space-6) + var(--space-5));
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .lines {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .plate,
+  .disc {
+    width: var(--space-6);
+    height: var(--space-4);
+  }
+
+  .disc {
+    height: var(--space-6);
+    border-radius: var(--radius-full);
+  }
+
+  .line-title {
+    display: block;
+    height: var(--space-4);
+    width: 60%;
+  }
+
+  .line-meta {
+    display: block;
+    height: var(--space-3);
+    width: 34%;
+  }
+
+  .strip,
+  .chip-ghost,
+  .figure-ghost {
+    display: block;
+    height: var(--space-3);
+  }
+
+  .panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    padding: var(--space-5);
+  }
+
+  .arc {
+    width: calc(var(--space-8) * 2);
+    height: calc(var(--space-8) * 2);
+    border-radius: var(--radius-full);
+  }
+
+  /* The loading arm switches on the same frame as the loaded one; the number is
+     argued in `pages/priorities.astro`. */
+  @media (min-width: 1280px) {
+    .skeleton-board {
+      grid-template-columns: minmax(0, 1fr) clamp(
+          calc(var(--space-8) * 5),
+          33%,
+          calc(var(--space-8) * 6.5)
+        );
+      align-items: start;
+    }
+  }
+</style>

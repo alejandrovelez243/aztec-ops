@@ -1,0 +1,115 @@
+---
+/**
+ * The live root of the Actividad surface.
+ *
+ * It renders almost nothing of its own: the connection banner, and a wrapper
+ * carrying the contract its script needs. Everything visible is server-rendered
+ * inside the slot and this island only keeps it true — the container /
+ * presentational split `docs/standards/PATTERNS_FRONTEND.md` §5 asks for.
+ *
+ * `disconnected` is a first-class state here, not a variant of `error`: the
+ * records stay on screen, the banner says how old they are, and the control
+ * beside it retries the *connection* rather than the read.
+ *
+ * The colocated module is evaluated once per app because `ClientRouter` swaps
+ * documents without reloading, so it wires on `astro:page-load` and releases
+ * every subscription on `astro:before-swap`.
+ */
+import Icon from "../components/ui/Icon.astro";
+import { FEED_COPY } from "../components/activity/copy";
+---
+
+<div class="live" data-activity-live>
+  <div class="stale card tone-ambar" role="status" data-activity-stale hidden>
+    <Icon name="alert" size={18} />
+    <p class="small">
+      <strong>{FEED_COPY.staleTitle}.</strong>
+      {FEED_COPY.staleBody}
+    </p>
+    <span class="chip" data-activity-stale-time></span>
+    <button class="btn btn-secondary" type="button" data-activity-reconnect>
+      <Icon name="refresh" size={18} />
+      {FEED_COPY.reconnect}
+    </button>
+  </div>
+  <slot />
+</div>
+
+<script>
+  import { mountActivityLive } from "../components/activity/live";
+
+  let teardown: (() => void) | null = null;
+
+  const release = (): void => {
+    teardown?.();
+    teardown = null;
+  };
+
+  document.addEventListener("astro:before-swap", release);
+  document.addEventListener("astro:page-load", () => {
+    release();
+    const root = document.querySelector<HTMLElement>("[data-activity-live]");
+    if (root === null) return;
+    teardown = mountActivityLive(root);
+  });
+</script>
+
+<style>
+  /* The feed's table is a horizontal scroller; as a grid item of the page this
+     root is otherwise floored by that table's min-content and the *page*
+     carries the overflow. Astro scopes styles per component, so the arm has to
+     say it here rather than the page saying it for its slot. */
+  .live {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+
+  .stale {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background-color: var(--tone-wash);
+    border-color: color-mix(in srgb, var(--tone-solid) 30%, var(--hairline));
+    color: var(--tone-ink);
+  }
+
+  /* `hidden` must beat the flex display, or the banner never hides. */
+  .stale[hidden] {
+    display: none;
+  }
+
+  .stale p {
+    margin-right: auto;
+    color: var(--tone-ink);
+  }
+
+  .stale .chip {
+    background-color: color-mix(in srgb, var(--tone-solid) 18%, var(--carta));
+  }
+
+  .stale .chip:empty {
+    display: none;
+  }
+
+  /*
+   * A refetch is visible without taking the records off the screen: the list
+   * dims and stops accepting clicks for the moment it is being replaced. A
+   * skeleton on every keystroke would answer "what matched?" by hiding the last
+   * answer, which is worse than a stale one.
+   */
+  .live[data-pending="true"] :global([data-activity-body]) {
+    opacity: 0.55;
+    pointer-events: none;
+    transition: opacity var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .live[data-pending="true"] :global([data-activity-filters]) {
+    /* The bar stays live: the operator must be able to change their mind
+       mid-request, and the sequence guard makes that safe. */
+    cursor: progress;
+  }
+</style>

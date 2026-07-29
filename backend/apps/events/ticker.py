@@ -29,7 +29,13 @@ from apps.events.domain.envelope import (
     SYSTEM_ACTOR,
     TOPIC_CLOCK_TICKED,
 )
-from apps.events.services import enqueue_event
+
+# Imported from its own module rather than from the package, unlike every caller outside this
+# context. Inside ``apps.events`` the submodule ``services.enqueue_event`` is already bound in the
+# package namespace, so ``from apps.events.services import enqueue_event`` hands a type checker the
+# *module* and every use of the result degrades to ``Any``. The package form stays correct — and
+# stays the documented one — for the contexts that publish through it.
+from apps.events.services.enqueue_event import enqueue_event
 
 logger = logging.getLogger(__name__)
 

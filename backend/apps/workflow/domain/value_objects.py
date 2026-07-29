@@ -53,6 +53,29 @@ class GuardOutcome(BaseModel):
     reason: str = ""
 
 
+class StateOccupancy(BaseModel):
+    """How many records are standing on one state, split by the context that owns them.
+
+    The answer :func:`~apps.workflow.repositories.records_on_states` gives, and the reason
+    retirement can refuse with a sentence an operator can act on: "3 proyectos y 1 tarea" says where
+    to go and look, while a single total says only that the button did not work.
+
+    Split rather than summed because the two halves are moved by different people through different
+    screens. A pure value: it holds counts, never rows, so nothing that receives one can reach back
+    into ``portfolio`` or ``work`` through it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    projects: int = 0
+    tasks: int = 0
+
+    @property
+    def total(self) -> int:
+        """Every record blocking the retirement, which is what the graph document publishes."""
+        return self.projects + self.tasks
+
+
 class TransitionCheck(BaseModel):
     """What the transition service validated, and the state the caller may now assign.
 

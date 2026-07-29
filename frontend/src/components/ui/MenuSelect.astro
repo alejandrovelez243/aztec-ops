@@ -1,0 +1,188 @@
+---
+/**
+ * A single-choice dropdown, in this interface's own materials.
+ *
+ * There is no `<select>` in this app: the native popup is drawn by the operating
+ * system, so it lands as a grey system list in the middle of a surface that is
+ * otherwise all paper and ink. This is the same trigger-and-panel grammar the
+ * owner picker and the task move menu use, and the behaviour — open, close,
+ * `Escape`, arrow keys, one menu at a time — comes from the shared
+ * `lib/ui/menu.ts` rather than from a second implementation.
+ *
+ * Presentational: it renders options and announces a choice through the DOM
+ * (`[data-menu-item][data-value]`). It does not know what the choice means; the
+ * island that mounts it does.
+ */
+import Icon from "./Icon.astro";
+
+/** One choosable value. `value: ""` is the conventional "no filter" entry. */
+export interface MenuOption {
+  readonly value: string;
+  readonly label: string;
+}
+
+export interface Props {
+  /** Stable key of what this control edits; the island reads it off the DOM. */
+  facet: string;
+  /** Visible name of the control, in Spanish. */
+  label: string;
+  /** Options in the order they are offered; include the "any" entry yourself. */
+  options: readonly MenuOption[];
+  /** Currently chosen value; `""` selects the "any" entry. */
+  value: string;
+}
+
+const { facet, label, options, value } = Astro.props;
+
+const current = options.find((option) => option.value === value);
+const currentLabel = current?.label ?? options[0]?.label ?? "";
+
+const labelId = `menu-${facet}-label`;
+const triggerId = `menu-${facet}-trigger`;
+---
+
+<div class="menu-select" data-menu-select data-facet={facet} data-value={value}>
+  <span class="label" id={labelId}>{label}</span>
+
+  <button
+    class="btn btn-secondary trigger"
+    type="button"
+    id={triggerId}
+    data-menu-trigger
+    aria-haspopup="menu"
+    aria-expanded="false"
+    aria-labelledby={`${labelId} ${triggerId}`}
+  >
+    <span data-field="menu-current">{currentLabel}</span>
+    <Icon name="chevron-down" size={16} />
+  </button>
+
+  <div
+    class="panel card"
+    role="menu"
+    data-menu-panel
+    aria-labelledby={labelId}
+    hidden
+  >
+    {
+      options.map((option) => (
+        <button
+          class="item"
+          type="button"
+          role="menuitemradio"
+          data-menu-item
+          data-value={option.value}
+          aria-checked={option.value === value}
+        >
+          <span class="tick" data-option-tick hidden={option.value !== value}>
+            <Icon name="check" size={16} />
+          </span>
+          <span>{option.label}</span>
+        </button>
+      ))
+    }
+  </div>
+</div>
+
+<style>
+  .menu-select {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .trigger {
+    justify-content: space-between;
+    gap: var(--space-2);
+    height: 40px;
+    padding: 0 var(--space-2) 0 var(--space-3);
+    font-size: var(--text-small-size);
+    font-weight: 400;
+  }
+
+  .trigger :global(svg) {
+    flex: none;
+    color: var(--tinta-suave);
+    transition: transform var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .trigger[aria-expanded="true"] {
+    border-color: var(--cobalto);
+    color: var(--cobalto);
+  }
+
+  .trigger[aria-expanded="true"] :global(svg) {
+    transform: rotate(180deg);
+    color: var(--cobalto);
+  }
+
+  .trigger span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Anchored in viewport coordinates by `lib/ui/menu.ts`; everything but
+     `top`/`left` is decided here. */
+  .panel {
+    position: fixed;
+    z-index: var(--z-drawer);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    width: max-content;
+    min-width: 200px;
+    max-width: min(320px, calc(100vw - var(--space-6)));
+    padding: var(--space-2);
+    box-shadow: var(--shadow-lifted);
+  }
+
+  .panel[hidden] {
+    display: none;
+  }
+
+  .item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: 36px;
+    padding: var(--space-2);
+    border-radius: var(--radius-chip);
+    text-align: left;
+    font-size: var(--text-small-size);
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .item:hover,
+  .item:focus-visible {
+    background-color: var(--pozo);
+  }
+
+  .item[aria-checked="true"] {
+    color: var(--cobalto);
+  }
+
+  /* The tick keeps its box when unchecked, so choosing one does not shunt the
+     labels sideways. */
+  .tick {
+    display: inline-flex;
+    width: 16px;
+    flex: none;
+    color: var(--cobalto);
+    line-height: 0;
+  }
+
+  .tick[hidden] {
+    display: inline-flex;
+    visibility: hidden;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .trigger :global(svg) {
+      transition: none;
+    }
+  }
+</style>

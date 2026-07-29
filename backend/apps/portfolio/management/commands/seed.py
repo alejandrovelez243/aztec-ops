@@ -139,19 +139,18 @@ class Command(BaseCommand):
             )
             return
 
-        admin, created = user_model.objects.get_or_create(
-            username=settings.SUPERUSER_USERNAME,
-            defaults={
-                "code": settings.SUPERUSER_USERNAME,
-                "alias": settings.SUPERUSER_USERNAME,
-                "email": settings.SUPERUSER_EMAIL,
-                "is_staff": True,
-                "is_superuser": True,
-            },
-        )
-        admin.set_password(settings.SUPERUSER_PASSWORD)
+        # Every field is assigned on BOTH paths, not passed as `defaults`. `defaults` applies only
+        # when the row is created, so an admin that already existed would keep whatever `code` and
+        # `alias` it was first given — which is how this account ended up rendering as a blank name
+        # in the UI. Seeding is meant to converge the row to the described state, and a field that
+        # only converges on first run is not idempotent.
+        admin, created = user_model.objects.get_or_create(username=settings.SUPERUSER_USERNAME)
+        admin.code = settings.SUPERUSER_USERNAME
+        admin.alias = settings.SUPERUSER_USERNAME
+        admin.email = settings.SUPERUSER_EMAIL
         admin.is_staff = True
         admin.is_superuser = True
-        admin.save(update_fields=["password", "is_staff", "is_superuser"])
+        admin.set_password(settings.SUPERUSER_PASSWORD)
+        admin.save(update_fields=["code", "alias", "email", "password", "is_staff", "is_superuser"])
         verb = "Created" if created else "Updated"
         self.stdout.write(self.style.SUCCESS(f"{verb} superuser {settings.SUPERUSER_USERNAME}."))

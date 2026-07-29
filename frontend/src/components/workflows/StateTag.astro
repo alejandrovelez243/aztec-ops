@@ -1,0 +1,39 @@
+---
+/**
+ * One workflow state, named and coloured, for a cell of the transitions table.
+ *
+ * The dot is the smallest semantic presence in the system (DESIGN.md §Shapes),
+ * and the label beside it is what carries the meaning — colour alone never says
+ * anything here, which is also why the same tag reads correctly with the swatch
+ * unrendered.
+ *
+ * The tone is the state's own colour when the operator set one and its
+ * category's semantic tone otherwise, so a state added in the admin renders
+ * without a frontend change (`docs/standards/PATTERNS_FRONTEND.md` §7).
+ */
+export interface Props {
+  label: string;
+  /** Tone class: one of the semantic set, or `tone-data` for an operator colour. */
+  toneClass: string;
+  /** Inline `--tone-solid` that `tone-data` derives ink and wash from; `null` otherwise. */
+  toneStyle: string | null;
+}
+
+const { label, toneClass, toneStyle } = Astro.props;
+---
+
+<span class:list={["state-tag", toneClass]} style={toneStyle}>
+  <span class="dot" aria-hidden="true"></span>
+  <span lang="es">{label}</span>
+</span>
+
+<style>
+  .state-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: var(--text-title-size);
+    font-weight: var(--text-title-weight);
+    line-height: var(--text-title-line);
+  }
+</style>

@@ -22,7 +22,10 @@ from ninja import Field, Schema
 from apps.portfolio.domain.value_objects import (
     DEFAULT_CURRENCY_CODE,
     DEFAULT_QUEUE_ORDERING,
+    DEFAULT_ROSTER_ORDERING,
+    DEFAULT_ROSTER_STATUS,
     Health,
+    RosterStatus,
 )
 from apps.shared.pagination import DEFAULT_PAGE_SIZE
 
@@ -76,6 +79,7 @@ class ProjectUpdateIn(Schema):
     business_value: Decimal | None = Field(default=None, ge=0)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     summary: str | None = None
+    description: str | None = None
     next_step: str | None = Field(default=None, max_length=255)
     is_archived: bool | None = None
 
@@ -129,9 +133,19 @@ class QueueQuery(Schema):
 class TeamLoadQuery(Schema):
     """Query parameters of ``GET /api/v1/team/load``.
 
-    Not paginated: the roster is five people, and a pager over five rows costs the client a second
-    request to learn there is no second page.
+    Not paginated: the roster is bounded by how many people the company employs, and a pager over
+    it costs the client a second request to learn there is no second page.
+
+    ``status`` replaced the earlier ``include_inactive`` boolean, which could not express "show me
+    only the people we have retired" — the question an operator asks before restoring somebody.
+
+    ``overloaded`` is tri-state: absent is everybody, ``true`` is the people over capacity, and
+    ``false`` is the people with room, which is what somebody about to assign work is looking for.
     """
 
     owner: list[str] = Field(default_factory=list)
-    include_inactive: bool = False
+    role: list[str] = Field(default_factory=list)
+    status: RosterStatus = DEFAULT_ROSTER_STATUS
+    overloaded: bool | None = None
+    q: str = ""
+    order_by: str = DEFAULT_ROSTER_ORDERING

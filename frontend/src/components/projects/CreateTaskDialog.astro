@@ -1,0 +1,216 @@
+---
+/**
+ * Adding a task to a project, asked in one modal.
+ *
+ * A modal and not an inline form: creating a task is a short, self-contained
+ * act that the operator starts deliberately from a button, and the surfaces
+ * that offer it — the project's table and the board — have no room to carry a
+ * five-field form permanently. DESIGN.md grants modals to "confirmation and
+ * destructive intent"; this is the third case it also names, a focused act with
+ * its own beginning and end.
+ *
+ * **Every control here is one of this interface's own.** No `<select>`, because
+ * the native popup is drawn by the operating system and lands as a grey system
+ * list in the middle of a paper-and-ink surface — the rule `MenuSelect`'s own
+ * docstring states. No `<input type="date">` for the same reason: the browser's
+ * date widget is another OS surface, and `DateField` already renders the
+ * calendar this app draws everywhere else.
+ *
+ * The options are rendered by the server rather than fetched on open, so the
+ * dialog has no loading arm and cannot show an empty picker at the moment the
+ * operator needs it.
+ */
+import DateField from "../ui/DateField.astro";
+import MenuSelect from "../ui/MenuSelect.astro";
+import type { MenuOption } from "../ui/MenuSelect.astro";
+import { CREATE_NO_PRIORITIES } from "./messages";
+import type {
+  TaskItem,
+  TaxonomyRef,
+  TeamLoadEntry,
+} from "../../lib/api/domain";
+
+export interface Props {
+  projectCode: string;
+  /** Priorities the catalog publishes; empty when that read failed. */
+  priorities: readonly TaxonomyRef[];
+  /** The roster, for the assignee picker; empty when that read failed. */
+  members: readonly TeamLoadEntry[];
+  /** The project's existing tasks, offered as dependency codes. */
+  tasks: readonly TaskItem[];
+}
+
+const { projectCode, priorities, members, tasks } = Astro.props;
+
+const priorityOptions: MenuOption[] = priorities.map((priority) => ({
+  value: priority.code,
+  label: priority.label,
+}));
+
+const assigneeOptions: MenuOption[] = [
+  { value: "", label: "Sin responsable" },
+  ...members.map((member) => ({ value: member.alias, label: member.label })),
+];
+
+/** The default is the first priority the catalog offers, never a hardcoded code. */
+const defaultPriority = priorityOptions[0]?.value ?? "";
+
+/**
+ * Priority is required by the API, so with an empty catalog there is nothing
+ * this form could legally send. The button says so out loud instead of throwing
+ * the operator's typing at a 422.
+ */
+const canSubmit = priorityOptions.length > 0;
+const blockedId = `create-task-blocked-${projectCode}`;
+---
+
+<dialog
+  class="dialog"
+  data-create-task-dialog
+  data-project-code={projectCode}
+  aria-labelledby="create-task-title"
+>
+  <form data-create-task-form>
+    <h2 class="h2" id="create-task-title">Nueva tarea en {projectCode}</h2>
+
+    <label class="field">
+      <span class="label">Tarea</span>
+      <input
+        class="input"
+        type="text"
+        name="title"
+        maxlength="200"
+        required
+        autocomplete="off"
+        placeholder="Ej.: validar el flujo de facturación con el cliente"
+      />
+    </label>
+
+    <div class="row">
+      <MenuSelect
+        facet="create-priority"
+        label="Prioridad"
+        options={priorityOptions}
+        value={defaultPriority}
+      />
+      <MenuSelect
+        facet="create-assignee"
+        label="Responsable"
+        options={assigneeOptions}
+        value=""
+      />
+      <div class="field">
+        <span class="label">Vence</span>
+        <DateField
+          scope="task"
+          code={`nueva-${projectCode}`}
+          date={null}
+          label="Vence"
+        />
+      </div>
+    </div>
+
+    <label class="field">
+      <span class="label">Depende de</span>
+      {
+        /* Free text on purpose: the API keeps an unresolvable reference as the
+          dependency's `raw_label`, and 61 of the 82 tasks in the source data
+          describe their prerequisite in prose. A picker alone would make every
+          created task poorer than every seeded one. */
+      }
+      <input
+        class="input"
+        type="text"
+        name="depends_on"
+        list={`deps-${projectCode}`}
+        autocomplete="off"
+        placeholder="Código de tarea o descripción"
+      />
+      <datalist id={`deps-${projectCode}`}>
+        {tasks.map((task) => <option value={task.code}>{task.title}</option>)}
+      </datalist>
+    </label>
+
+    <p class="small error" data-field="create-error" hidden></p>
+
+    {
+      !canSubmit && (
+        <p class="small blocked" id={blockedId}>
+          {CREATE_NO_PRIORITIES}
+        </p>
+      )
+    }
+
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" type="button" data-action="close-create">
+        Cancelar
+      </button>
+      <button
+        class="btn btn-primary"
+        type="submit"
+        data-action="create-task"
+        disabled={!canSubmit}
+        aria-describedby={canSubmit ? undefined : blockedId}
+      >
+        Crear tarea
+      </button>
+    </div>
+  </form>
+</dialog>
+
+<style>
+  /* The same paper the other dialogs on this screen are cut from; `.dialog` is
+     scoped per component, so the chrome is restated rather than inherited. */
+  .dialog {
+    width: min(560px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+  }
+
+  .dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  .blocked {
+    color: var(--tinta-media);
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: var(--space-3);
+    align-items: end;
+  }
+
+  .error {
+    color: var(--rojo-ink);
+  }
+
+  .error[hidden] {
+    display: none;
+  }
+</style>

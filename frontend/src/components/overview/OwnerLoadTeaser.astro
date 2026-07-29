@@ -1,0 +1,46 @@
+---
+/**
+ * Owner-load teaser: who is carrying the portfolio, and who is over.
+ *
+ * Presentational and server-rendered. It receives the roster read already mapped
+ * onto the view-state union and renders its body through the surface's shared
+ * string renderer, so the markup here and the markup the island writes after a
+ * client-side re-read are the same bytes (`./markup.ts`).
+ *
+ * The whole roster is shown rather than "the overloaded few": a person at 40% is
+ * the answer to "who can take this", and cropping the list would hide exactly
+ * the capacity an operations lead opens this panel to find. Depth — task lists,
+ * per-person breakdowns — lives on `/team`, one link away.
+ */
+import type { TeamLoad } from "../../lib/api/domain";
+import type { ViewState } from "../../lib/view-state";
+import Icon from "../ui/Icon.astro";
+import { TEAM_COPY } from "./copy";
+import { renderTeamRegion } from "./markup";
+
+export interface Props {
+  /**
+   * The roster read, already resolved into loading / ready / empty / error /
+   * disconnected by the page. Passing the union rather than the rows is what
+   * keeps the four mandatory states out of the caller's `if` chain.
+   */
+  state: ViewState<TeamLoad>;
+}
+
+const { state } = Astro.props;
+---
+
+<section class="card ov-panel" aria-labelledby="ov-team-title">
+  <header class="ov-panel-head">
+    <h2 class="h2" id="ov-team-title">{TEAM_COPY.title}</h2>
+    <a class="ov-panel-link small" href="/team">
+      {TEAM_COPY.link}
+      <Icon name="chevron-right" size={16} />
+    </a>
+  </header>
+  <div
+    data-ov-region="team"
+    data-state={state.kind}
+    set:html={renderTeamRegion(state)}
+  />
+</section>

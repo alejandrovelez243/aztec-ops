@@ -1,0 +1,32 @@
+---
+/**
+ * The not-found page: a wall with one card knocked out of its slot.
+ *
+ * It renders inside the shell rather than standing alone, because arriving at
+ * a dead link should not also feel like being logged out — the sidebar, the
+ * back button and the operator's session all stay exactly where they were.
+ */
+import EmptyState from "../components/ui/EmptyState.astro";
+import Shell from "../layouts/Shell.astro";
+---
+
+<Shell
+  title="Página no encontrada"
+  crumbs={[{ label: "Inicio", href: "/" }, { label: "No encontrada" }]}
+>
+  <section class="not-found card">
+    <EmptyState
+      scene="lost"
+      title="Esta página no existe"
+      description="El enlace puede estar mal escrito, o el proyecto cambió de código. Vuelve al resumen del día y sigue desde ahí."
+    >
+      <a class="btn btn-primary" href="/">Ir al resumen</a>
+    </EmptyState>
+  </section>
+</Shell>
+
+<style>
+  .not-found {
+    margin-top: var(--space-6);
+  }
+</style>

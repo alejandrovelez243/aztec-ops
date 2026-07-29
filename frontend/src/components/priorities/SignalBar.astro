@@ -1,0 +1,111 @@
+---
+/**
+ * One line of the argument: what a priority signal read, what it was worth, and the
+ * reason the engine persisted when it computed it.
+ *
+ * This component is the *only* definition of a breakdown bar's markup. The live
+ * island clones it out of a `<template>` and fills the `data-slot` nodes, so a
+ * recalculated breakdown arriving over SSE cannot drift from the server-rendered
+ * one — there is no second copy of this markup to forget to update.
+ *
+ * The signal names itself: `label` and `reason` are both persisted with the
+ * contribution by the engine that computed it, so a signal registered tomorrow
+ * arrives already written (CLAUDE.md rule 8) and a historical breakdown keeps
+ * the wording that was true when it was scored. The `code` survives only as a
+ * styling and testing hook on `data-signal`, never as text a person reads.
+ */
+export interface Props {
+  /** Registered signal code — a hook, never rendered as text. */
+  code: string;
+  /** The signal's own Spanish name, as the engine persisted it. */
+  label: string;
+  /** Pre-formatted contribution, from `formatPoints`. */
+  points: string;
+  /** The reason persisted with the score, in the operator's language. */
+  reason: string;
+  /** Bar width as a 0–1 ratio of the widest signal beside it. */
+  ratio: number;
+}
+
+const { code, label, points, reason, ratio } = Astro.props;
+---
+
+<li class="signal" data-signal={code}>
+  <p class="signal-head">
+    <span class="signal-name" data-slot="label">{label}</span>
+    <span class="figure points"
+      ><span data-slot="points">{points}</span> pts</span
+    >
+  </p>
+  <span class="track" aria-hidden="true">
+    <span class="fill" data-slot="fill" style={`--bar: ${ratio}`}></span>
+  </span>
+  <p class="small reason" data-slot="reason">{reason}</p>
+</li>
+
+<style>
+  .signal {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .signal-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  /*
+   * The signal's name is prose a person reads, so it is set in the UI face in
+   * sentence case — not in the mono code chip it used to wear. Mono is reserved
+   * for what must align or count (DESIGN.md, One-Voice Two-Hands Rule), which
+   * here is the points beside it.
+   */
+  .signal-name {
+    font-size: var(--text-title-size);
+    font-weight: var(--text-title-weight);
+    line-height: var(--text-title-line);
+    color: var(--tinta);
+  }
+
+  .points {
+    color: var(--tinta);
+  }
+
+  .track {
+    display: block;
+    height: var(--space-1);
+    border-radius: var(--radius-full);
+    background-color: var(--pozo);
+    overflow: hidden;
+  }
+
+  /*
+   * Cobalto, like the arc above it: the bar and the dial render the *same*
+   * quantity — the score, decomposed — so they speak with one voice. This is not a
+   * chart series and never encodes a state (DESIGN.md, The One-Voice Rule).
+   */
+  /*
+   * The bar grows with a transform, not with `width`. Both look identical; only
+   * one of them re-lays-out the panel on every frame, and a recalculated score
+   * animates several bars at once. `scaleX` from a left origin runs on the
+   * compositor, and the fill carries no text that a horizontal scale could
+   * distort.
+   */
+  .fill {
+    display: block;
+    height: 100%;
+    width: 100%;
+    transform: scaleX(var(--bar, 0));
+    transform-origin: left center;
+    border-radius: var(--radius-full);
+    background-color: var(--cobalto);
+    transition: transform var(--motion-carta-duration) var(--motion-carta-ease);
+  }
+
+  .reason {
+    color: var(--tinta-media);
+  }
+</style>

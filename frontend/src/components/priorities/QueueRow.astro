@@ -1,0 +1,324 @@
+---
+/**
+ * One row of the ranked queue: rank plate, project, owner, risk strip, due chip and
+ * score — the six things an operations lead reads before deciding.
+ *
+ * The row is a `<button>` that opens its context panel (`aria-expanded` /
+ * `aria-controls`): below 1280px the panel expands in place under this row, above it
+ * the same node is placed in the pinned right column. `Enter` is bound by the island
+ * to *open the project*, which is the list idiom a queue wants; the discoverable,
+ * pointer-and-screen-reader path to the same place is the panel's "Ver proyecto"
+ * link, so the shortcut is an addition rather than the only route.
+ *
+ * `aria-current` carries selection. `aria-selected` would be the tighter word but is
+ * only valid inside a listbox, grid or tablist — and none of those may contain the
+ * detail panel that has to sit beside its row for the accordion to work.
+ */
+import { initials, avatarHue } from "../../lib/auth/session";
+import { formatScore } from "../../lib/format/score";
+import type { RiskFlag } from "../../lib/api/domain";
+import DueChip from "./DueChip.astro";
+import RiskStrip from "./RiskStrip.astro";
+import { detailDomId, formatRank, rowDomId } from "./format";
+
+export interface Props {
+  /** 1-based position in the queue as the server ordered it. */
+  rank: number;
+  code: string;
+  name: string;
+  /** Denormalised client label; the queue read model carries no full taxonomy. */
+  clientAlias: string;
+  /** Display name of the owner, or `null` when nobody owns the project. */
+  ownerLabel: string | null;
+  /** Stable slug behind the avatar's hue; `null` together with `ownerLabel`. */
+  ownerAlias: string | null;
+  targetDate: string | null;
+  /** Computed score; never replaced by an override's forced position. */
+  score: number;
+  riskFlags: readonly RiskFlag[];
+  /** Whether a human forced this row's position; the panel carries the reason. */
+  hasOverride: boolean;
+  /** `updated_at` of the row, so a late SSE envelope can be discarded. */
+  updatedAt: string;
+  /** Exactly one row is selected; it is the one whose panel is on screen. */
+  isSelected: boolean;
+}
+
+const {
+  rank,
+  code,
+  name,
+  clientAlias,
+  ownerLabel,
+  ownerAlias,
+  targetDate,
+  score,
+  riskFlags,
+  hasOverride,
+  updatedAt,
+  isSelected,
+} = Astro.props;
+
+const ownerName = ownerLabel ?? "Sin responsable";
+---
+
+<button
+  type="button"
+  class="row card card-hover"
+  id={rowDomId(code)}
+  data-row
+  data-code={code}
+  data-score={score}
+  data-updated-at={updatedAt}
+  aria-controls={detailDomId(code)}
+  aria-expanded={isSelected}
+  aria-current={isSelected ? "true" : undefined}
+  tabindex={isSelected ? 0 : -1}
+>
+  <span class="rank figure" data-slot="rank" aria-hidden="true"
+    >{formatRank(rank)}</span
+  >
+  <span class="visually-hidden" data-slot="rank-text">Puesto {rank}.</span>
+
+  <span class="main">
+    <span class="title name" transition:name={`proj-${code}`}>{name}</span>
+    <span class="meta">
+      <span class="small client">{clientAlias}</span>
+      <span
+        class="chip tone-ambar manual"
+        data-slot="manual"
+        hidden={!hasOverride}
+      >
+        Ajuste manual
+      </span>
+    </span>
+  </span>
+
+  <span class="visually-hidden">Responsable: {ownerName}.</span>
+  {
+    ownerAlias === null ? (
+      <span
+        class="avatar unowned tone-ambar"
+        title="Sin responsable"
+        aria-hidden="true"
+      >
+        —
+      </span>
+    ) : (
+      <span
+        class="avatar"
+        style={`--avatar-h: ${avatarHue(ownerAlias)}`}
+        title={ownerName}
+        aria-hidden="true"
+      >
+        {initials(ownerName)}
+      </span>
+    )
+  }
+
+  <span class="risk-cell"><RiskStrip flags={riskFlags} /></span>
+  <span class="due-cell"><DueChip targetDate={targetDate} /></span>
+
+  <span class="figure score">
+    <span class="visually-hidden">Puntaje </span>
+    <span data-slot="score">{formatScore(score)}</span>
+  </span>
+</button>
+
+<style>
+  .row {
+    display: grid;
+    /*
+     * Fixed trailing tracks, all composed from the spacing scale: each row is its
+     * own grid, so only fixed widths keep twenty-two rows in one column.
+     *
+     * The name track is floored rather than left at `minmax(0, 1fr)`: with a 0
+     * floor, a column narrower than the fixed tracks resolves the name to 0px
+     * and the project silently loses the one field it is read by, while the
+     * score keeps its full width. The floor is two rhythm units — the width at
+     * which a name is still a name — so a squeeze clips visibly instead of
+     * deleting, and it is under the space every shipped range leaves (the
+     * narrowest is the 768px drawer, ~332px of name).
+     */
+    grid-template-columns:
+      var(--space-6)
+      minmax(calc(var(--space-8) * 2), 1fr)
+      var(--space-6)
+      calc(var(--space-8) + var(--space-5))
+      calc(var(--space-8) + var(--space-7))
+      var(--space-7);
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: calc(var(--space-6) + var(--space-5));
+    padding: var(--space-3) var(--space-4);
+    text-align: left;
+    /* Anchors the ▲/▼ delta chip the live island pops on a reorder. */
+    position: relative;
+    transition:
+      background-color var(--motion-micro-duration) var(--motion-micro-ease),
+      box-shadow var(--motion-micro-duration) var(--motion-micro-ease),
+      transform var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .rank {
+    color: var(--tinta-suave);
+    text-align: right;
+  }
+
+  .main {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .name {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .client {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .manual {
+    flex: none;
+  }
+
+  .manual[hidden] {
+    display: none;
+  }
+
+  /*
+   * The risk strip and the due chip are child components, so their own boxes are
+   * scoped to them; these wrappers are what this row can place in its grid.
+   */
+  .risk-cell,
+  .due-cell {
+    display: flex;
+    min-width: 0;
+  }
+
+  .due-cell {
+    justify-content: flex-end;
+  }
+
+  .unowned {
+    background-color: var(--tone-wash);
+    color: var(--tone-ink);
+  }
+
+  .score {
+    font-size: var(--text-title-size);
+    font-weight: 700;
+    text-align: right;
+    color: var(--tinta);
+  }
+
+  /*
+   * Selection is the interface speaking, so it is Cobalto and never a tone: the
+   * rail is drawn here rather than by `.rail`, which paints `--tone-solid` and would
+   * mean overloading a data colour with a UI state (DESIGN.md, The One-Voice Rule).
+   */
+  .row[aria-current="true"] {
+    background-color: var(--cobalto-papel);
+    box-shadow:
+      inset var(--rail-width) 0 0 0 var(--cobalto),
+      var(--shadow-resting);
+  }
+
+  .row[aria-current="true"]:hover {
+    box-shadow:
+      inset var(--rail-width) 0 0 0 var(--cobalto),
+      var(--shadow-raised);
+  }
+
+  .row[aria-current="true"] .rank,
+  .row[aria-current="true"] .client {
+    color: var(--cobalto);
+  }
+
+  /* The live flash of a remote recalculation: one cobalto ring, then gone. */
+  .row[data-flash] {
+    animation: destello var(--motion-carta-duration) var(--motion-carta-ease);
+  }
+
+  /* Selection and live marks are 2px of Cobalto (DESIGN.md §Shapes), derived from
+     the hairline rather than typed as a literal. */
+  @keyframes destello {
+    0% {
+      background-color: var(--cobalto-papel);
+      box-shadow:
+        inset 0 0 0 calc(var(--border-width) * 2) var(--cobalto),
+        var(--shadow-raised);
+    }
+    100% {
+      box-shadow:
+        inset 0 0 0 calc(var(--border-width) * 2) transparent,
+        var(--shadow-resting);
+    }
+  }
+
+  /* The master–detail frame; the number is argued in `pages/priorities.astro`. */
+  @media (min-width: 1280px) {
+    .row {
+      grid-column: 1;
+    }
+  }
+
+  /* Phone: the row becomes a stacked card; nothing is dropped, only re-laid out. */
+  @media (max-width: 767px) {
+    .row {
+      grid-template-columns: var(--space-6) minmax(0, 1fr) var(--space-6);
+      grid-template-areas:
+        "rank main owner"
+        "risk risk risk"
+        "due due score";
+      row-gap: var(--space-2);
+      align-items: start;
+      padding: var(--space-4);
+    }
+
+    .rank {
+      grid-area: rank;
+    }
+
+    .main {
+      grid-area: main;
+    }
+
+    .name {
+      white-space: normal;
+    }
+
+    .avatar {
+      grid-area: owner;
+    }
+
+    .risk-cell {
+      grid-area: risk;
+    }
+
+    .due-cell {
+      grid-area: due;
+      justify-content: flex-start;
+    }
+
+    .score {
+      grid-area: score;
+      align-self: center;
+    }
+  }
+</style>

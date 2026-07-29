@@ -20,6 +20,21 @@
 /** Versioned localStorage key holding the whole {@link StoredSession}. */
 export const SESSION_STORAGE_KEY = "aztec.session.v1";
 
+/**
+ * Cookie mirroring the access token onto the *frontend's* origin.
+ *
+ * The API sets its own `aztec_access` cookie, but that one is scoped to the
+ * API's origin and path, so the Astro server never receives it. This mirror is
+ * what makes server-rendered first paint possible: the middleware reads it and
+ * hands it to the render (`./server-token.ts`).
+ *
+ * It is readable by JavaScript, necessarily — the browser is what writes it —
+ * which is the same exposure the session already has in `localStorage`, and no
+ * more. It is not the API's credential of record: writes still travel with the
+ * `Authorization` header, which no cross-origin page can forge.
+ */
+export const SESSION_COOKIE_NAME = "aztec_front_token";
+
 /** Safety margin subtracted from the expiry when judging freshness. */
 const EXPIRY_SKEW_MS = 30_000;
 
@@ -56,16 +71,35 @@ export function loadSession(): StoredSession | null {
   return parsed;
 }
 
-/** Persists the session; a no-op outside the browser. */
+/**
+ * Persists the session, and mirrors its access token into
+ * {@link SESSION_COOKIE_NAME} so the next server-rendered navigation can read
+ * it. A no-op outside the browser.
+ */
 export function saveSession(session: StoredSession): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+  writeTokenCookie(session);
 }
 
-/** Forgets the session; a no-op outside the browser. */
+/** Forgets the session and expires the mirror cookie. A no-op outside the browser. */
 export function clearSession(): void {
   if (typeof window === "undefined") return;
   window.localStorage.removeItem(SESSION_STORAGE_KEY);
+  document.cookie = `${SESSION_COOKIE_NAME}=; path=/; max-age=0; SameSite=Lax`;
+}
+
+/**
+ * Writes the mirror cookie with the token's own remaining lifetime, so a stale
+ * token expires with the cookie instead of outliving it and producing a first
+ * paint the server believes is authenticated.
+ */
+function writeTokenCookie(session: StoredSession): void {
+  const maxAge = Math.max(
+    0,
+    Math.floor((session.expiresAt - Date.now()) / 1000),
+  );
+  document.cookie = `${SESSION_COOKIE_NAME}=${encodeURIComponent(session.access)}; path=/; max-age=${maxAge}; SameSite=Lax`;
 }
 
 /**

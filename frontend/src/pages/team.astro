@@ -1,0 +1,346 @@
+---
+/**
+ * Equipo (`/team`): who is on the team, what they are carrying, and who changes that.
+ *
+ * The container (`docs/standards/PATTERNS_FRONTEND.md` §5): this frontmatter performs the reads
+ * for the first paint and composes presentational components; the island underneath refetches
+ * and writes, and owns no copy of its own.
+ *
+ * **The question lives in the URL.** Search, facets and ordering are read from
+ * `Astro.url.searchParams` and passed straight to `GET /api/v1/team/load`, so a shared link
+ * opens on the view it promises and the server renders exactly what the toolbar shows. Nothing
+ * is filtered or sorted in the browser — a second ordering here would disagree with the link.
+ *
+ * Load is computed from task rows at read time and never stored (`docs/API.md` §2.14), so there
+ * is no entity to patch from an envelope: a task event means "the answer changed", which this
+ * surface honours with a debounced refetch rather than by doing arithmetic the server owns.
+ *
+ * The four view states are real markup, one arm at a time, selected by `data-view` on the
+ * region — including `disconnected`, which keeps the rows on screen and marks them stale
+ * instead of blanking the roster.
+ */
+import ConfirmDialog from "../components/team/ConfirmDialog.astro";
+import MemberDialog from "../components/team/MemberDialog.astro";
+import PasswordDialog from "../components/team/PasswordDialog.astro";
+import RolesDialog from "../components/team/RolesDialog.astro";
+import RosterTable from "../components/team/RosterTable.astro";
+import RosterToolbar from "../components/team/RosterToolbar.astro";
+import {
+  EMPTY_MESSAGE,
+  EMPTY_ROSTER_MESSAGE,
+  errorCopy,
+  formatClock,
+  formatStamp,
+  formatSummary,
+  isFiltered,
+  orderByOf,
+  queryFromParams,
+} from "../components/team/table";
+import Icon from "../components/ui/Icon.astro";
+import Shell from "../layouts/Shell.astro";
+import { getCatalog, getTeamLoad } from "../lib/api/client";
+import { toViewState } from "../lib/view-state";
+
+const query = queryFromParams(Astro.url.searchParams);
+
+/**
+ * Both reads at once: the roster is the page, and the roles are what its pickers and its role
+ * facet are drawn from. Sequential would cost a round trip for no reason — neither depends on
+ * the other.
+ */
+const [result, catalog] = await Promise.all([
+  getTeamLoad({
+    q: query.search,
+    role: query.role === null ? [] : [query.role],
+    status: query.status,
+    ...(query.overloaded === null ? {} : { overloaded: query.overloaded }),
+    order_by: orderByOf(query),
+  }),
+  getCatalog(),
+]);
+
+/**
+ * `"connecting"` because the stream has no meaning during SSR: there is no `EventSource` on the
+ * server, and a fresh response is authoritative whether or not the browser's stream has
+ * finished opening. It also makes `disconnected` unreachable here — that arm is entered by the
+ * island, from a real status change.
+ */
+const state = toViewState(result, "connecting", {
+  isEmpty: (data) => data.items.length === 0,
+  emptyMessage: isFiltered(query) ? EMPTY_MESSAGE : EMPTY_ROSTER_MESSAGE,
+  lastEventAt: null,
+});
+
+const entries = state.kind === "ready" ? state.data.items : [];
+
+/**
+ * An empty role list is a legitimate first paint, not a failure: the facet and the pickers
+ * render with only "Todos" / "Sin rol", which is the truth about a catalog nobody has filled.
+ */
+const roles = catalog.ok ? catalog.data.roles : [];
+
+/** Filled even when this arm is hidden, so the card is never blank the moment it appears. */
+const errorMessage = errorCopy(
+  state.kind === "error" ? state.code : "unknown_error",
+);
+
+/** When this page was read; the staleness marker falls back to it before the first event. */
+const fetchedAt = new Date().toISOString();
+
+const CRUMBS = [{ label: "Resumen", href: "/" }, { label: "Equipo" }];
+
+/** Skeleton rows shown while a retry is in flight. */
+const SKELETON_ROWS = [0, 1, 2, 3, 4];
+---
+
+<Shell title="Equipo" active="team" crumbs={CRUMBS}>
+  <section
+    class="team"
+    data-team-region
+    data-view={state.kind}
+    data-fetched-at={fetchedAt}
+  >
+    <header class="head">
+      <div>
+        <h1 class="h1">Equipo</h1>
+        <p class="body-text lead">
+          Carga calculada de las tareas abiertas, no almacenada: se vuelve a
+          contar en cada lectura.
+        </p>
+      </div>
+      <p class="small summary" data-summary aria-live="polite">
+        {formatSummary(entries)}
+      </p>
+    </header>
+
+    <RosterToolbar query={query} roles={roles} />
+
+    <div class="stale card tone-ambar" data-stale role="status">
+      <span class="dot" aria-hidden="true"></span>
+      <p class="stale-text">
+        Sin datos en vivo: se cortó la conexión con el flujo. Lo que ves es de
+        las <time
+          class="figure"
+          data-stale-time
+          datetime={fetchedAt}
+          title={formatStamp(fetchedAt)}>{formatClock(fetchedAt)}</time
+        >.
+      </p>
+      <button
+        class="btn btn-secondary"
+        type="button"
+        data-roster-action="reconnect"
+      >
+        <Icon name="refresh" />
+        Reconectar
+      </button>
+    </div>
+
+    <div data-table-arm>
+      <RosterTable entries={entries} query={query} />
+    </div>
+
+    <div class="card skeletons" data-skeletons aria-hidden="true">
+      {SKELETON_ROWS.map(() => <p class="skeleton-row" />)}
+    </div>
+
+    <div class="state card" data-empty-arm>
+      <span class="state-icon tone-piedra" aria-hidden="true">
+        <Icon name="users" />
+      </span>
+      <h2 class="h2">Nadie que mostrar</h2>
+      <p class="body-text" data-empty-copy>
+        {state.kind === "empty" ? state.message : EMPTY_MESSAGE}
+      </p>
+      <p class="state-actions">
+        <button
+          class="btn btn-secondary"
+          type="button"
+          data-roster-action="clear"
+          data-empty-clear
+          hidden
+        >
+          Limpiar filtros
+        </button>
+        <button
+          class="btn btn-primary"
+          type="button"
+          data-roster-action="create"
+          data-roster-actions
+          hidden
+        >
+          <Icon name="plus" size={16} />
+          Añadir persona
+        </button>
+      </p>
+    </div>
+
+    <div class="state card" data-error-arm>
+      <span class="state-icon tone-rojo" aria-hidden="true">
+        <Icon name="alert" />
+      </span>
+      <h2 class="h2">No pudimos leer el equipo</h2>
+      <p class="body-text" data-error-copy>{errorMessage}</p>
+      <p>
+        <button
+          class="btn btn-secondary"
+          type="button"
+          data-roster-action="retry"
+        >
+          Reintentar
+        </button>
+      </p>
+    </div>
+
+    <MemberDialog roles={roles} />
+    <PasswordDialog />
+    <ConfirmDialog />
+    <RolesDialog />
+  </section>
+
+  <script>
+    import { onPage } from "../components/projects/island";
+    import { mountRoster } from "../components/team/roster-island";
+
+    onPage("[data-team-region]", mountRoster);
+  </script>
+</Shell>
+
+<style>
+  /*
+   * The single track is stated as `minmax(0, 1fr)` and every arm carries
+   * `min-width: 0`.
+   *
+   * The roster is a 900px table inside its own horizontal scroller
+   * (`styles/table.css`), and a scroller only scrolls when its ancestors are
+   * allowed to be narrower than its content: an implicit `auto` track is
+   * floored by its item's min-content, and a grid item's `min-width: auto` is
+   * floored by its own, so the page grew to the table's width and *the body*
+   * scrolled sideways at every viewport — worst on a phone.
+   */
+  .team {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-5);
+  }
+
+  .team > * {
+    min-width: 0;
+  }
+
+  .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .lead {
+    margin-top: var(--space-2);
+    color: var(--tinta-media);
+  }
+
+  .stale {
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background-color: var(--tone-wash);
+  }
+
+  .stale-text {
+    font-size: var(--text-small-size);
+    line-height: var(--text-small-line);
+    color: var(--tone-ink);
+  }
+
+  .stale .btn {
+    margin-left: auto;
+  }
+
+  .state {
+    justify-items: start;
+    gap: var(--space-3);
+    padding: var(--space-6);
+  }
+
+  .state-icon {
+    display: grid;
+    place-items: center;
+    width: var(--space-7);
+    height: var(--space-7);
+    border-radius: var(--radius-full);
+    background-color: var(--tone-wash);
+    color: var(--tone-ink);
+  }
+
+  .state-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .skeletons {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+  }
+
+  .skeleton-row {
+    height: var(--space-6);
+    border-radius: var(--radius-chip);
+    background-color: var(--pozo);
+  }
+
+  /* --- View-state arms: one at a time, selected by `data-view` on the region --- */
+
+  [data-table-arm],
+  [data-skeletons],
+  [data-stale],
+  [data-empty-arm],
+  [data-error-arm] {
+    display: none;
+  }
+
+  [data-view="ready"] [data-table-arm],
+  [data-view="disconnected"] [data-table-arm],
+  [data-view="loading"] [data-skeletons] {
+    display: block;
+  }
+
+  [data-view="disconnected"] [data-stale] {
+    display: flex;
+  }
+
+  [data-view="empty"] [data-empty-arm],
+  [data-view="error"] [data-error-arm] {
+    display: grid;
+  }
+
+  /* The toolbar survives every arm: the way out of an empty result is the filter that
+     produced it, so hiding the controls would strand the reader in it. */
+  [data-view="error"] [data-roster-toolbar] {
+    display: none;
+  }
+
+  /* A count of a roster we could not read would be a number pretending to be a fact. */
+  [data-view="loading"] .summary,
+  [data-view="empty"] .summary,
+  [data-view="error"] .summary {
+    display: none;
+  }
+
+  @media (max-width: 640px) {
+    .stale {
+      flex-wrap: wrap;
+    }
+
+    .stale .btn {
+      width: 100%;
+    }
+
+    .state {
+      padding: var(--space-5);
+    }
+  }
+</style>

@@ -1,0 +1,299 @@
+---
+/**
+ * The identity card of one task: what it is, whose it is, where it stands, what
+ * it is waiting on, and the legal moves out of here.
+ *
+ * The title carries `transition:name`, so the row the operator clicked in the
+ * project's task table becomes this heading instead of the page cutting to it —
+ * the shared element that makes the two surfaces feel like one object being
+ * opened (DESIGN.md §Motion, "Navigation").
+ *
+ * Absences are named, never blank (Present-Absence Rule): no deadline is an
+ * ámbar "Sin fecha", an unassigned task says so, and a task with no recorded
+ * progress says that too, because those are exactly the tasks that slip
+ * unnoticed.
+ *
+ * Every value here is patchable after the first paint: a colleague's edit
+ * arrives as `task.updated`, the screen re-reads and `task-paint.ts` writes the
+ * answer field by field. That is why each of them publishes a `data-field` or a
+ * `data-*-chip` hook, and why the rows that grow — the dependency chips — are
+ * cloned from a `<template>` rendered here: the markup of a live value has
+ * exactly one home, and a copy written in TypeScript is how it starts drifting.
+ */
+import DateField from "../ui/DateField.astro";
+import OwnerMenu from "../projects/OwnerMenu.astro";
+import StateChip from "../projects/StateChip.astro";
+import { taxonomyTone, toneStyle } from "../projects/tone";
+import TaskTransitionBar from "./TaskTransitionBar.astro";
+import { dependencyLabel, dependencyTitle, projectHref } from "./presentation";
+import type { DependencyRef, Transition } from "../../lib/api/domain";
+
+export interface Props {
+  code: string;
+  title: string;
+  /** What the task is about; `""` when nobody wrote it. */
+  detail: string;
+  projectCode: string;
+  projectName: string;
+  assigneeAlias: string | null;
+  assigneeLabel: string | null;
+  priorityLabel: string;
+  priorityColor: string | null;
+  stateLabel: string;
+  stateCategory: string;
+  stateColor: string | null;
+  dueDate: string | null;
+  /** Derived server-side against the request's clock, never a stored column. */
+  isOverdue: boolean;
+  /** The last recorded advance; `""` is the absence this header names. */
+  lastProgress: string;
+  /** What this task waits on; most references are prose, not codes. */
+  dependencies: readonly DependencyRef[];
+  /** The only source of transition buttons (`docs/API.md` §2.2). */
+  transitions: readonly Transition[];
+  /** Task attributes that are currently empty, from the same read. */
+  emptyFields: readonly string[];
+  /** The read's `updated_at`; the floor every live patch is compared against. */
+  updatedAt: string;
+}
+
+const {
+  code,
+  title,
+  detail,
+  projectCode,
+  projectName,
+  assigneeAlias,
+  assigneeLabel,
+  priorityLabel,
+  priorityColor,
+  stateLabel,
+  stateCategory,
+  stateColor,
+  dueDate,
+  isOverdue,
+  lastProgress,
+  dependencies,
+  transitions,
+  emptyFields,
+  updatedAt,
+} = Astro.props;
+
+const priority = taxonomyTone(priorityColor);
+---
+
+<header
+  class="head card"
+  data-task-header
+  data-task-code={code}
+  data-updated-at={updatedAt}
+>
+  <div class="top">
+    <span class="chip chip-code">{code}</span>
+    <StateChip label={stateLabel} category={stateCategory} color={stateColor} />
+    <span
+      class:list={["chip", priority.className]}
+      style={toneStyle(priority)}
+      data-priority-chip
+    >
+      <span data-field="priority-label">{priorityLabel}</span>
+    </span>
+    <span class="chip tone-rojo" data-field="overdue" hidden={!isOverdue}>
+      Vencida
+    </span>
+  </div>
+
+  <h1 class="h1 name" transition:name={`task-${code}`} data-field="task-title">
+    {title}
+  </h1>
+
+  <p
+    class="body-text detail"
+    data-task-detail-line
+    data-field="task-detail"
+    hidden={detail === ""}
+  >
+    {detail}
+  </p>
+
+  <dl class="facts">
+    <div class="fact">
+      <dt class="label">Proyecto</dt>
+      <dd>
+        <a class="project" href={projectHref(projectCode)}>
+          <span class="title">{projectName}</span>
+          <span class="chip chip-code">{projectCode}</span>
+        </a>
+      </dd>
+    </div>
+    <div class="fact">
+      <dt class="label">Responsable</dt>
+      <dd>
+        <OwnerMenu
+          scope="task"
+          code={code}
+          alias={assigneeAlias}
+          label={assigneeLabel}
+        />
+      </dd>
+    </div>
+    <div class="fact">
+      <dt class="label">Vence</dt>
+      <dd>
+        <DateField scope="task" code={code} date={dueDate} label="Vence" />
+      </dd>
+    </div>
+    <div class="fact">
+      <dt class="label">Depende de</dt>
+      <dd class="deps" data-dependency-list>
+        {
+          dependencies.length === 0 && (
+            <span class="chip tone-piedra">Sin dependencias</span>
+          )
+        }
+        {
+          dependencies.map((dependency) => (
+            <span
+              class="chip chip-code dep"
+              title={dependencyTitle(dependency)}
+            >
+              {dependencyLabel(dependency)}
+            </span>
+          ))
+        }
+      </dd>
+    </div>
+    <div class="fact wide">
+      <dt class="label">Último avance</dt>
+      <dd
+        data-last-progress
+        data-filled={lastProgress === "" ? "false" : "true"}
+      >
+        <p class="body-text" data-field="last-progress">{lastProgress}</p>
+        <span class="chip tone-ambar" data-last-progress-absent>
+          Sin avance registrado
+        </span>
+      </dd>
+    </div>
+  </dl>
+
+  <TaskTransitionBar
+    taskCode={code}
+    transitions={transitions}
+    emptyFields={emptyFields}
+    updatedAt={updatedAt}
+  />
+
+  <template data-template="dependency">
+    <span class="chip chip-code dep"></span>
+  </template>
+  <template data-template="no-dependency">
+    <span class="chip tone-piedra">Sin dependencias</span>
+  </template>
+</header>
+
+<script>
+  import { onPage } from "../projects/island";
+  import { mountTaskHeader } from "./task-header";
+
+  onPage("[data-task-header]", mountTaskHeader);
+</script>
+
+<style>
+  .head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-5);
+  }
+
+  .top {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .name {
+    margin-top: var(--space-1);
+    overflow-wrap: anywhere;
+  }
+
+  .detail {
+    color: var(--tinta-media);
+  }
+
+  .detail[hidden] {
+    display: none;
+  }
+
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--space-4);
+    margin-top: var(--space-2);
+    padding-top: var(--space-4);
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .fact {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .fact.wide {
+    grid-column: 1 / -1;
+  }
+
+  dd {
+    margin: 0;
+  }
+
+  .project {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    color: var(--tinta);
+    text-decoration: none;
+    border-bottom: var(--border-width) solid transparent;
+    transition: color var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .project:hover {
+    color: var(--cobalto);
+  }
+
+  .project:hover .title {
+    border-bottom: var(--border-width) solid var(--cobalto);
+  }
+
+  .deps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  .dep {
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: inline-block;
+  }
+
+  /*
+   * One value, two renderings: the recorded advance and the named absence are
+   * never both on screen and never both hidden, so the field cannot end up
+   * blank (Present-Absence Rule).
+   */
+  [data-last-progress][data-filled="true"] [data-last-progress-absent],
+  [data-last-progress][data-filled="false"] [data-field="last-progress"] {
+    display: none;
+  }
+
+  .chip[hidden] {
+    display: none;
+  }
+</style>

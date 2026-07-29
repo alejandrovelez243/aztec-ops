@@ -13,7 +13,9 @@ cleared. That distinction is why ``UpdateTaskCommand`` can unassign a task at al
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
+from typing import Final
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -44,6 +46,12 @@ class WorkCommand(BaseModel):
         return value
 
 
+#: What a task code looks like: a project code, the task infix, and a number
+#: (``PRJ-15-T02``). Mirrored from ``work.models.TASK_CODE_INFIX`` rather than
+#: imported, because ``domain/`` stays free of Django (CLAUDE.md rule 6).
+_TASK_CODE_PATTERN: Final = re.compile(r"^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*-[Tt]\d+$")
+
+
 class DependencySpec(BaseModel):
     """One prerequisite of a task being created, resolved or not.
 
@@ -57,6 +65,34 @@ class DependencySpec(BaseModel):
 
     depends_on_code: str | None = None
     raw_label: str = ""
+
+    @classmethod
+    def from_text(cls, text: str) -> DependencySpec:
+        """Read one prerequisite the way an operator wrote it.
+
+        The wire carries a single string per dependency, because that is what the
+        source data is: a column in which most rows are a sentence and a few are a
+        task code. Deciding which one it is belongs here rather than in the router
+        — it is the rule that gives ``depends_on_code``/``raw_label`` their meaning,
+        and a router that classified it would put a domain rule in the HTTP layer
+        (ARCHITECTURE §7).
+
+        A code is a reference to a task and therefore has the shape of one: no
+        whitespace, ending in the task infix and a number. Anything else is the
+        operation's own words and is kept verbatim, unresolved — which the class
+        docstring above calls the normal case. Treating prose as a code is what
+        makes ``POST /projects/{code}/tasks`` answer ``404`` for a dependency that
+        was never meant to resolve.
+        """
+        label = text.strip()
+        looks_like_code = (
+            label != ""
+            and not any(character.isspace() for character in label)
+            and _TASK_CODE_PATTERN.match(label) is not None
+        )
+        if looks_like_code:
+            return cls(depends_on_code=label.upper(), raw_label=label)
+        return cls(raw_label=label)
 
     @model_validator(mode="after")
     def _reject_empty_dependency(self) -> DependencySpec:
@@ -85,6 +121,7 @@ class CreateTaskCommand(WorkCommand):
     assignee_code: str | None = None
     due_date: date | None = None
     detail: str = ""
+    description: str = ""
     last_progress: str = Field(default="", max_length=255)
     dependencies: tuple[DependencySpec, ...] = ()
 
@@ -100,6 +137,7 @@ class UpdateTaskCommand(WorkCommand):
     task_code: str = Field(min_length=1, max_length=16)
     title: str = Field(default="", min_length=1, max_length=200)
     detail: str = ""
+    description: str = ""
     last_progress: str = Field(default="", max_length=255)
     priority_code: str = Field(default="", min_length=1, max_length=32)
     assignee_code: str | None = None

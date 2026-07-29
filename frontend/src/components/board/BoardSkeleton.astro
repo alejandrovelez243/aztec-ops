@@ -1,0 +1,219 @@
+---
+/**
+ * The board's loading arm: the exact geometry of the loaded surface, shimmering.
+ *
+ * Whole-page spinners are forbidden (DESIGN.md §Motion), and a skeleton that does not match
+ * the final layout is worse than none — the operator reads a shape, then watches it jump. So
+ * this draws what the surface draws: the narrow rail of stacked project bands on the left and
+ * the horizontal board of task columns on the right, at the same widths
+ * `islands/BoardCanvas.astro` uses.
+ *
+ * Three bands of two cards and four columns is the shape of the seeded portfolio; the real
+ * counts arrive with the data.
+ */
+const BANDS = 3;
+const CARDS_PER_BAND = 2;
+const COLUMNS = 4;
+const CARDS_PER_COLUMN = 2;
+
+const bands = Array.from({ length: BANDS }, (_, index) => index);
+const bandCards = Array.from({ length: CARDS_PER_BAND }, (_, index) => index);
+const columns = Array.from({ length: COLUMNS }, (_, index) => index);
+const columnCards = Array.from(
+  { length: CARDS_PER_COLUMN },
+  (_, index) => index,
+);
+---
+
+<div class="skeleton-stage" aria-busy="true" aria-live="polite">
+  <p class="visually-hidden" lang="es">Cargando el tablero…</p>
+
+  <aside class="skeleton-rail">
+    {
+      bands.map(() => (
+        <section class="skeleton-band">
+          <div class="skeleton-head">
+            <span class="skeleton skeleton-title" />
+            <span class="skeleton skeleton-count" />
+          </div>
+          <div class="well skeleton-body">
+            {bandCards.map(() => (
+              <div class="card skeleton-card">
+                <span class="skeleton skeleton-chip" />
+                <span class="skeleton skeleton-line" />
+                <span class="skeleton skeleton-line short" />
+                <div class="skeleton-foot">
+                  <span class="skeleton skeleton-avatar" />
+                  <span class="skeleton skeleton-chip" />
+                  <span class="skeleton skeleton-score" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))
+    }
+  </aside>
+
+  <div class="skeleton-board">
+    {
+      columns.map(() => (
+        <section class="skeleton-column">
+          <div class="skeleton-head">
+            <span class="skeleton skeleton-title" />
+            <span class="skeleton skeleton-count" />
+          </div>
+          <div class="well skeleton-body">
+            {columnCards.map(() => (
+              <div class="card skeleton-card">
+                <span class="skeleton skeleton-line" />
+                <span class="skeleton skeleton-line short" />
+                <div class="skeleton-foot">
+                  <span class="skeleton skeleton-avatar" />
+                  <span class="skeleton skeleton-chip" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))
+    }
+  </div>
+</div>
+
+<style>
+  .skeleton-stage {
+    display: grid;
+    /* Same two-track stage as the loaded surface; a skeleton in a different shape
+       is a promise the paint then breaks. */
+    grid-template-columns: var(--rail-track) minmax(0, 1fr);
+    --rail-track: clamp(340px, 24vw, 380px);
+    --column-min: 272px;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .skeleton-rail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    padding: var(--space-4);
+    background-color: var(--papel);
+    overflow: hidden;
+  }
+
+  .skeleton-board {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(var(--column-min), 1fr);
+    gap: var(--space-4);
+    align-items: start;
+    padding: var(--space-4) var(--space-5);
+    background-color: var(--carta);
+    border-left: var(--border-width) solid var(--hairline);
+    overflow: hidden;
+  }
+
+  .skeleton-band,
+  .skeleton-column {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .skeleton-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding-inline: var(--space-2);
+    min-height: var(--space-6);
+  }
+
+  .skeleton-title {
+    width: 96px;
+    height: var(--space-3);
+  }
+
+  .skeleton-count {
+    width: var(--space-5);
+    height: var(--space-3);
+    margin-left: auto;
+  }
+
+  .skeleton-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    min-height: 120px;
+  }
+
+  .skeleton-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+  }
+
+  .skeleton-chip {
+    width: 72px;
+    height: var(--space-4);
+  }
+
+  .skeleton-line {
+    width: 100%;
+    height: var(--space-4);
+  }
+
+  .skeleton-line.short {
+    width: 60%;
+  }
+
+  .skeleton-foot {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .skeleton-avatar {
+    width: var(--space-5);
+    height: var(--space-5);
+    border-radius: var(--radius-full);
+  }
+
+  .skeleton-score {
+    width: var(--space-6);
+    height: var(--space-4);
+    margin-left: auto;
+  }
+
+  /* Below the rail's own width it lies down above the board, exactly as the
+     loaded surface does. */
+  @media (max-width: 1023px) {
+    .skeleton-stage {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .skeleton-rail {
+      flex-direction: row;
+      align-items: flex-start;
+      gap: var(--space-4);
+      padding: var(--space-3) var(--space-4);
+      border-bottom: var(--border-width) solid var(--hairline);
+    }
+
+    .skeleton-band {
+      min-width: 264px;
+      flex: none;
+    }
+
+    .skeleton-board {
+      border-left: 0;
+      padding-inline: var(--space-4);
+    }
+  }
+</style>

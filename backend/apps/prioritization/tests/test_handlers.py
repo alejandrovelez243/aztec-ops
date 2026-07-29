@@ -23,6 +23,9 @@ from apps.events.domain.envelope import (
     ALL_TOPICS,
     SYSTEM_ACTOR,
     TOPIC_CLOCK_TICKED,
+    TOPIC_MEMBER_ACTIVATION_CHANGED,
+    TOPIC_MEMBER_CREATED,
+    TOPIC_MEMBER_UPDATED,
     TOPIC_PROJECT_PRIORITY_RECALCULATED,
     TOPIC_PROJECT_UPDATED,
     EventEnvelope,
@@ -44,6 +47,12 @@ from apps.prioritization.models import PriorityScore
 OCCURRED_AT = datetime(2026, 3, 1, 9, 0, tzinfo=UTC)
 LATER = OCCURRED_AT + timedelta(hours=1)
 TICK_AT = OCCURRED_AT + timedelta(days=1)
+
+#: The roster's own topics, named here so the subscription assertions read as a statement about
+#: the engine rather than as a list somebody has to keep in step with the catalog by hand.
+MEMBER_TOPICS = frozenset(
+    {TOPIC_MEMBER_CREATED, TOPIC_MEMBER_UPDATED, TOPIC_MEMBER_ACTIVATION_CHANGED}
+)
 
 
 def _deliver(handler_name: str, envelope: EventEnvelope) -> bool:
@@ -74,10 +83,22 @@ class EngineSubscriptionTestCase(SimpleTestCase):
         }
         self.assertNotIn(PRIORITY_RECALCULATOR, subscribed)
 
-    def test_the_engine_reads_every_write_side_topic_and_the_clock(self) -> None:
-        expected = ALL_TOPICS - {TOPIC_PROJECT_PRIORITY_RECALCULATED}
+    def test_the_engine_reads_every_topic_about_the_work_and_the_clock(self) -> None:
+        # Everything the bus carries, minus what the engine emits and minus the roster: a person's
+        # capacity feeds ``OWNER_OVERLOADED``, which is computed on read (ADR 0011), so there is no
+        # score for a roster edit to move and nothing for a recomputation to persist.
+        expected = ALL_TOPICS - {TOPIC_PROJECT_PRIORITY_RECALCULATED} - MEMBER_TOPICS
         self.assertEqual(ENGINE_TOPICS, expected)
         self.assertIn(TOPIC_CLOCK_TICKED, ENGINE_TOPICS)
+
+    def test_a_roster_edit_never_reaches_the_ranking(self) -> None:
+        # Stated as its own assertion rather than left implicit in the set arithmetic above,
+        # because the failure it guards against is silent: an engine subscribed to the roster
+        # rescores every project an edited person owns, and arrives at the same numbers.
+        for topic in MEMBER_TOPICS:
+            with self.subTest(topic=topic):
+                subscribed = {registration.name for registration in handlers_for(topic)}
+                self.assertNotIn(PRIORITY_RECALCULATOR, subscribed)
 
     def test_no_topic_announces_a_risk_change(self) -> None:
         """Flags are computed on read, so there is no moment at which they change (ADR 0011)."""

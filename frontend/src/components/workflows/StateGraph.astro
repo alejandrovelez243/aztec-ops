@@ -1,0 +1,263 @@
+---
+/**
+ * The workflow drawn: a card per state in the operator's order, and an arrow per
+ * configured move arching over the row when it advances and under it when it
+ * goes back.
+ *
+ * **The drawing is `aria-hidden`.** It is a picture of something the transitions
+ * table beside it states in full — a screen reader that walked a hundred bezier
+ * paths would learn nothing the table does not say better, and two accessible
+ * copies of one graph is two things to keep in agreement.
+ *
+ * The scroll container around it is *not* hidden, and that is deliberate rather
+ * than an oversight. A horizontally scrollable region is keyboard-focusable
+ * (Firefox makes it so on its own), and a focusable element inside an
+ * `aria-hidden` subtree is the one combination that is worse than either choice:
+ * focus lands somewhere the screen reader refuses to describe. So the container
+ * keeps a label that says what it holds and where the content really is, and
+ * everything inside it is hidden — a keyboard can still scroll the picture, and
+ * a reader is pointed at the table instead of walked through the paths.
+ *
+ * Geometry arrives already computed (`components/workflows/graph.ts`): this page
+ * has no island, so the arcs must line up with the cards on the server's first
+ * paint, and the numbers the CSS positions the cards with are the same numbers
+ * the SVG drew its paths in.
+ *
+ * The two cases the layout has to survive: a **back edge**, which is why arcs
+ * have a side at all, and a **state nothing touches**, which keeps its column
+ * and says so on the card rather than quietly vanishing from the picture.
+ */
+import { GRAPH } from "./graph";
+import type { ArcView, NodeView, StateRole } from "./graph";
+
+export interface Props {
+  nodes: readonly NodeView[];
+  arcs: readonly ArcView[];
+  /** Diagram width in px, from the model — the scroll container's content size. */
+  width: number;
+  /** Diagram height in px, from the model. */
+  height: number;
+  /** Document-unique id of this graph's arrowhead marker. */
+  arrowId: string;
+}
+
+const { nodes, arcs, width, height, arrowId } = Astro.props;
+
+/**
+ * What a card says about itself when the edge set leaves it stranded. `connected`
+ * says nothing: the arrows on the card already speak for it.
+ */
+const ROLE_NOTE: Readonly<Record<StateRole, string | null>> = {
+  connected: null,
+  terminal: "sin salida",
+  isolated: "sin movimientos",
+};
+
+/** Joins the custom properties an element needs, dropping the ones it has none of. */
+function styleOf(parts: readonly (string | null)[]): string {
+  return parts.filter((part): part is string => part !== null).join(";");
+}
+
+const canvasStyle = styleOf([
+  `--graph-w:${width}px`,
+  `--graph-h:${height}px`,
+  `--node-w:${GRAPH.nodeWidth}px`,
+  `--node-h:${GRAPH.nodeHeight}px`,
+]);
+---
+
+<figure class="graph">
+  <div
+    class="scroller"
+    tabindex="0"
+    role="group"
+    aria-label="Diagrama del flujo; los mismos movimientos están en la tabla siguiente"
+  >
+    <div class="canvas" style={canvasStyle} aria-hidden="true">
+      <svg
+        class="arcs"
+        viewBox={`0 0 ${width} ${height}`}
+        width={width}
+        height={height}
+        focusable="false"
+      >
+        <defs>
+          <marker
+            id={arrowId}
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="6"
+            markerHeight="6"
+            orient="auto"
+            markerUnits="strokeWidth"
+          >
+            <path d="M1 1 L9 5 L1 9 Z" fill="currentColor"></path>
+          </marker>
+        </defs>
+        {
+          arcs.map((arc) => (
+            <path
+              class="arc"
+              d={arc.path}
+              data-direction={arc.direction}
+              marker-end={`url(#${arrowId})`}
+            />
+          ))
+        }
+      </svg>
+
+      <ul class="nodes">
+        {
+          nodes.map((node) => (
+            <li
+              class:list={["node", "card", node.toneClass]}
+              style={styleOf([
+                `--x:${node.x}px`,
+                `--y:${node.y}px`,
+                node.toneStyle,
+              ])}
+              data-role={node.role}
+            >
+              <span class="node-label title">{node.state.label}</span>
+              <span class="node-code figure">{node.state.code}</span>
+              {ROLE_NOTE[node.role] !== null && (
+                <span class="chip node-note">{ROLE_NOTE[node.role]}</span>
+              )}
+            </li>
+          ))
+        }
+      </ul>
+
+      <ul class="captions">
+        {
+          arcs.map((arc) => (
+            <li
+              class="caption"
+              style={styleOf([`--x:${arc.labelX}px`, `--y:${arc.labelY}px`])}
+            >
+              <span class:list={["chip", arc.requiresReason && "tone-ambar"]}>
+                {arc.label}
+                {arc.requiresReason && <b class="mark">*</b>}
+              </span>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </div>
+</figure>
+
+<style>
+  /* `min-width: 0` is what lets the scroller below actually scroll: as a grid
+     item the figure is otherwise floored by its own min-content — the full
+     width of the drawing — and the page ends up carrying the overflow. */
+  .graph {
+    margin: 0;
+    min-width: 0;
+  }
+
+  /* The drawing is wider than any content column it will ever sit in, so it
+     scrolls inside its own well instead of pushing the page sideways. */
+  .scroller {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    padding: var(--space-3);
+    border-radius: var(--radius-card);
+    background-color: var(--pozo);
+  }
+
+  .canvas {
+    position: relative;
+    width: var(--graph-w);
+    height: var(--graph-h);
+  }
+
+  .arcs {
+    position: absolute;
+    inset: 0;
+    color: var(--tinta-suave);
+    overflow: visible;
+  }
+
+  .arc {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+  }
+
+  /* --- The cards --- */
+
+  .node {
+    position: absolute;
+    left: var(--x);
+    top: var(--y);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: var(--space-1);
+    width: var(--node-w);
+    height: var(--node-h);
+    padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
+    overflow: hidden;
+    /* The marker stripe of the wall card, kept beside the card's own elevation:
+       `.rail` in base.css replaces `box-shadow` outright, which would flatten
+       the card onto the wall the moment it carried a tone. */
+    box-shadow:
+      inset var(--rail-width) 0 0 0 var(--tone-solid),
+      var(--shadow-resting);
+  }
+
+  .node-label {
+    color: var(--tinta);
+    /* Two lines of room before a long label is cut: the card's height is fixed
+       by the geometry the arcs were drawn against and cannot grow to fit one. */
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+  }
+
+  .node-code {
+    color: var(--tinta-suave);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* A state the configuration strands is marked on the card, because the reader
+     who came here to find out why is looking straight at it. */
+  .node-note {
+    align-self: flex-start;
+    margin-top: var(--space-1);
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .node[data-role="isolated"] {
+    border-style: dashed;
+  }
+
+  /* --- The arrow captions --- */
+
+  .caption {
+    position: absolute;
+    left: var(--x);
+    top: var(--y);
+    transform: translate(-50%, -50%);
+  }
+
+  .caption .chip {
+    background-color: var(--tone-wash, var(--carta));
+    box-shadow: 0 0 0 var(--border-width) var(--hairline);
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: var(--text-title-weight);
+  }
+
+  .mark {
+    font-weight: var(--text-label-weight);
+  }
+</style>

@@ -23,6 +23,7 @@ from apps.catalog.api import router as catalog_router
 from apps.portfolio.api import router as portfolio_router
 from apps.prioritization.api import router as prioritization_router
 from apps.work.api import router as work_router
+from apps.workflow.api import router as workflow_router
 from config.auth import token_auth
 from config.errors import register_exception_handlers
 from config.health import router as health_router
@@ -65,6 +66,7 @@ register_exception_handlers(api)
 # and mounting by prefix would force the URL to decide which context owns a use case.
 api.add_router("", accounts_router)
 api.add_router("", catalog_router)
+api.add_router("", workflow_router)
 api.add_router("", portfolio_router)
 api.add_router("", work_router)
 api.add_router("", activity_router)

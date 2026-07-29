@@ -1,0 +1,288 @@
+---
+/**
+ * A long-form description: Markdown, edited as blocks, with a `/` menu.
+ *
+ * **The content is never HTML.** The stored value is Markdown text, and the
+ * editor builds its DOM from ProseMirror's schema — a node allowlist by
+ * construction — rather than by assigning anybody's markup into the page. So
+ * there is no arm of this component where a string written by one operator is
+ * parsed as HTML in another operator's session, which is the failure mode a
+ * description field otherwise invites. Inline HTML is switched off in the
+ * Markdown parser for the same reason (`rich-text.ts`).
+ *
+ * The server renders the raw Markdown as **text**, and the island replaces it
+ * with the editor once it mounts. That is what a reader without JavaScript
+ * gets, and it is also why the first paint cannot flash somebody else's markup:
+ * `textContent` is the only write on this path.
+ *
+ * Saving is debounced and reported: this is a document, not a form, so there is
+ * no button that means "commit" — but a document that saves invisibly is a
+ * document nobody trusts, hence the explicit status line.
+ */
+import { RICH_TEXT_PLACEHOLDER } from "./rich-text-copy";
+
+export interface Props {
+  /** Which aggregate this edits; the delegated mount branches on it. */
+  scope: "task" | "project";
+  /** Business code of that aggregate — `PRJ-01`, `PRJ-01-T02`. */
+  code: string;
+  /** The stored Markdown; `""` when nobody has written one. */
+  value: string;
+  /** Accessible name of the field, in Spanish. */
+  label: string;
+}
+
+const { scope, code, value, label } = Astro.props;
+---
+
+<section
+  class="rich"
+  data-rich-text
+  data-scope={scope}
+  data-code={code}
+  data-label={label}
+>
+  <div class="head">
+    <h2 class="label" id={`rich-${scope}-${code}`}>{label}</h2>
+    <p class="small status" data-field="rich-status" role="status"></p>
+  </div>
+
+  {
+    /* The pre-hydration arm. `set:text` — never `set:html` — so the stored
+      Markdown reaches the page as the text it is. */
+  }
+  <div class="body-text fallback" data-rich-fallback set:text={value} />
+
+  <p class="small empty" data-rich-empty hidden={value !== ""}>
+    {RICH_TEXT_PLACEHOLDER}
+  </p>
+
+  <div
+    class="surface"
+    data-rich-surface
+    aria-labelledby={`rich-${scope}-${code}`}
+    hidden
+  >
+  </div>
+
+  {
+    /* The `/` menu. Items are built at runtime from the command list, so a
+      command added there needs no markup change here. */
+  }
+  <div
+    class="slash card"
+    data-rich-slash
+    role="listbox"
+    aria-label="Bloques"
+    hidden
+  >
+    <template data-template="slash-item">
+      <button class="slash-item" type="button" role="option" data-slash-item>
+        <span class="slash-key" data-field="slash-key"></span>
+        <span class="slash-text">
+          <span class="slash-title" data-field="slash-title"></span>
+          <span class="small slash-hint" data-field="slash-hint"></span>
+        </span>
+      </button>
+    </template>
+  </div>
+</section>
+
+<script>
+  import { onPage } from "../projects/island";
+  import { mountRichText } from "./rich-text";
+
+  onPage("[data-rich-text]", mountRichText);
+</script>
+
+<style>
+  .rich {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    /* The field owns its own inset: `.card` deliberately carries no padding,
+      and a component that depended on each caller remembering to add some
+      would render flush against the border on the first one that forgot. */
+    padding: var(--space-5);
+  }
+
+  .head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .status {
+    color: var(--tinta-media);
+    min-height: 1lh;
+  }
+
+  .status[data-tone="error"] {
+    color: var(--rojo-ink);
+  }
+
+  .fallback {
+    /* The stored Markdown, before the editor takes over. Newlines are the only
+      structure this arm can honour, and honouring them beats one long line. */
+    white-space: pre-wrap;
+  }
+
+  .fallback[hidden],
+  .surface[hidden],
+  .empty[hidden] {
+    display: none;
+  }
+
+  .empty {
+    color: var(--tinta-suave);
+  }
+
+  .surface :global(.ProseMirror) {
+    min-height: 120px;
+    padding: var(--space-3);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-control);
+    outline: none;
+    transition: border-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .surface :global(.ProseMirror:focus) {
+    border-color: var(--cobalto);
+  }
+
+  .surface :global(.ProseMirror > * + *) {
+    margin-top: var(--space-3);
+  }
+
+  .surface :global(h1),
+  .surface :global(h2),
+  .surface :global(h3) {
+    font-weight: var(--weight-medium);
+    line-height: 1.25;
+  }
+
+  .surface :global(h1) {
+    font-size: var(--text-h2-size);
+  }
+
+  .surface :global(h2) {
+    font-size: var(--text-h3-size);
+  }
+
+  .surface :global(h3) {
+    font-size: var(--text-body-size);
+  }
+
+  .surface :global(ul),
+  .surface :global(ol) {
+    padding-left: var(--space-5);
+  }
+
+  .surface :global(li + li) {
+    margin-top: var(--space-1);
+  }
+
+  .surface :global(ul[data-type="taskList"]) {
+    list-style: none;
+    padding-left: 0;
+  }
+
+  .surface :global(ul[data-type="taskList"] li) {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+  }
+
+  .surface :global(blockquote) {
+    padding-left: var(--space-3);
+    border-left: 2px solid var(--hairline-strong);
+    color: var(--tinta-media);
+  }
+
+  .surface :global(code) {
+    font-family: var(--font-mono);
+    font-size: 0.9em;
+  }
+
+  .surface :global(pre) {
+    padding: var(--space-3);
+    border-radius: var(--radius-control);
+    background: var(--wash);
+    overflow-x: auto;
+  }
+
+  .surface :global(hr) {
+    border: 0;
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .surface :global(.is-empty::before) {
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    color: var(--tinta-suave);
+    pointer-events: none;
+  }
+
+  .slash {
+    position: fixed;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 260px;
+    max-height: 280px;
+    padding: var(--space-1);
+    overflow-y: auto;
+    box-shadow: var(--shadow-lifted);
+  }
+
+  .slash[hidden] {
+    display: none;
+  }
+
+  .slash-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 40px;
+    padding: var(--space-1) var(--space-2);
+    border: 0;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--tinta);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .slash-item:hover,
+  .slash-item[aria-selected="true"] {
+    background: var(--wash);
+  }
+
+  .slash-key {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-chip);
+    font-family: var(--font-mono);
+    font-size: var(--text-small-size);
+    color: var(--tinta-media);
+  }
+
+  .slash-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .slash-hint {
+    color: var(--tinta-suave);
+  }
+</style>

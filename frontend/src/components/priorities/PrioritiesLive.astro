@@ -1,0 +1,874 @@
+---
+/**
+ * The live layer of /priorities: selection, keyboard, the manual override flow and
+ * the surface's one authored motion moment — a FLIP reorder on
+ * `project.priority.recalculated`.
+ *
+ * It renders no queue markup. The server already rendered every row and every panel;
+ * this island reads that DOM, patches it from envelopes, and clones the two
+ * `<template>` blocks below when the engine sends a breakdown that replaces the one
+ * on screen. Keeping the bar markup in `SignalBar.astro` and cloning it from here is
+ * what stops a live breakdown from drifting away from the server-rendered one.
+ */
+import SignalBar from "./SignalBar.astro";
+
+export interface Props {
+  /**
+   * When the server rendered the queue (ISO-8601). The staleness marker falls back
+   * to it before the first envelope arrives, so "how old is this" always has an
+   * answer — including on a page that loaded while the stream was already down.
+   */
+  renderedAt: string;
+}
+
+const { renderedAt } = Astro.props;
+---
+
+<div
+  class="stale card"
+  data-stale
+  data-rendered-at={renderedAt}
+  role="status"
+  hidden
+>
+  <span class="dot tone-rojo" aria-hidden="true"></span>
+  <span class="small">
+    Sin conexión en vivo. Estás viendo los datos de <span
+      class="figure"
+      data-stale-when></span>.
+  </span>
+  <button
+    class="btn btn-secondary reconnect"
+    type="button"
+    data-action="reconnect"
+  >
+    Reconectar
+  </button>
+</div>
+
+<p class="visually-hidden" data-announcer aria-live="polite"></p>
+
+<template data-signal-template>
+  <SignalBar code="" label="" points="" reason="" ratio={0} />
+</template>
+
+<!--
+  The delta chip lives inside a row button, so it is hidden from the accessibility
+  tree: the move is announced once, as a sentence, by the live region above.
+-->
+<template data-delta-template>
+  <span class="delta chip figure" aria-hidden="true"></span>
+</template>
+
+<script>
+  import { navigate } from "astro:transitions/client";
+
+  import {
+    deletePriorityOverride,
+    postPriorityOverride,
+  } from "../../lib/api/client";
+  import type { ApiError, UnknownError } from "../../lib/api/errors";
+  import { getOperator } from "../../lib/auth/session";
+  import { formatScore } from "../../lib/format/score";
+  import {
+    countUp,
+    flip,
+    prefersReducedMotion,
+    sampleSpring,
+    shake,
+  } from "../../lib/motion/spring";
+  import type { Envelope, Status } from "../../lib/stream/store";
+  import { onReset, onStatus, retry, subscribe } from "../../lib/stream/store";
+  import { toast } from "../../lib/toast";
+  import {
+    barRatio,
+    formatClock,
+    formatInstant,
+    formatPoints,
+    formatRank,
+    widestContribution,
+  } from "./format";
+
+  /** How long a ▲/▼ delta chip stays on a row after a live reorder. */
+  const DELTA_VISIBLE_MS = 2600;
+
+  /** How long the cobalto flash marks the row an envelope touched. */
+  const FLASH_MS = 600;
+
+  /** One line of a breakdown, narrowed out of an envelope payload. */
+  interface SignalLine {
+    readonly code: string;
+    /** The signal's Spanish name, carried by the envelope beside its reason. */
+    readonly label: string;
+    readonly contribution: number;
+    readonly reason: string;
+  }
+
+  /** What `project.priority.recalculated` tells us, once narrowed. */
+  interface Recalculation {
+    readonly value: number;
+    readonly policyVersion: string | null;
+    readonly signals: readonly SignalLine[];
+  }
+
+  /** One row that changed place during a reorder. */
+  interface RankMove {
+    readonly row: HTMLElement;
+    readonly from: number;
+    readonly to: number;
+  }
+
+  /** Unsubscribes and listener removals collected by `init`, run by `destroy`. */
+  let cleanups: Array<() => void> = [];
+
+  /**
+   * Rank memory: project code → the position it currently occupies on screen.
+   *
+   * Client-side and seeded from the first paint, which is why the first render pops
+   * no delta chip: there is no previous position, and inventing one would be
+   * fabricated history. Cleared on teardown so a return visit starts from what it
+   * can actually see.
+   */
+  const ranks = new Map<string, number>();
+
+  /** `occurred_at` of the newest envelope this page has applied. */
+  let lastEventAt: string | null = null;
+
+  /**
+   * Serialises envelope handling. Two recalculations arriving inside one animation
+   * would otherwise have the second FLIP measure positions mid-flight and animate
+   * from a place no row was ever at.
+   */
+  let pending: Promise<void> = Promise.resolve();
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+  }
+
+  function rowsOf(root: ParentNode): HTMLElement[] {
+    return [...root.querySelectorAll<HTMLElement>("[data-row]")];
+  }
+
+  function slot(scope: ParentNode, name: string): HTMLElement | null {
+    return scope.querySelector<HTMLElement>(`[data-slot="${name}"]`);
+  }
+
+  function setSlotText(scope: ParentNode, name: string, text: string): void {
+    const target = slot(scope, name);
+    if (target !== null) target.textContent = text;
+  }
+
+  function detailFor(root: ParentNode, code: string): HTMLElement | null {
+    return root.querySelector<HTMLElement>(
+      `[data-detail][data-code="${CSS.escape(code)}"]`,
+    );
+  }
+
+  // --- Selection ---------------------------------------------------------------
+
+  /**
+   * Moves the selection onto one project: the row is marked current and its panel
+   * is the only one on screen. Roving `tabindex` keeps exactly one row in the tab
+   * order, so Tab leaves the queue instead of walking twenty-two buttons.
+   */
+  function selectRow(root: HTMLElement, code: string): void {
+    for (const row of rowsOf(root)) {
+      const isSelected = row.dataset.code === code;
+      row.setAttribute("aria-expanded", String(isSelected));
+      row.tabIndex = isSelected ? 0 : -1;
+      if (isSelected) row.setAttribute("aria-current", "true");
+      else row.removeAttribute("aria-current");
+    }
+    for (const detail of root.querySelectorAll<HTMLElement>("[data-detail]")) {
+      detail.hidden = detail.dataset.code !== code;
+    }
+  }
+
+  /** Moves selection and focus by one row; a step past either end does nothing. */
+  function stepSelection(
+    root: HTMLElement,
+    from: HTMLElement,
+    delta: number,
+  ): void {
+    const list = rowsOf(root);
+    const index = list.indexOf(from);
+    if (index === -1) return;
+    const next = list[index + delta];
+    if (next === undefined) return;
+    const code = next.dataset.code;
+    if (code === undefined) return;
+    selectRow(root, code);
+    next.focus();
+  }
+
+  /**
+   * Opens the project detail with a client-side navigation, so the shared-element
+   * morph on the project title actually plays; `location.assign` would reload the
+   * document and lose it.
+   */
+  function openProject(row: HTMLElement): void {
+    const code = row.dataset.code;
+    if (code === undefined) return;
+    void navigate(`/projects/${encodeURIComponent(code)}`);
+  }
+
+  // --- Live patching -----------------------------------------------------------
+
+  /** Narrows one `project.priority.recalculated` payload, or `null` if malformed. */
+  function readRecalculation(
+    payload: Record<string, unknown>,
+  ): Recalculation | null {
+    const value = payload["value"];
+    if (typeof value !== "number") return null;
+    const policy = payload["policy_version"];
+    const raw = payload["breakdown"];
+    const signals: SignalLine[] = [];
+    if (Array.isArray(raw)) {
+      for (const entry of raw) {
+        if (!isRecord(entry)) continue;
+        const code = entry["code"];
+        const label = entry["label"];
+        const contribution = entry["contribution"];
+        const reason = entry["reason"];
+        if (typeof code !== "string" || typeof contribution !== "number")
+          continue;
+        signals.push({
+          code,
+          // A line from before labels existed falls back to its code rather
+          // than rendering blank: an unnamed contribution is unauditable.
+          label: typeof label === "string" && label !== "" ? label : code,
+          contribution,
+          reason: typeof reason === "string" ? reason : "",
+        });
+      }
+    }
+    return {
+      value,
+      policyVersion: typeof policy === "string" ? policy : null,
+      signals,
+    };
+  }
+
+  /** Rebuilds a panel's breakdown from the envelope, cloning `SignalBar`'s markup. */
+  function renderSignals(
+    list: HTMLElement,
+    signals: readonly SignalLine[],
+  ): void {
+    const template = document.querySelector<HTMLTemplateElement>(
+      "[data-signal-template]",
+    );
+    if (template === null || signals.length === 0) return;
+    const widest = widestContribution(signals.map((line) => line.contribution));
+    const fragment = document.createDocumentFragment();
+    for (const line of signals) {
+      const clone = template.content.firstElementChild?.cloneNode(true);
+      if (!(clone instanceof HTMLElement)) continue;
+      clone.dataset.signal = line.code;
+      setSlotText(clone, "label", line.label);
+      setSlotText(clone, "points", formatPoints(line.contribution));
+      setSlotText(clone, "reason", line.reason);
+      const fill = slot(clone, "fill");
+      if (fill !== null) {
+        fill.style.setProperty(
+          "--bar",
+          String(barRatio(line.contribution, widest)),
+        );
+      }
+      fragment.appendChild(clone);
+    }
+    list.replaceChildren(fragment);
+  }
+
+  /** Patches one panel's score, policy, timestamp and breakdown. */
+  function patchDetail(
+    detail: HTMLElement,
+    data: Recalculation,
+    occurredAt: string,
+  ): void {
+    const arc = detail.querySelector<HTMLElement>("[data-arc]");
+    if (arc !== null) {
+      const previous = Number(arc.style.getPropertyValue("--pct") || "0");
+      arc.style.setProperty("--pct", String(data.value));
+      arc.setAttribute(
+        "aria-label",
+        `Puntaje calculado ${formatScore(data.value)} sobre 100`,
+      );
+      const figure = slot(arc, "score");
+      if (figure !== null) countUp(figure, previous, data.value, formatScore);
+    }
+    if (data.policyVersion !== null) {
+      setSlotText(detail, "policy", data.policyVersion);
+    }
+    setSlotText(
+      detail,
+      "computed",
+      formatInstant(occurredAt) ?? "sin registro",
+    );
+    const list = detail.querySelector<HTMLElement>("[data-signals]");
+    if (list !== null) renderSignals(list, data.signals);
+  }
+
+  /** Patches the row's stored score and its readout. */
+  function patchRow(row: HTMLElement, value: number, occurredAt: string): void {
+    const previous = Number(row.dataset.score ?? String(value));
+    row.dataset.score = String(value);
+    row.dataset.updatedAt = occurredAt;
+    const figure = slot(row, "score");
+    if (figure !== null) countUp(figure, previous, value, formatScore);
+  }
+
+  /**
+   * Whether an envelope is older than what the row already shows.
+   *
+   * Compared as instants and not as strings: the read model stamps `updated_at` with
+   * microseconds and a `+00:00` offset while an envelope may carry `Z`, and `"+"`
+   * sorts before `"Z"` — a lexicographic test would drop the newest frames on every
+   * project whose snapshot was rebuilt in the same second.
+   */
+  function isOutdated(
+    renderedAt: string | undefined,
+    occurredAt: string,
+  ): boolean {
+    if (renderedAt === undefined) return false;
+    const rendered = Date.parse(renderedAt);
+    const occurred = Date.parse(occurredAt);
+    if (Number.isNaN(rendered) || Number.isNaN(occurred)) return false;
+    return occurred <= rendered;
+  }
+
+  /** One cobalto flash on the row an envelope touched, then back to rest. */
+  function flashRow(row: HTMLElement): void {
+    row.dataset.flash = "";
+    window.setTimeout(() => {
+      delete row.dataset.flash;
+    }, FLASH_MS);
+  }
+
+  /**
+   * Sorts the entries the way the server does — score descending, then project code
+   * ascending (`ProjectSnapshotQuerySet.ranked`). Replicating that ordering exactly
+   * is what keeps a live reorder from disagreeing with the next page load.
+   */
+  function scoreOf(entry: HTMLElement): number {
+    const row = entry.querySelector<HTMLElement>("[data-row]");
+    return Number(row?.dataset.score ?? "0");
+  }
+
+  function compareEntries(left: HTMLElement, right: HTMLElement): number {
+    const leftScore = scoreOf(left);
+    const rightScore = scoreOf(right);
+    if (leftScore !== rightScore) return rightScore - leftScore;
+    const leftCode = left.dataset.code ?? "";
+    const rightCode = right.dataset.code ?? "";
+    if (leftCode === rightCode) return 0;
+    return leftCode < rightCode ? -1 : 1;
+  }
+
+  /** Applies the new order in the DOM. Called inside `flip`, never on its own. */
+  function applyOrder(board: HTMLElement): void {
+    const entries = [...board.querySelectorAll<HTMLElement>("[data-entry]")];
+    entries.sort(compareEntries);
+    for (const entry of entries) board.appendChild(entry);
+  }
+
+  /** Rewrites every rank plate and reports which rows changed position. */
+  function refreshRanks(root: HTMLElement): RankMove[] {
+    const moves: RankMove[] = [];
+    rowsOf(root).forEach((row, index) => {
+      const code = row.dataset.code;
+      if (code === undefined) return;
+      const to = index + 1;
+      const from = ranks.get(code);
+      ranks.set(code, to);
+
+      const plate = slot(row, "rank");
+      if (plate !== null) countUp(plate, from ?? to, to, formatRank);
+      setSlotText(row, "rank-text", `Puesto ${to}.`);
+      const detail = detailFor(root, code);
+      if (detail !== null) setSlotText(detail, "rank", formatRank(to));
+
+      if (from !== undefined && from !== to) moves.push({ row, from, to });
+    });
+    return moves;
+  }
+
+  /**
+   * Pops a ▲/▼ chip on a row that moved. Climbing the queue is Rojo because the
+   * project became more urgent, descending is Verde: the direction carries the
+   * portfolio's own meaning, not a value judgement about the move.
+   */
+  function popDelta(move: RankMove): void {
+    const template = document.querySelector<HTMLTemplateElement>(
+      "[data-delta-template]",
+    );
+    if (template === null) return;
+    const clone = template.content.firstElementChild?.cloneNode(true);
+    if (!(clone instanceof HTMLElement)) return;
+    const climbed = move.to < move.from;
+    const steps = Math.abs(move.from - move.to);
+    clone.classList.add(climbed ? "tone-rojo" : "tone-verde");
+    clone.textContent = `${climbed ? "▲" : "▼"} ${steps}`;
+    clone.title = climbed
+      ? `Subió ${steps} puesto(s) en la cola`
+      : `Bajó ${steps} puesto(s) en la cola`;
+    move.row.appendChild(clone);
+    if (!prefersReducedMotion()) {
+      const { duration, easing } = sampleSpring("firme");
+      clone.animate(
+        [
+          { opacity: 0, transform: "translateY(6px) scale(0.9)" },
+          { opacity: 1, transform: "none" },
+        ],
+        { duration, easing },
+      );
+    }
+    window.setTimeout(() => clone.remove(), DELTA_VISIBLE_MS);
+  }
+
+  /**
+   * The signature moment: patch the numbers, FLIP the rows into their new order,
+   * count the figures up and pop the deltas.
+   *
+   * Guarded twice before anything moves — an envelope for a project this page does
+   * not show is ignored, and one older than the row's rendered `updated_at` is
+   * dropped rather than applied (`docs/standards/PATTERNS_FRONTEND.md` §6).
+   */
+  async function applyRecalculation(
+    root: HTMLElement,
+    board: HTMLElement,
+    envelope: Envelope,
+  ): Promise<void> {
+    const code = envelope.entity.id;
+    const row = root.querySelector<HTMLElement>(
+      `[data-row][data-code="${CSS.escape(code)}"]`,
+    );
+    if (row === null) return;
+    if (isOutdated(row.dataset.updatedAt, envelope.occurred_at)) return;
+    const data = readRecalculation(envelope.payload);
+    if (data === null) return;
+
+    lastEventAt = envelope.occurred_at;
+    patchRow(row, data.value, envelope.occurred_at);
+    const detail = detailFor(root, code);
+    if (detail !== null) patchDetail(detail, data, envelope.occurred_at);
+
+    // Moving a node with `appendChild` blurs it in some engines, so the row the
+    // operator was on is put back under the caret after the reorder settles.
+    const focused = document.activeElement;
+    await flip(rowsOf(root), () => {
+      applyOrder(board);
+    });
+    if (
+      focused instanceof HTMLElement &&
+      focused.isConnected &&
+      focused.hasAttribute("data-row") &&
+      document.activeElement !== focused
+    ) {
+      focused.focus({ preventScroll: true });
+    }
+
+    flashRow(row);
+    for (const move of refreshRanks(root)) popDelta(move);
+
+    const announcer = root.querySelector<HTMLElement>("[data-announcer]");
+    if (announcer !== null) {
+      const place = ranks.get(code);
+      announcer.textContent =
+        `${code} quedó en el puesto ${place ?? "desconocido"} ` +
+        `con ${formatScore(data.value)} puntos.`;
+    }
+  }
+
+  // --- Connection status -------------------------------------------------------
+
+  /** Shows or hides the staleness marker, stamped with the freshest instant known. */
+  function renderStatus(root: HTMLElement, status: Status): void {
+    const bar = root.querySelector<HTMLElement>("[data-stale]");
+    if (bar === null) return;
+    bar.hidden = status !== "disconnected";
+    const when = lastEventAt ?? bar.dataset.renderedAt ?? null;
+    const stamp = bar.querySelector<HTMLElement>("[data-stale-when]");
+    if (stamp !== null) {
+      const clock = when === null ? null : formatClock(when);
+      stamp.textContent = clock ?? "esta sesión";
+    }
+  }
+
+  // --- Manual override ---------------------------------------------------------
+
+  function startLoading(button: HTMLButtonElement | null): void {
+    if (button === null) return;
+    button.classList.add("is-loading");
+    button.disabled = true;
+  }
+
+  function stopLoading(button: HTMLButtonElement | null): void {
+    if (button === null) return;
+    button.classList.remove("is-loading");
+    button.disabled = false;
+  }
+
+  function showFormError(form: HTMLFormElement, message: string): void {
+    const line = form.querySelector<HTMLElement>("[data-override-error]");
+    if (line !== null) {
+      line.textContent = message;
+      line.hidden = false;
+    }
+    void shake(form);
+  }
+
+  /** Drops a previous rejection so a corrected submission starts from silence. */
+  function clearFormError(form: HTMLFormElement): void {
+    const line = form.querySelector<HTMLElement>("[data-override-error]");
+    if (line !== null) {
+      line.textContent = "";
+      line.hidden = true;
+    }
+  }
+
+  /** Maps a 403 onto copy that names the capability, not the HTTP status. */
+  function unknownOverrideMessage(error: UnknownError): string {
+    const required = error.details["required"];
+    const isOpsLeadRefusal =
+      error.backendCode === "permission_denied" ||
+      error.backendCode === "ops_lead_required" ||
+      (typeof required === "string" && required === "ops_lead");
+    if (isOpsLeadRefusal) {
+      return "Necesitas la capacidad de responsable de operaciones para forzar la prioridad.";
+    }
+    if (error.backendCode === "conflicting_state") {
+      return "El proyecto está archivado: no admite ajustes de prioridad.";
+    }
+    return "El servidor no pudo guardar el ajuste.";
+  }
+
+  /**
+   * The Spanish sentence for one rejection. Branches on `code`/`kind` only — the
+   * envelope's `message` is generated English prose for logs (`docs/API.md` §4.2).
+   */
+  function overrideErrorMessage(error: ApiError): string {
+    switch (error.kind) {
+      case "validation":
+        return error.fields["reason"] === undefined
+          ? "El servidor rechazó el ajuste: revisa el puesto y el motivo."
+          : "El servidor rechazó el motivo: tiene que ser un texto real.";
+      case "not_found":
+        return "Este proyecto ya no está en la cola.";
+      case "network":
+        return "No hay conexión con el servidor. Vuelve a intentarlo.";
+      case "transition_not_allowed":
+        return "Una regla del flujo de trabajo rechazó la operación.";
+      case "auth":
+        return "Tu sesión expiró. Vuelve a iniciar sesión para ajustar la prioridad.";
+      case "permission_denied":
+        // The control is only rendered for an ops lead, so reaching this means
+        // the capability was lost mid-session — say so instead of blaming the
+        // request.
+        return "Ajustar la prioridad está reservado a un responsable de operaciones.";
+      case "unknown":
+        return unknownOverrideMessage(error);
+    }
+  }
+
+  /** Paints the panel's manual block from the server's answer, never from intent. */
+  function paintOverride(
+    root: HTMLElement,
+    code: string,
+    position: number | null,
+    reason: string | null,
+    actor: string | null,
+  ): void {
+    const detail = detailFor(root, code);
+    if (detail === null) return;
+    const block = detail.querySelector<HTMLElement>("[data-override-state]");
+    if (block !== null) block.hidden = reason === null;
+    const rowChip = root.querySelector<HTMLElement>(
+      `[data-row][data-code="${CSS.escape(code)}"] [data-slot="manual"]`,
+    );
+    if (rowChip !== null) rowChip.hidden = reason === null;
+    if (reason === null) return;
+    const place = position === null ? "—" : String(position);
+    setSlotText(detail, "override-position", place);
+    setSlotText(detail, "override-reason", reason);
+    setSlotText(
+      detail,
+      "override-actor",
+      actor === null
+        ? "El autor y la fecha del ajuste están en la ficha del proyecto."
+        : `Ajustado por ${actor}.`,
+    );
+  }
+
+  /** Posts one manual override. Nothing is painted before the server agrees. */
+  async function submitOverride(
+    root: HTMLElement,
+    form: HTMLFormElement,
+  ): Promise<void> {
+    const code = form.dataset.code;
+    if (code === undefined) return;
+    clearFormError(form);
+    const values = new FormData(form);
+    const reason = String(values.get("reason") ?? "").trim();
+    const position = Number.parseInt(String(values.get("position") ?? ""), 10);
+    if (reason === "") {
+      showFormError(
+        form,
+        "Escribe el motivo: un ajuste sin motivo no queda registrado.",
+      );
+      return;
+    }
+    if (!Number.isInteger(position) || position < 1) {
+      showFormError(form, "Indica un puesto de la cola, desde 1.");
+      return;
+    }
+
+    const submit = form.querySelector<HTMLButtonElement>(
+      "[data-override-submit]",
+    );
+    startLoading(submit);
+    const result = await postPriorityOverride(code, { position, reason });
+    stopLoading(submit);
+
+    if (!result.ok) {
+      const message = overrideErrorMessage(result.error);
+      showFormError(form, message);
+      toast({
+        kind: "error",
+        title: "No se guardó el ajuste",
+        detail: message,
+      });
+      return;
+    }
+
+    const override = result.data.override ?? null;
+    paintOverride(
+      root,
+      code,
+      override?.position ?? null,
+      override?.reason ?? reason,
+      override?.actor ?? null,
+    );
+    form.hidden = true;
+    form.reset();
+    toast({
+      kind: "success",
+      title: "Prioridad ajustada",
+      detail: `${code} quedó forzado al puesto ${position}.`,
+    });
+  }
+
+  /** Lifts one manual override; the queue returns to the engine's own order. */
+  async function clearOverride(
+    root: HTMLElement,
+    button: HTMLButtonElement,
+    code: string,
+  ): Promise<void> {
+    startLoading(button);
+    const result = await deletePriorityOverride(code);
+    stopLoading(button);
+    if (!result.ok) {
+      const message = overrideErrorMessage(result.error);
+      toast({ kind: "error", title: "No se quitó el ajuste", detail: message });
+      return;
+    }
+    paintOverride(root, code, null, null, null);
+    toast({
+      kind: "success",
+      title: "Ajuste retirado",
+      detail: `${code} vuelve al orden calculado.`,
+    });
+  }
+
+  // --- Wiring ------------------------------------------------------------------
+
+  function handleClick(root: HTMLElement, event: MouseEvent): void {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+
+    const row = target.closest<HTMLElement>("[data-row]");
+    if (row !== null) {
+      const code = row.dataset.code;
+      if (code !== undefined) selectRow(root, code);
+      return;
+    }
+
+    const control = target.closest<HTMLElement>("[data-action]");
+    if (control === null) return;
+    const detail = control.closest<HTMLElement>("[data-detail]");
+    switch (control.dataset.action) {
+      case "reconnect":
+        retry();
+        break;
+      case "reload":
+        // The first paint is a server fetch, so re-running "the same call" is a
+        // navigation to the same route, not a client-side refetch.
+        window.location.reload();
+        break;
+      case "open-override": {
+        const form = detail?.querySelector<HTMLFormElement>(
+          "[data-override-form]",
+        );
+        if (form === undefined || form === null) break;
+        const opening = form.hidden;
+        form.hidden = !opening;
+        control.setAttribute("aria-expanded", String(opening));
+        if (opening) form.querySelector<HTMLInputElement>("input")?.focus();
+        break;
+      }
+      case "cancel-override": {
+        const form = control.closest<HTMLFormElement>("[data-override-form]");
+        if (form === null) break;
+        form.hidden = true;
+        detail
+          ?.querySelector<HTMLElement>('[data-action="open-override"]')
+          ?.setAttribute("aria-expanded", "false");
+        break;
+      }
+      case "clear-override": {
+        const code = detail?.dataset.code;
+        if (code === undefined || !(control instanceof HTMLButtonElement))
+          break;
+        void clearOverride(root, control, code);
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  function handleKeydown(root: HTMLElement, event: KeyboardEvent): void {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const row = target.closest<HTMLElement>("[data-row]");
+    if (row === null) return;
+    switch (event.key) {
+      case "ArrowDown":
+        event.preventDefault();
+        stepSelection(root, row, 1);
+        break;
+      case "ArrowUp":
+        event.preventDefault();
+        stepSelection(root, row, -1);
+        break;
+      case "Enter":
+        // Prevents the synthetic click a button fires on Enter, so the key opens
+        // the project instead of merely re-selecting the row it is already on.
+        event.preventDefault();
+        openProject(row);
+        break;
+      default:
+        break;
+    }
+  }
+
+  function init(): void {
+    const root = document.querySelector<HTMLElement>("[data-priorities]");
+    if (root === null) return;
+    const board = root.querySelector<HTMLElement>("[data-queue-board]");
+
+    ranks.clear();
+    rowsOf(root).forEach((row, index) => {
+      const code = row.dataset.code;
+      if (code !== undefined) ranks.set(code, index + 1);
+    });
+
+    if (getOperator()?.isOpsLead === true) {
+      for (const control of root.querySelectorAll<HTMLElement>(
+        "[data-ops-lead]",
+      )) {
+        control.hidden = false;
+      }
+    }
+
+    const onClick = (event: MouseEvent): void => handleClick(root, event);
+    const onKeydown = (event: KeyboardEvent): void =>
+      handleKeydown(root, event);
+    const onSubmit = (event: SubmitEvent): void => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement)) return;
+      if (form.dataset.overrideForm === undefined) return;
+      event.preventDefault();
+      void submitOverride(root, form);
+    };
+
+    root.addEventListener("click", onClick);
+    root.addEventListener("keydown", onKeydown);
+    root.addEventListener("submit", onSubmit);
+    cleanups.push(() => {
+      root.removeEventListener("click", onClick);
+      root.removeEventListener("keydown", onKeydown);
+      root.removeEventListener("submit", onSubmit);
+    });
+
+    if (board !== null) {
+      cleanups.push(
+        subscribe("project.priority.recalculated", (envelope) => {
+          pending = pending
+            .then(() => applyRecalculation(root, board, envelope))
+            // One failed patch must not stall every envelope behind it.
+            .catch(() => undefined);
+        }),
+      );
+    }
+
+    cleanups.push(onStatus((status) => renderStatus(root, status)));
+    cleanups.push(
+      onReset(() => {
+        toast({
+          kind: "info",
+          title: "Se reinició la conexión en vivo",
+          detail: "Recargamos la cola para no mostrarte un orden viejo.",
+        });
+        window.setTimeout(() => window.location.reload(), 1200);
+      }),
+    );
+  }
+
+  function destroy(): void {
+    for (const stop of cleanups) stop();
+    cleanups = [];
+    ranks.clear();
+    lastEventAt = null;
+  }
+
+  document.addEventListener("astro:page-load", init);
+  document.addEventListener("astro:before-swap", destroy);
+</script>
+
+<style>
+  .stale {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background-color: var(--rojo-wash);
+    border-color: var(--rojo-wash);
+    box-shadow: none;
+  }
+
+  .stale[hidden] {
+    display: none;
+  }
+
+  .stale .small {
+    color: var(--rojo-ink);
+  }
+
+  .reconnect {
+    margin-left: auto;
+    flex: none;
+  }
+
+  /* The delta chip the island clones; positioned by the row it is appended to. */
+  .delta {
+    position: absolute;
+    top: 0;
+    right: var(--space-4);
+    transform: translateY(-50%);
+    z-index: 1;
+    background-color: var(--tone-wash);
+    color: var(--tone-ink);
+    box-shadow: var(--shadow-resting);
+    pointer-events: none;
+  }
+</style>

@@ -1,0 +1,191 @@
+---
+/**
+ * Numbered paging, as links.
+ *
+ * The API sends no next/prev links because the page belongs in the URL beside
+ * the filters (`backend/apps/shared/pagination.py`), so the shape is derived
+ * from `count` and rendered as one `<a>` per reachable page. Links and not
+ * buttons: page 4 of a filtered feed has to be addressable, has to work with the
+ * back button, and has to survive a reload.
+ *
+ * Changing a *facet* is live and never navigates, so the island rebuilds this
+ * control in place from the same `pagerModel` the server used — which is why the
+ * link and gap markup live in `<template>`s here rather than in TypeScript.
+ * Changing the *page* is a real navigation: the whole reading changes, and a
+ * server render is the honest way to get it.
+ *
+ * The edges render dead rather than disappearing, so the control does not change
+ * width as the reader moves through it.
+ */
+import {
+  hrefForPage,
+  pagerModel,
+  type ActivityFilters,
+} from "../../lib/activity/filters";
+import Icon from "../ui/Icon.astro";
+import { PAGER_COPY } from "./copy";
+
+export interface Props {
+  filters: ActivityFilters;
+  /** 1-based, already clamped by the page. */
+  page: number;
+  /** At least 1; an empty feed still has a page one. */
+  pageCount: number;
+}
+
+const { filters, page, pageCount } = Astro.props;
+const model = pagerModel(page, pageCount);
+---
+
+<nav
+  class="pager"
+  aria-label={PAGER_COPY.label}
+  data-pager
+  hidden={!model.visible}
+>
+  <a
+    class="btn btn-secondary"
+    data-pager-prev
+    href={model.hasPrevious ? hrefForPage(filters, page - 1) : undefined}
+    aria-disabled={model.hasPrevious ? undefined : "true"}
+  >
+    <Icon name="back" size={18} />
+    {PAGER_COPY.previous}
+  </a>
+
+  <ol class="numbers" data-pager-numbers>
+    {
+      model.showFirst && (
+        <li>
+          <a class="page-link figure" href={hrefForPage(filters, 1)}>
+            1
+          </a>
+        </li>
+      )
+    }
+    {
+      model.leadGap && (
+        <li class="gap" aria-hidden="true">
+          …
+        </li>
+      )
+    }
+    {
+      model.numbers.map((number) => (
+        <li>
+          {number === page ? (
+            <span class="page-link figure is-current" aria-current="page">
+              {number}
+            </span>
+          ) : (
+            <a class="page-link figure" href={hrefForPage(filters, number)}>
+              {number}
+            </a>
+          )}
+        </li>
+      ))
+    }
+    {
+      model.trailGap && (
+        <li class="gap" aria-hidden="true">
+          …
+        </li>
+      )
+    }
+    {
+      model.showLast && (
+        <li>
+          <a class="page-link figure" href={hrefForPage(filters, pageCount)}>
+            {pageCount}
+          </a>
+        </li>
+      )
+    }
+  </ol>
+
+  <a
+    class="btn btn-secondary"
+    data-pager-next
+    href={model.hasNext ? hrefForPage(filters, page + 1) : undefined}
+    aria-disabled={model.hasNext ? undefined : "true"}
+  >
+    {PAGER_COPY.next}
+    <Icon name="chevron-right" size={18} />
+  </a>
+
+  <template data-template="pager-link">
+    <li><a class="page-link figure"></a></li>
+  </template>
+
+  <template data-template="pager-current">
+    <li>
+      <span class="page-link figure is-current" aria-current="page"></span>
+    </li>
+  </template>
+
+  <template data-template="pager-gap">
+    <li class="gap" aria-hidden="true">…</li>
+  </template>
+</nav>
+
+<style>
+  .pager {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    padding-top: var(--space-2);
+  }
+
+  .pager[hidden] {
+    display: none;
+  }
+
+  .pager .btn {
+    text-decoration: none;
+  }
+
+  /* An edge with nowhere to go stays in place and reads as unavailable; an
+     anchor with no `href` is also not focusable, which is the intent. */
+  .pager .btn[aria-disabled="true"] {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .numbers {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-inline: auto;
+  }
+
+  .page-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--space-6);
+    height: var(--space-6);
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-control);
+    text-decoration: none;
+    color: var(--tinta-media);
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  a.page-link:hover {
+    background-color: var(--pozo);
+    color: var(--tinta);
+  }
+
+  .is-current {
+    background-color: var(--cobalto-papel);
+    color: var(--cobalto);
+    font-weight: 700;
+  }
+
+  .gap {
+    color: var(--tinta-suave);
+    padding-inline: var(--space-1);
+  }
+</style>

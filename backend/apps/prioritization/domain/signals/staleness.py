@@ -26,6 +26,9 @@ class Staleness:
     beyond the threshold returns 1.0; a project with no activity ever returns 1.0.
     """
 
+    # Spanish on purpose: ``label`` and every ``reason`` below are user-facing (CLAUDE.md §Language).
+    label = "Inactividad"
+
     def evaluate(self, data: SignalInput) -> SignalResult:
         """Read how stale one project is.
 
@@ -37,19 +40,21 @@ class Staleness:
             The normalized staleness and a sentence naming the silence and the next step.
         """
         next_step_clause = (
-            "next step is set" if data.next_step.strip() else "no next step is recorded"
+            "hay próximo paso definido"
+            if data.next_step.strip()
+            else "no hay próximo paso registrado"
         )
         penalty = 0.0 if data.next_step.strip() else NO_NEXT_STEP_PENALTY
 
         if data.days_since_last_activity is None:
             return SignalResult(
                 score=NEVER_ACTIVE_SCORE,
-                reason=f"No activity has ever been recorded; {next_step_clause}.",
+                reason=f"Nunca se registró actividad; {next_step_clause}.",
             )
 
         silence_ratio = data.days_since_last_activity / data.staleness_threshold_days
         return SignalResult.clamped(
             round(silence_ratio + penalty, 4),
-            f"No recorded activity for {data.days_since_last_activity} day(s) against a "
-            f"{data.staleness_threshold_days}-day threshold; {next_step_clause}.",
+            f"Sin actividad registrada durante {data.days_since_last_activity} día(s) frente a un "
+            f"umbral de {data.staleness_threshold_days} día(s); {next_step_clause}.",
         )

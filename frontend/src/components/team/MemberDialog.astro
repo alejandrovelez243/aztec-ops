@@ -1,0 +1,190 @@
+---
+/**
+ * The form that registers a person and the form that edits one — the same dialog, because they
+ * ask for the same four things.
+ *
+ * The one difference is `code`, and it is a difference in *editability* rather than in fields:
+ * the slug every event and activity record names a person by cannot change afterwards, so on an
+ * edit the input is disabled and says so. Two dialogs would be two places to forget the capacity
+ * hint, and the drift would show up as a form that quietly accepts a zero.
+ *
+ * A `<dialog>` and not a div: modality, `Escape`, the focus trap and the backdrop are the
+ * platform's.
+ *
+ * Field errors are rendered from the API's `details.fields`, never guessed here — the server
+ * decides that a role code is unknown or a capacity out of range, and a second opinion in the
+ * browser is a rule that goes stale the day the backend's changes.
+ */
+import type { TaxonomyRef } from "../../lib/api/domain";
+
+export interface Props {
+  /** Every role a person can be classified under, in the order an operator arranged them. */
+  roles: readonly TaxonomyRef[];
+}
+
+const { roles } = Astro.props;
+---
+
+<dialog class="dialog" data-member-dialog aria-labelledby="member-dialog-title">
+  <form data-member-form novalidate>
+    <h2 class="h2" id="member-dialog-title" data-field="dialog-title">
+      Añadir persona
+    </h2>
+    <p class="small lead" data-field="dialog-lead">
+      El código con el que entra al sistema se genera solo, a partir del nombre.
+    </p>
+
+    {
+      /*
+       * On an edit the code is shown, read-only, because it is what identifies this person in
+       * every event and in the bitácora and the operator may need to read it. On a create there
+       * is nothing to show: the server mints it, and a preview rendered here would be this
+       * screen's own second opinion about a rule that lives in one place.
+       */
+    }
+    <p class="field" data-field="code-line" hidden>
+      <span class="label">Código</span>
+      <code class="small code-value" data-field="code-value"></code>
+    </p>
+
+    <label class="field">
+      <span class="label">Nombre</span>
+      <input
+        class="input"
+        name="label"
+        maxlength="96"
+        required
+        placeholder="Nombre y apellido"
+      />
+      <span class="small error" data-error="label" hidden></span>
+    </label>
+
+    <div class="pair">
+      <label class="field">
+        <span class="label">Rol</span>
+        <select class="input" name="role">
+          <option value="">Sin rol</option>
+          {roles.map((role) => <option value={role.code}>{role.label}</option>)}
+        </select>
+        <span class="small error" data-error="role" hidden></span>
+      </label>
+
+      <label class="field">
+        <span class="label">Capacidad semanal</span>
+        <input
+          class="input"
+          type="number"
+          name="weekly_capacity_points"
+          min="1"
+          max="200"
+          value="20"
+          required
+        />
+        <span class="small hint">
+          Puntos por semana. Es el divisor de la carga: quien la supere aparece
+          con sobrecarga.
+        </span>
+        <span class="small error" data-error="weekly_capacity_points" hidden
+        ></span>
+      </label>
+    </div>
+
+    <label class="field" data-field="password-field">
+      <span class="label">Contraseña inicial (opcional)</span>
+      <input
+        class="input"
+        type="password"
+        name="password"
+        autocomplete="new-password"
+      />
+      <span class="small hint">
+        Puedes dejarla vacía: la persona existe y se le puede asignar trabajo,
+        pero no podrá entrar hasta que tenga una.
+      </span>
+      <span class="small error" data-error="password" hidden></span>
+    </label>
+
+    <p class="small error" data-field="form-error" hidden></p>
+
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" type="button" data-action="close-member">
+        Cancelar
+      </button>
+      <button class="btn btn-primary" type="submit" data-action="submit-member">
+        Guardar
+      </button>
+    </div>
+  </form>
+</dialog>
+
+<style>
+  .dialog {
+    width: min(560px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+  }
+
+  .dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .lead {
+    color: var(--tinta-media);
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  /* `.field` sets `display: flex`, and an author rule beats the user agent's
+     `[hidden] { display: none }` — so without this the password field, hidden on an edit
+     because replacing a credential is its own route, would render anyway. */
+  .field[hidden],
+  .error[hidden] {
+    display: none;
+  }
+
+  .pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+  }
+
+  .hint {
+    color: var(--tinta-media);
+  }
+
+  .code-value {
+    color: var(--tinta-media);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .error {
+    color: var(--tone-rojo-ink, var(--rojo));
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  @media (max-width: 560px) {
+    .pair {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

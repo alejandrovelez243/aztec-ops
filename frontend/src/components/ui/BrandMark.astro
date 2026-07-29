@@ -1,0 +1,111 @@
+---
+/**
+ * The Aztec Ops mark: three cards climbing the wall.
+ *
+ * The single source of the mark's geometry in the app. `public/brand/mark.svg`
+ * is the same drawing for consumers that cannot render a component (favicon,
+ * touch icon, README); anything inside the interface renders this, so the mark
+ * reads design tokens and can move.
+ *
+ * `animate` plays the cards landing in sequence on the `carta` spring — the
+ * invisible hand placing them. Reserve it for surfaces a person arrives at
+ * (the login door), never for the persistent shell: a logo that re-animates on
+ * every navigation is a tic, not a signature.
+ */
+export interface Props {
+  /** Rendered square size in px. */
+  size?: number;
+  /** Play the settle animation once on mount. */
+  animate?: boolean;
+}
+
+const { size = 28, animate = false } = Astro.props;
+---
+
+<svg
+  class="mark"
+  width={size}
+  height={size}
+  viewBox="0 0 32 32"
+  fill="none"
+  aria-hidden="true"
+  data-animate={animate ? "" : undefined}
+>
+  <rect
+    x="1.5"
+    y="11"
+    width="19"
+    height="19"
+    rx="5"
+    fill="var(--cobalto-papel)"
+    data-card="1"></rect>
+  <rect
+    x="6.5"
+    y="6.5"
+    width="19"
+    height="19"
+    rx="5"
+    fill="var(--cobalto-medio)"
+    data-card="2"></rect>
+  <rect
+    x="11.5"
+    y="2"
+    width="19"
+    height="19"
+    rx="5"
+    fill="var(--cobalto)"
+    data-card="3"></rect>
+</svg>
+
+<script>
+  import { prefersReducedMotion, sampleSpring } from "../../lib/motion/spring";
+
+  /** Milliseconds between one card landing and the next leaving the hand. */
+  const STAGGER_MS = 90;
+
+  function settle(mark: SVGElement): void {
+    if (mark.dataset.settled === "") return;
+    mark.dataset.settled = "";
+    if (prefersReducedMotion()) return;
+
+    const { duration, easing } = sampleSpring("carta");
+    for (const card of mark.querySelectorAll<SVGElement>("[data-card]")) {
+      const order = Number(card.dataset.card ?? "1");
+      card.animate(
+        [
+          { opacity: 0, transform: "translate(-6px, 8px) scale(0.9)" },
+          { opacity: 1, transform: "none" },
+        ],
+        {
+          duration,
+          easing,
+          delay: (order - 1) * STAGGER_MS,
+          fill: "backwards",
+        },
+      );
+    }
+  }
+
+  function settleAll(): void {
+    for (const mark of document.querySelectorAll<SVGElement>(
+      ".mark[data-animate]",
+    )) {
+      settle(mark);
+    }
+  }
+
+  document.addEventListener("astro:page-load", settleAll);
+  settleAll();
+</script>
+
+<style>
+  .mark {
+    display: block;
+    flex: none;
+  }
+
+  .mark [data-card] {
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+</style>

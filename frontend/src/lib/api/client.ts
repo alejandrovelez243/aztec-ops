@@ -23,29 +23,43 @@ import {
   type StoredSession,
 } from "../auth/tokens";
 import { errorFromNetwork, errorFromResponse, type ApiError } from "./errors";
+import type { components } from "./types";
 import type {
   AccessGrant,
   ActivityPage,
   Blocker,
   BlockerCreateIn,
   BlockerResolveIn,
+  Catalog,
   CredentialsIn,
+  Member,
+  MemberCreateIn,
+  MemberPasswordIn,
+  MemberUpdateIn,
   NoteIn,
   RefreshIn,
+  RoleCreateIn,
+  RoleListQuery,
+  RoleUpdateIn,
   NoteView,
   OverrideResult,
+  PortfolioActivityQuery,
   PriorityOverrideIn,
   ProjectDetail,
   ProjectTransitionIn,
   QueuePage,
   QueueQuery,
   TaskCreateIn,
+  TaskDetail,
   TaskItem,
   TaskPage,
   TaskQuery,
   TaskTransitionIn,
+  TaxonomyRef,
+  TaskUpdateIn,
   TeamLoad,
   TeamLoadQuery,
+  WorkflowCatalog,
   TimelineQuery,
   TokenPair,
 } from "./domain";
@@ -57,14 +71,34 @@ import type {
  */
 export type Result<T> = { ok: true; data: T } | { ok: false; error: ApiError };
 
+/**
+ * Body of `PATCH /api/v1/projects/{code}`, read straight off the generated tree.
+ *
+ * Absent and `null` are different instructions: an omitted key leaves the column alone, an
+ * explicit `null` clears a nullable one. That is why a caller builds this object key by key
+ * and never spreads a form over it — spreading turns "no lo toques" into "bórralo".
+ */
+export type ProjectUpdateIn = components["schemas"]["ProjectUpdateIn"];
+
 /** Query-string values the API accepts; repeatable filters arrive as lists and OR. */
 type QueryValue =
   string | number | boolean | readonly string[] | null | undefined;
 
-const BASE_URL: string =
-  import.meta.env.INTERNAL_API_URL ??
-  import.meta.env.PUBLIC_API_URL ??
-  "http://localhost:8000";
+/**
+ * Where the API is, from where this code happens to be running.
+ *
+ * Two callers, two answers: a server render reaches the API by its compose
+ * service name over the internal network, while the browser reaches the same
+ * process through its published port on the host. Branching on `import.meta.env.SSR`
+ * rather than relying on `INTERNAL_API_URL` being undefined in the browser —
+ * which is true, since Astro only exposes `PUBLIC_*` — states the intent instead
+ * of depending on an absence.
+ */
+const BASE_URL: string = import.meta.env.SSR
+  ? (import.meta.env.INTERNAL_API_URL ??
+    import.meta.env.PUBLIC_API_URL ??
+    "http://localhost:8000")
+  : (import.meta.env.PUBLIC_API_URL ?? "http://localhost:8000");
 
 /** Event dispatched on `window` when the refresh token itself is rejected. */
 export const SESSION_EXPIRED_EVENT = "aztec:session-expired";
@@ -85,6 +119,13 @@ let refreshInFlight: Promise<string | null> | null = null;
  * (the refresh response re-sets it).
  */
 export async function ensureFreshAccess(): Promise<string | null> {
+  if (import.meta.env.SSR) {
+    // Server render: the credential is whatever the middleware pulled off this
+    // request's mirror cookie. Nothing to refresh — the refresh token stays in
+    // the browser by design (see src/middleware.ts).
+    const { getServerToken } = await import("../auth/server-token");
+    return getServerToken();
+  }
   const session = loadSession();
   if (session === null) return null;
   if (isAccessFresh(session)) return session.access;
@@ -101,7 +142,7 @@ async function refreshAccess(session: StoredSession): Promise<string | null> {
   if (!result.ok) {
     // Only a rejected credential ends the session; a network blip must not
     // sign the operator out of a tab that will reconnect on its own.
-    if (result.error.kind !== "network") {
+    if (result.error.kind === "auth" || result.error.kind === "validation") {
       clearSession();
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
@@ -170,7 +211,8 @@ async function request<T>(
 
   for (let attempt = 0; ; attempt += 1) {
     const headers: Record<string, string> = { Accept: "application/json" };
-    if (options.body !== undefined) headers["Content-Type"] = "application/json";
+    if (options.body !== undefined)
+      headers["Content-Type"] = "application/json";
     if (options.skipAuth !== true) {
       const access = await ensureFreshAccess();
       if (access !== null) headers["Authorization"] = `Bearer ${access}`;
@@ -197,11 +239,7 @@ async function request<T>(
     // One retry behind a forced refresh: the freshness check and the server's
     // clock can disagree by the width of a request, so a 401 on a token we
     // believed fresh means "refresh and present again", exactly once.
-    if (
-      response.status === 401 &&
-      options.skipAuth !== true &&
-      attempt === 0
-    ) {
+    if (response.status === 401 && options.skipAuth !== true && attempt === 0) {
       const session = loadSession();
       if (session !== null) {
         saveSession({ ...session, expiresAt: 0 });
@@ -257,7 +295,9 @@ function segment(value: string): string {
  * here is `invalid_credentials` — one answer for unknown user, wrong password
  * and inactive account, so the login form cannot enumerate accounts.
  */
-export async function postToken(body: CredentialsIn): Promise<Result<TokenPair>> {
+export async function postToken(
+  body: CredentialsIn,
+): Promise<Result<TokenPair>> {
   return request<TokenPair>("/api/v1/auth/token", {
     method: "POST",
     body,
@@ -348,10 +388,33 @@ export async function getProjectActivity(
 }
 
 /**
- * Reads the whole roster's load (`GET /api/v1/team/load`).
+ * Reads one page of the whole portfolio's trail (`GET /api/v1/activity`).
  *
- * Not paginated: the roster is five people. `is_overloaded` raises a risk flag on the
- * owner's projects; it never lowers a score.
+ * Same item type as a project timeline and the same order — newest first, with no
+ * `order_by` — so one component renders both. `count` is the total matching the
+ * facets, which is what the caller derives its page numbers from: the response
+ * carries no next/prev links because paging belongs in the URL beside the filters
+ * (`backend/apps/shared/pagination.py`).
+ *
+ * No facet is validated against its vocabulary: a `verb`, `origin`, `entity_type`
+ * or `actor` this deployment does not know returns an empty page, never a 422, so
+ * a bookmarked filter cannot break a read-only screen.
+ */
+export async function getPortfolioActivity(
+  query?: PortfolioActivityQuery,
+): Promise<Result<ActivityPage>> {
+  return request<ActivityPage>("/api/v1/activity", {
+    method: "GET",
+    query: { ...query },
+  });
+}
+
+/**
+ * Reads the roster (`GET /api/v1/team/load`).
+ *
+ * Not paginated. `is_overloaded` raises a risk flag on the owner's projects; it never lowers
+ * a score. `order_by` outside the server's allowlist is a `validation` error carrying the
+ * allowed names in `error.details.allowed` — resync from that rather than guessing.
  */
 export async function getTeamLoad(
   query?: TeamLoadQuery,
@@ -359,6 +422,172 @@ export async function getTeamLoad(
   return request<TeamLoad>("/api/v1/team/load", {
     method: "GET",
     query: { ...query },
+  });
+}
+
+/**
+ * Reads every active taxonomy list (`GET /api/v1/catalog`).
+ *
+ * One document rather than six requests, because a form needs all of its pickers before it can
+ * draw itself. Every list arrives in the order an operator arranged it; render `label`, send
+ * `code`, and never compare against the Spanish.
+ */
+export async function getCatalog(): Promise<Result<Catalog>> {
+  return request<Catalog>("/api/v1/catalog", { method: "GET" });
+}
+
+/**
+ * Reads every role, retired ones included (`GET /api/v1/catalog/roles`).
+ *
+ * Ops lead. Separate from `getCatalog` on purpose: that one feeds the **pickers**, where a
+ * retired value must never appear, and this one feeds the editor, which cannot offer "restore"
+ * for rows it refuses to show. `status` defaults to `all`.
+ */
+export async function getRoles(
+  query?: RoleListQuery,
+): Promise<Result<TaxonomyRef[]>> {
+  return request<TaxonomyRef[]>("/api/v1/catalog/roles", {
+    method: "GET",
+    query: { ...query },
+  });
+}
+
+/**
+ * Adds a role to the vocabulary (`POST /api/v1/catalog/roles`).
+ *
+ * Ops lead only, and the only taxonomy writable from the product at all — the other five are
+ * decisions about how the business works and are made in the admin. `code` is permanent and is
+ * what people classified under this role carry; `label` is the Spanish that may be fixed later.
+ * A taken code is a `conflict`, **including a retired role's**: restore it rather than create a
+ * second one.
+ */
+export async function postRole(
+  body: RoleCreateIn,
+): Promise<Result<TaxonomyRef>> {
+  return request<TaxonomyRef>("/api/v1/catalog/roles", {
+    method: "POST",
+    body,
+  });
+}
+
+/**
+ * Renames, retires or restores a role (`PATCH /api/v1/catalog/roles/{code}`).
+ *
+ * Absent means untouched. `is_active: false` takes it out of the pickers and leaves everybody
+ * already classified under it exactly as they are — nothing is deleted, so nobody is silently
+ * unclassified.
+ */
+export async function patchRole(
+  code: string,
+  body: RoleUpdateIn,
+): Promise<Result<TaxonomyRef>> {
+  return request<TaxonomyRef>(`/api/v1/catalog/roles/${segment(code)}`, {
+    method: "PATCH",
+    body,
+  });
+}
+
+/**
+ * Registers a person on the roster (`POST /api/v1/team/members`).
+ *
+ * Ops lead only — a `permission` error otherwise. `code` is permanent: it is what every event
+ * and activity record will name this person by, so there is no rename afterwards. A taken code
+ * is a `conflict`, and omitting `password` is normal: the person is assignable immediately and
+ * cannot sign in until one is set.
+ */
+export async function postMember(
+  body: MemberCreateIn,
+): Promise<Result<Member>> {
+  return request<Member>("/api/v1/team/members", { method: "POST", body });
+}
+
+/**
+ * Edits a person (`PATCH /api/v1/team/members/{code}`).
+ *
+ * Absent means untouched; explicit `null` on `role` unclassifies them. Sending values the
+ * person already has is a successful no-op that writes no history. `is_active: true` is how a
+ * retired person is restored.
+ */
+export async function patchMember(
+  code: string,
+  body: MemberUpdateIn,
+): Promise<Result<Member>> {
+  return request<Member>(`/api/v1/team/members/${segment(code)}`, {
+    method: "PATCH",
+    body,
+  });
+}
+
+/**
+ * Retires a person (`DELETE /api/v1/team/members/{code}`), deleting nothing.
+ *
+ * The effect is `is_active = false`: the tasks and projects that name them are untouched.
+ * Idempotent, so a retry after a dropped response is safe. Retiring the signed-in account is
+ * refused with a `permission` error — it would end the caller's own session.
+ */
+export async function deleteMember(code: string): Promise<Result<null>> {
+  return request<null>(`/api/v1/team/members/${segment(code)}`, {
+    method: "DELETE",
+  });
+}
+
+/**
+ * Replaces a person's password (`POST /api/v1/team/members/{code}/password`).
+ *
+ * An administrative reset: no current password is asked for. A refused password is a
+ * `validation` error whose `details.fields.password` lists **every** rule it broke, which is
+ * what the form renders — showing only the first makes people retry one rule at a time.
+ */
+export async function postMemberPassword(
+  code: string,
+  body: MemberPasswordIn,
+): Promise<Result<Member>> {
+  return request<Member>(`/api/v1/team/members/${segment(code)}/password`, {
+    method: "POST",
+    body,
+  });
+}
+
+/**
+ * Reads the shape of every configured workflow (`GET /api/v1/workflows`).
+ *
+ * This is what lets a board draw a column for a state nobody currently occupies:
+ * without it, columns can only be derived from the states projects happen to sit
+ * in, so an empty "Bloqueado" has no column — which means the board cannot say
+ * nothing is blocked, and a card has nowhere to be dropped.
+ *
+ * It also carries `transitions`: the arrows an operator drew between those
+ * states, which is what `/workflows` draws the graph from. They are a
+ * description of the **configuration**, never a permission — whether the record
+ * on screen may take one is computed per record against the state it is in, the
+ * transition's guard and its `requires_fields`, and stays on the project's or
+ * task's own `transitions` (`docs/API.md` §2.2). Acting on an edge published
+ * here without asking earns a typed 409 carrying the moves the record may
+ * actually take, which is the same failure mode as a stale button
+ * (`docs/API.md` §2.18).
+ */
+export async function getWorkflows(): Promise<Result<WorkflowCatalog>> {
+  return request<WorkflowCatalog>("/api/v1/workflows", { method: "GET" });
+}
+
+/**
+ * Applies a partial edit to a project (`PATCH /api/v1/projects/{code}`).
+ *
+ * `workflow_state` is not a field of this payload under any name — a state moves through
+ * {@link postProjectTransition} so it is validated against `WorkflowTransition` — and an
+ * edit that changes nothing is accepted without writing an event.
+ *
+ * The response is the project **re-read after the write**, so the risk flags computed on
+ * read (`docs/adr/0011`) already reflect the edit: filling `next_step` returns the project
+ * without its `NO_NEXT_STEP` flag, and no second GET is needed to see that.
+ */
+export async function patchProject(
+  code: string,
+  body: ProjectUpdateIn,
+): Promise<Result<ProjectDetail>> {
+  return request<ProjectDetail>(`/api/v1/projects/${segment(code)}`, {
+    method: "PATCH",
+    body,
   });
 }
 
@@ -381,6 +610,63 @@ export async function postProjectTransition(
       body,
     },
   );
+}
+
+/**
+ * Reads one task in full (`GET /api/v1/tasks/{code}`).
+ *
+ * The screen-shaped read: the project it belongs to, its legal `transitions` and its
+ * comments arrive together, so the detail never renders half of itself while a second
+ * request is in flight. `transitions` is the only source of the state buttons and an
+ * empty list is a legitimate answer — the task sits in a terminal state.
+ *
+ * An unknown `code` is `not_found`; the task list's `TaskItem` is a narrower shape and
+ * cannot stand in for this one.
+ */
+export async function getTask(code: string): Promise<Result<TaskDetail>> {
+  return request<TaskDetail>(`/api/v1/tasks/${segment(code)}`, {
+    method: "GET",
+  });
+}
+
+/**
+ * Body of `PATCH /api/v1/tasks/{code}`, as the wire actually accepts it.
+ *
+ * `Partial<>` rather than the generated alias, and the difference is not cosmetic:
+ * `TaskUpdateIn`'s string fields carry server-side defaults, which openapi-typescript
+ * emits as **required** — unlike `ProjectUpdateIn`, whose `str | None = None` fields
+ * come out optional. Taken literally, reassigning a task would mean resending its
+ * title, detail, last progress and priority, and any of those going stale between the
+ * read and the write would silently overwrite a colleague's edit.
+ *
+ * `Partial` is homomorphic, so under `exactOptionalPropertyTypes` this yields
+ * `title?: string` *without* `| undefined`: omission stays the only way to say
+ * "untouched", and `{ assignee: null }` still typechecks and still serializes as JSON
+ * `null`. A caller therefore cannot write `{ title: undefined }` and mean "leave
+ * alone" — it omits the key. Aligning the backend to `str | None = None` retires this
+ * alias.
+ */
+export type TaskPatch = Partial<TaskUpdateIn>;
+
+/**
+ * Applies a partial edit to a task (`PATCH /api/v1/tasks/{code}`).
+ *
+ * Absent means untouched and an explicit `null` clears — which is how a task is
+ * unassigned — so a caller builds this body key by key and never spreads a form over
+ * it. `workflow_state` is not a field of the payload: a state moves through
+ * {@link postTaskTransition}.
+ *
+ * The response is the task **re-read after the write**, `transitions` included, so the
+ * screen that issued the edit has everything it needs to redraw without a second GET.
+ */
+export async function patchTask(
+  code: string,
+  body: TaskPatch,
+): Promise<Result<TaskDetail>> {
+  return request<TaskDetail>(`/api/v1/tasks/${segment(code)}`, {
+    method: "PATCH",
+    body,
+  });
 }
 
 /**

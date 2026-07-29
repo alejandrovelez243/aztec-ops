@@ -1,0 +1,193 @@
+---
+import type { MemberChipModel } from "./board-model";
+
+/**
+ * "Miembros": the roster as an overlapping row of avatars, and the board's owner filter.
+ *
+ * Presentational only. The island owns the pressed state, the filtering and the overflow
+ * toggle; this component decides the markup and holds every Spanish word.
+ *
+ * **Photo or initials.** Each disk renders whichever arm `MemberAvatar` carries, so the day
+ * `TeamLoadView` grows an image field the only change is the lookup passed to `buildMembers`
+ * in `pages/board.astro` — no markup, no layout, no second component. Today every member
+ * resolves to initials, because the wire carries `alias`, `label` and `role` and no image at
+ * all; the `photo` arm is written and unreachable on purpose (see `board-model.ts`).
+ *
+ * **Why buttons.** An avatar that only decorates a toolbar is a mystery; an avatar you can
+ * press is a filter with a face on it. Each one is a real `<button>` with `aria-pressed`, and
+ * its accessible name is the person plus what they are carrying — a disk with two letters
+ * names nobody.
+ */
+export interface Props {
+  members: readonly MemberChipModel[];
+  /**
+   * How many faces stay in the row before the rest collapse behind a `+N` chip.
+   *
+   * The overflow is disclosed, never dropped: a member hidden behind a chip that could not be
+   * opened would be a person nobody can filter by.
+   */
+  visibleLimit?: number;
+  /** Why the roster is missing, when the read failed; the bar then says so instead of lying. */
+  failureNote?: string | null;
+}
+
+const { members, visibleLimit = 6, failureNote = null } = Astro.props;
+
+const overflowCount = Math.max(0, members.length - visibleLimit);
+---
+
+<div class="members" data-member-bar>
+  <span class="label members-label" lang="es">Miembros</span>
+
+  {
+    failureNote !== null && (
+      <p class="small members-note" role="status" lang="es">
+        {failureNote}
+      </p>
+    )
+  }
+
+  {
+    members.length > 0 && (
+      <div class="member-row" role="group" aria-label="Filtrar por responsable">
+        {members.map((member, index) => (
+          <button
+            type="button"
+            class="member"
+            data-member
+            data-alias={member.alias}
+            data-overflow={index >= visibleLimit ? "" : undefined}
+            hidden={index >= visibleLimit}
+            aria-pressed="false"
+            aria-label={member.description}
+            title={member.description}
+            lang="es"
+          >
+            {member.avatar.kind === "photo" ? (
+              <img
+                class="avatar member-face"
+                src={member.avatar.src}
+                alt=""
+                width="32"
+                height="32"
+                loading="lazy"
+                decoding="async"
+              />
+            ) : (
+              <span
+                class="avatar member-face"
+                style={`--avatar-h: ${member.avatar.hue}`}
+                aria-hidden="true"
+              >
+                {member.avatar.text}
+              </span>
+            )}
+          </button>
+        ))}
+
+        {overflowCount > 0 && (
+          <button
+            type="button"
+            class="member member-more"
+            data-members-more
+            aria-expanded="false"
+            aria-label={`Mostrar ${overflowCount} miembros más`}
+            title={`Mostrar ${overflowCount} miembros más`}
+            lang="es"
+          >
+            <span class="avatar member-face figure" aria-hidden="true">
+              +{overflowCount}
+            </span>
+          </button>
+        )}
+      </div>
+    )
+  }
+</div>
+
+<style>
+  .members {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  .members-label {
+    white-space: nowrap;
+  }
+
+  .members-note {
+    color: var(--ambar-ink);
+  }
+
+  .member-row {
+    display: flex;
+    align-items: center;
+  }
+
+  .member {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    /* The faces overlap like a stack of cards; the pressed one lifts out of it. */
+    margin-left: calc(var(--space-2) * -1);
+    border-radius: var(--radius-full);
+    transition:
+      transform var(--motion-firme-duration) var(--motion-firme-ease),
+      filter var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .member:first-child {
+    margin-left: 0;
+  }
+
+  .member[hidden] {
+    display: none;
+  }
+
+  .member-face {
+    /* A white ring separates one face from the one behind it without a border
+       that would read as a state. */
+    box-shadow: 0 0 0 2px var(--carta);
+    transition: box-shadow var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .member:hover {
+    transform: translateY(-2px);
+    z-index: 1;
+  }
+
+  .member[aria-pressed="true"] {
+    transform: translateY(-2px);
+    z-index: 2;
+  }
+
+  .member[aria-pressed="true"] .member-face {
+    box-shadow:
+      0 0 0 2px var(--carta),
+      0 0 0 4px var(--cobalto);
+  }
+
+  /* One face selected: the others step back, so the filter is visible before it
+     is read. */
+  .member-row:has(.member[aria-pressed="true"])
+    .member:not([aria-pressed="true"]) {
+    filter: grayscale(1);
+    opacity: 0.6;
+  }
+
+  .member-more .member-face {
+    background-color: var(--pozo);
+    color: var(--tinta-media);
+  }
+
+  /* Hit targets on touch: the disk stays 32px, the control grows around it. */
+  @media (pointer: coarse) {
+    .member {
+      min-width: 40px;
+      min-height: 40px;
+      margin-left: calc(var(--space-1) * -1);
+    }
+  }
+</style>

@@ -19,10 +19,12 @@ import { ClientRouter } from "astro:transitions";
 
 import "../styles/tokens.css";
 import "../styles/base.css";
+import BrandMark from "../components/ui/BrandMark.astro";
 import Icon from "../components/ui/Icon.astro";
 import type { IconName } from "../components/ui/Icon.astro";
 import ConnectionBadge from "../islands/ConnectionBadge.astro";
-import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
+import { appGuardScript } from "../lib/auth/guard-inline";
+import { SESSION_COOKIE_NAME, SESSION_STORAGE_KEY } from "../lib/auth/tokens";
 
 /** One breadcrumb; the last one renders as the current page (no link). */
 export interface Crumb {
@@ -30,14 +32,18 @@ export interface Crumb {
   href?: string;
 }
 
-/** Keys of the sidebar destinations; `active` highlights one. */
+/**
+ * Keys of the sidebar destinations; `active` highlights one. Keys and routes
+ * are English, the labels beside them Spanish (CLAUDE.md §Language).
+ */
 export type NavKey =
-  | "resumen"
-  | "prioridades"
-  | "proyectos"
-  | "tablero"
-  | "equipo"
-  | "actividad";
+  | "overview"
+  | "priorities"
+  | "projects"
+  | "board"
+  | "team"
+  | "activity"
+  | "workflows";
 
 export interface Props {
   /** Document title, rendered as `<title>{title} — Aztec Ops</title>`. */
@@ -46,17 +52,42 @@ export interface Props {
   active?: NavKey;
   /** Wayfinding trail; omit on the root page. */
   crumbs?: Crumb[];
+  /**
+   * Full-bleed content: drops the centred `--content-max` measure and the side
+   * gutters, and lets the content region grow to the remaining viewport height.
+   *
+   * The documented escape hatch for surfaces whose own geometry *is* the page —
+   * `/board`, where the wall must start at the sidebar edge and end at the
+   * viewport edge, and where the columns need a bounded height to scroll inside.
+   * A page that opts in owns its own padding: the layout stops supplying any.
+   *
+   * Reaching for negative margins instead is the failure this exists to prevent —
+   * they lie about the measure, break at every breakpoint the shell changes, and
+   * leave the topbar and the content disagreeing about where the page begins.
+   */
+  wide?: boolean;
 }
 
-const { title, active, crumbs = [] } = Astro.props;
+const { title, active, crumbs = [], wide = false } = Astro.props;
 
-const NAV: ReadonlyArray<{ key: NavKey; label: string; href: string; icon: IconName }> = [
-  { key: "resumen", label: "Resumen", href: "/", icon: "home" },
-  { key: "prioridades", label: "Prioridades", href: "/prioridades", icon: "flag" },
-  { key: "proyectos", label: "Proyectos", href: "/proyectos", icon: "folder" },
-  { key: "tablero", label: "Tablero", href: "/tablero", icon: "board" },
-  { key: "equipo", label: "Equipo", href: "/equipo", icon: "users" },
-  { key: "actividad", label: "Actividad", href: "/actividad", icon: "pulse" },
+const NAV: ReadonlyArray<{
+  key: NavKey;
+  label: string;
+  href: string;
+  icon: IconName;
+}> = [
+  { key: "overview", label: "Resumen", href: "/", icon: "home" },
+  {
+    key: "priorities",
+    label: "Prioridades",
+    href: "/priorities",
+    icon: "flag",
+  },
+  { key: "projects", label: "Proyectos", href: "/projects", icon: "folder" },
+  { key: "board", label: "Tablero", href: "/board", icon: "board" },
+  { key: "team", label: "Equipo", href: "/team", icon: "users" },
+  { key: "activity", label: "Actividad", href: "/activity", icon: "pulse" },
+  { key: "workflows", label: "Flujos", href: "/workflows", icon: "flow" },
 ];
 
 /** Where the back button goes when the tab has no history: the parent crumb. */
@@ -64,6 +95,17 @@ const backFallback =
   crumbs.length > 1 ? (crumbs[crumbs.length - 2]?.href ?? "/") : "/";
 
 const LOGIN_PATH = "/login";
+
+/**
+ * Runs before paint, ahead of any bundle, so a signed-out visitor never sees a
+ * frame of the app. The middleware is the authoritative guard; this only spares
+ * the flash, and both read the same cookie on purpose (`lib/auth/guard-inline.ts`).
+ */
+const appGuard = appGuardScript(
+  SESSION_COOKIE_NAME,
+  SESSION_STORAGE_KEY,
+  LOGIN_PATH,
+);
 ---
 
 <!doctype html>
@@ -71,43 +113,54 @@ const LOGIN_PATH = "/login";
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script is:inline define:vars={{ key: SESSION_STORAGE_KEY, login: LOGIN_PATH }}>
-      // Route guard, before paint: without a stored session, app pages bounce
-      // to the login screen carrying where the visitor was headed.
-      try {
-        if (window.localStorage.getItem(key) === null) {
-          window.location.replace(
-            `${login}?next=${encodeURIComponent(window.location.pathname + window.location.search)}`,
-          );
-        }
-      } catch {
-        /* storage disabled: the API's 401s will answer instead */
-      }
+    <script is:inline set:html={appGuard} />
+    <script is:inline>
       // Sidebar state, before paint, so the rail never flashes open.
-      try {
-        document.documentElement.dataset.sidebar =
-          window.localStorage.getItem("aztec.ui.sidebar") === "rail" ? "rail" : "open";
-      } catch {
-        document.documentElement.dataset.sidebar = "open";
-      }
+      //
+      // 1024–1439 is the icon rail by contract (DESIGN.md §Layout), which the
+      // stored preference cannot override: below 1024 the sidebar is the
+      // drawer, and only from 1440 is there room for the operator to choose.
+      // The same rule lives in the module script below, applied again whenever
+      // the viewport crosses the band.
+      (function () {
+        var pref = "open";
+        try {
+          pref =
+            window.localStorage.getItem("aztec.ui.sidebar") === "rail"
+              ? "rail"
+              : "open";
+        } catch {
+          /* storage disabled: the panel is the default */
+        }
+        var band = window.matchMedia(
+          "(min-width: 1024px) and (max-width: 1439px)",
+        );
+        document.documentElement.dataset.sidebar = band.matches ? "rail" : pref;
+      })();
     </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#f4f3ef" />
     <title>{title} — Aztec Ops</title>
+    <meta property="og:title" content={`${title} — Aztec Ops`} />
+    <meta
+      property="og:description"
+      content="Prioriza el portafolio y explica por qué."
+    />
+    <meta property="og:image" content="/brand/og.jpg" />
+    <meta name="twitter:card" content="summary_large_image" />
     <ClientRouter />
   </head>
   <body>
-    <a class="visually-hidden skip-link" href="#contenido">Saltar al contenido</a>
+    <a class="visually-hidden skip-link" href="#contenido"
+      >Saltar al contenido</a
+    >
     <div class="shell">
       <aside class="sidebar" id="sidebar" transition:persist="sidebar">
         <div class="sidebar-top">
           <a class="brand" href="/" aria-label="Aztec Ops, ir al resumen">
-            <span class="brand-mark" aria-hidden="true">
-              <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
-                <rect x="3" y="8.5" width="15" height="11" rx="3" fill="var(--cobalto-papel)"></rect>
-                <rect x="6" y="5.5" width="15" height="11" rx="3" fill="var(--cobalto)" opacity="0.35"></rect>
-                <rect x="9" y="2.5" width="15" height="11" rx="3" fill="var(--cobalto)"></rect>
-              </svg>
-            </span>
+            <BrandMark size={26} />
             <span class="brand-name">Aztec Ops</span>
           </a>
           <button
@@ -168,6 +221,9 @@ const LOGIN_PATH = "/login";
             type="button"
             data-action="open-drawer"
             aria-label="Abrir el menú"
+            aria-controls="sidebar"
+            aria-expanded="false"
+            data-drawer-trigger
           >
             <Icon name="menu" />
           </button>
@@ -201,7 +257,7 @@ const LOGIN_PATH = "/login";
             <ConnectionBadge />
           </div>
         </header>
-        <main id="contenido" class="content">
+        <main id="contenido" class="content" data-wide={wide ? "" : undefined}>
           <slot />
         </main>
       </div>
@@ -232,23 +288,64 @@ const LOGIN_PATH = "/login";
 
       const SIDEBAR_PREF_KEY = "aztec.ui.sidebar";
 
+      /**
+       * The band in which the sidebar is the icon rail whatever the operator
+       * prefers (DESIGN.md §Layout: <1024 drawer, 1024–1439 rail, ≥1440 panel).
+       * Duplicated once in the pre-paint inline script, which cannot import.
+       */
+      const railBand = window.matchMedia(
+        "(min-width: 1024px) and (max-width: 1439px)",
+      );
+
+      /**
+       * Opens or closes the drawer, and tells assistive tech that it did.
+       *
+       * The trigger owns `aria-expanded`: the drawer is also closed by the
+       * scrim and by Escape, so a state written only where the button is
+       * clicked would leave a screen reader announcing an open navigation over
+       * a closed one.
+       */
       function setDrawer(open: boolean): void {
         if (open) {
           document.documentElement.dataset.drawer = "open";
         } else {
           delete document.documentElement.dataset.drawer;
         }
+        document
+          .querySelector("[data-drawer-trigger]")
+          ?.setAttribute("aria-expanded", String(open));
+      }
+
+      /** The stored choice; `open` whenever storage refuses to answer. */
+      function storedSidebar(): "rail" | "open" {
+        try {
+          return window.localStorage.getItem(SIDEBAR_PREF_KEY) === "rail"
+            ? "rail"
+            : "open";
+        } catch {
+          return "open";
+        }
+      }
+
+      /**
+       * Applies the effective sidebar mode: the rail band wins over the
+       * preference, so widening past 1440 restores the operator's choice and
+       * narrowing back into the band collapses to the rail again.
+       */
+      function applySidebarMode(): void {
+        document.documentElement.dataset.sidebar = railBand.matches
+          ? "rail"
+          : storedSidebar();
       }
 
       function toggleSidebar(): void {
-        const next =
-          document.documentElement.dataset.sidebar === "rail" ? "open" : "rail";
-        document.documentElement.dataset.sidebar = next;
+        const next = storedSidebar() === "rail" ? "open" : "rail";
         try {
           window.localStorage.setItem(SIDEBAR_PREF_KEY, next);
         } catch {
           /* preference simply not persisted */
         }
+        applySidebarMode();
       }
 
       function goBack(control: HTMLElement): void {
@@ -260,15 +357,44 @@ const LOGIN_PATH = "/login";
         }
       }
 
+      /**
+       * Re-marks the current destination in the sidebar.
+       *
+       * The sidebar is `transition:persist`ed, so it survives a navigation
+       * untouched — including the `aria-current` the server rendered for
+       * whatever page first drew it. Without this, the highlight stays on the
+       * entry the operator arrived through and the nav quietly lies about
+       * where they are.
+       */
+      function markActiveNav(): void {
+        const path = window.location.pathname;
+        for (const link of document.querySelectorAll<HTMLAnchorElement>(
+          ".nav-item",
+        )) {
+          const href = link.getAttribute("href") ?? "";
+          const isActive =
+            href === "/"
+              ? path === "/"
+              : path === href || path.startsWith(`${href}/`);
+          if (isActive) link.setAttribute("aria-current", "page");
+          else link.removeAttribute("aria-current");
+        }
+      }
+
       function fillOperatorCard(): void {
         const operator = getOperator();
         const card = document.querySelector<HTMLElement>("[data-operator]");
         if (card === null || operator === null) return;
         card.hidden = false;
-        const avatar = card.querySelector<HTMLElement>("[data-operator-avatar]");
+        const avatar = card.querySelector<HTMLElement>(
+          "[data-operator-avatar]",
+        );
         if (avatar !== null) {
           avatar.textContent = initials(operator.label);
-          avatar.style.setProperty("--avatar-h", String(avatarHue(operator.alias)));
+          avatar.style.setProperty(
+            "--avatar-h",
+            String(avatarHue(operator.alias)),
+          );
         }
         const name = card.querySelector<HTMLElement>("[data-operator-name]");
         if (name !== null) name.textContent = operator.label;
@@ -306,6 +432,8 @@ const LOGIN_PATH = "/login";
         if (event.key === "Escape") setDrawer(false);
       });
 
+      railBand.addEventListener("change", applySidebarMode);
+
       window.addEventListener(SESSION_EXPIRED_EVENT, () => {
         toast({
           kind: "error",
@@ -320,6 +448,8 @@ const LOGIN_PATH = "/login";
       document.addEventListener("astro:page-load", () => {
         if (!guardAppPage()) return;
         setDrawer(false);
+        applySidebarMode();
+        markActiveNav();
         fillOperatorCard();
       });
 
@@ -363,6 +493,15 @@ const LOGIN_PATH = "/login";
         background: var(--carta);
         border-right: var(--border-width) solid var(--hairline);
         padding: var(--space-4) var(--space-3);
+        /*
+         * The one width animation kept on purpose. A transform would slide the
+         * rail over the content or leave a gap beside it — the point of
+         * collapsing is that the content *reclaims* the space, which is a
+         * layout change by definition. It runs once per deliberate click, on a
+         * grid track, not per frame of a data update, so the reflow it costs is
+         * bounded and paid for. Everything that animates on data uses transform
+         * (see the bars in SignalBar, ScorePlate and MemberRow).
+         */
         transition: width var(--motion-panel-duration) var(--motion-panel-ease);
         z-index: var(--z-sidebar);
         overflow: hidden;
@@ -555,6 +694,34 @@ const LOGIN_PATH = "/login";
         padding: var(--space-5) var(--space-6) var(--space-8);
       }
 
+      /*
+       * The `wide` escape hatch (see Props). The measure and the gutters go, and
+       * the region becomes a flex column that claims the height the topbar left
+       * over — a board whose columns scroll inside themselves needs a bounded
+       * height, and `min-height: 0` is what keeps a flex child from refusing to
+       * shrink below its content.
+       */
+      .content[data-wide] {
+        max-width: none;
+        margin-inline: 0;
+        padding: 0;
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /*
+       * Below 1440 the collapse control has nothing to say: 1024–1439 is the
+       * rail and below 1024 the drawer, both fixed by DESIGN.md §Layout. A
+       * visible toggle there would write a preference the layout then ignores.
+       */
+      @media (max-width: 1439px) {
+        .collapse-btn {
+          display: none;
+        }
+      }
+
       /* --- Drawer (< 1024px) --- */
 
       .scrim {
@@ -576,7 +743,8 @@ const LOGIN_PATH = "/login";
           left: 0;
           width: var(--size-sidebar);
           transform: translateX(-100%);
-          transition: transform var(--motion-panel-duration) var(--motion-panel-ease);
+          transition: transform var(--motion-panel-duration)
+            var(--motion-panel-ease);
           box-shadow: none;
           z-index: var(--z-drawer);
         }
@@ -619,10 +787,6 @@ const LOGIN_PATH = "/login";
 
         :global(html[data-drawer="open"]) .scrim {
           display: block;
-        }
-
-        .collapse-btn {
-          display: none;
         }
 
         .menu-btn {

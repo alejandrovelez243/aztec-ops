@@ -1,0 +1,3075 @@
+---
+import EngagementSelect from "../components/board/EngagementSelect.astro";
+import type { Option } from "../components/board/EngagementSelect.astro";
+import Icon from "../components/ui/Icon.astro";
+import MemberBar from "../components/board/MemberBar.astro";
+import ProjectRail from "../components/board/ProjectRail.astro";
+import TaskBoard from "../components/board/TaskBoard.astro";
+import { BOARD_ENGAGEMENT_KEY } from "../components/board/board-dom";
+import type {
+  BoardSurfaceModel,
+  MemberChipModel,
+  ProjectCardModel,
+  Tone,
+} from "../components/board/board-model";
+
+/**
+ * The board canvas: the one island of `/board`, and the home of the product's signature
+ * interaction — cards with mass, on two surfaces at once.
+ *
+ * The screen is two halves that cross axes:
+ *
+ * - the **rail** on the left is the portfolio, one band per project workflow state, and a
+ *   project is dragged **up and down** from one state into another;
+ * - the **board** on the right is the selected project's work, one column per task workflow
+ *   state, and a task is dragged **left and right**.
+ *
+ * What this island owns, and why it is one island rather than five:
+ *
+ * - **Drag, on both surfaces, through one controller.** Pointer events plus
+ *   `setPointerCapture`, no drag library. The card lifts, tilts toward its own velocity and
+ *   *trails the hand* through a critically damped follower on rAF; the surface announces
+ *   legality while it travels, the container auto-scrolls along whichever axis it can scroll
+ *   when the card nears an edge, and the drop is answered by the server, never by the client.
+ *   The two surfaces differ by a {@link Surface} descriptor — where the zones are, how
+ *   legality is learned, which endpoint the move is posted to — and by nothing else, so a
+ *   third surface would be one more descriptor and no new controller.
+ * - **Its keyboard and touch twin.** Every card, project or task, carries a "Mover a…" menu
+ *   listing the same targets and posting through the same path. Drag is the enhancement,
+ *   never the only way in (DESIGN.md, Do's).
+ * - **Selection.** A project card is also a control: picking one fills the board with that
+ *   project's tasks. The choice lives in `?project=CODE`, so a reload and the back button both
+ *   land where the operator was.
+ * - **The engagement field and the member filter.** The select swaps which portfolio — and
+ *   therefore which workflow's bands and columns — is on screen; pressing a face narrows the
+ *   rail to that person's projects.
+ * - **The stream.** `project.state_changed` and `task.state_changed` from another operator
+ *   travel the card across its own surface with an attribution chip riding on it — the moment
+ *   the product's multiplayer nature is shown instead of implied.
+ *
+ * All of them mutate the same cards, so they share one controller: split across islands they
+ * would race each other on the same DOM node with no owner of the truth.
+ *
+ * The first paint is server-rendered by the page; this island never fetches the rail. It
+ * fetches exactly three things on demand — a project's legal moves, the transition POST, and
+ * the selected project's tasks — and compares every envelope's `occurred_at` against the
+ * card's rendered `updated_at` before touching it (`docs/standards/PATTERNS_FRONTEND.md` §6).
+ */
+export interface Props {
+  surfaces: readonly BoardSurfaceModel[];
+  /** Engagement type painted first; the browser swaps to the operator's stored choice. */
+  defaultEngagement: string;
+  /**
+   * Connection arm the server rendered. `stale` is the `disconnected` view state: the board
+   * stays on screen, marked, with drags refused — never blanked (`FRONTEND.md` §1).
+   */
+  connection: "live" | "stale";
+  /** `occurred_at` of the last envelope the store saw, for the staleness sentence. */
+  lastEventAt: string | null;
+  /** The roster, for the "Miembros" bar; empty when the read failed. */
+  members: readonly MemberChipModel[];
+  /** Why the roster is missing, when it is. */
+  membersNote: string | null;
+  /** Why the bands and columns are only the occupied states, when the workflow read failed. */
+  workflowsNote: string | null;
+  /** The project `?project=` named, already located on the rail; `null` when none. */
+  selected: { card: ProjectCardModel; tone: Tone } | null;
+}
+
+const {
+  surfaces,
+  defaultEngagement,
+  connection,
+  lastEventAt,
+  members,
+  membersNote,
+  workflowsNote,
+  selected,
+} = Astro.props;
+
+const options: Option[] = surfaces.map((surface) => ({
+  code: surface.engagementType.code,
+  label: surface.engagementType.label,
+  count: surface.count,
+}));
+
+const selectedCode = selected === null ? null : selected.card.code;
+
+/** Server-side twin of the runtime's staleness sentence; both name the same moment. */
+const staleSentence =
+  lastEventAt === null
+    ? "Sin conexión en vivo. El tablero muestra los datos con los que se cargó la página."
+    : `Sin conexión en vivo. El tablero muestra los datos de las ${new Intl.DateTimeFormat(
+        "es",
+        { hour: "2-digit", minute: "2-digit" },
+      ).format(new Date(lastEventAt))}.`;
+---
+
+<div
+  class="board"
+  data-board
+  data-engagement={defaultEngagement}
+  data-connection={connection}
+  data-last-event-at={lastEventAt ?? ""}
+  data-selected={selectedCode ?? undefined}
+>
+  <div class="board-bar">
+    <EngagementSelect options={options} active={defaultEngagement} />
+    <MemberBar members={members} failureNote={membersNote} />
+    <p class="small board-hint" lang="es">
+      Arrastra un proyecto entre estados en el carril, o una tarea entre
+      columnas. También puedes usar <strong>Mover a…</strong> en cualquier tarjeta.
+    </p>
+  </div>
+
+  {
+    workflowsNote !== null && (
+      <p class="card tone-ambar board-note" role="status" lang="es">
+        <Icon name="alert" size={16} />
+        {workflowsNote}
+      </p>
+    )
+  }
+
+  <div
+    class="stale card tone-ambar"
+    data-board-stale
+    hidden={connection === "live"}
+    role="status"
+  >
+    <Icon name="alert" size={18} />
+    <p class="small" data-board-stale-text lang="es">{staleSentence}</p>
+    <button
+      type="button"
+      class="btn btn-secondary"
+      data-board-stale-action
+      data-mode="offline"
+      lang="es">Reconectar</button
+    >
+  </div>
+
+  <div class="board-stage">
+    <ProjectRail
+      surfaces={surfaces}
+      active={defaultEngagement}
+      selectedCode={selectedCode}
+    />
+    <TaskBoard
+      surfaces={surfaces}
+      active={defaultEngagement}
+      selected={selected}
+    />
+  </div>
+
+  <div class="move-menu card" id="board-move-menu" data-move-menu hidden>
+    <p
+      class="label move-menu-title"
+      id="board-move-menu-title"
+      data-move-menu-title
+      lang="es"
+    >
+    </p>
+    <div
+      class="move-menu-list"
+      data-move-menu-list
+      role="menu"
+      aria-labelledby="board-move-menu-title"
+    >
+    </div>
+  </div>
+
+  <dialog
+    class="reason-dialog"
+    data-reason-dialog
+    aria-labelledby="reason-title"
+  >
+    <form method="dialog" data-reason-form>
+      <!-- Titled with the transition's own label once a move is in hand; the static text is
+        what a person would read if the dialog were ever opened before that. -->
+      <h2 class="h2" id="reason-title" data-reason-title lang="es">
+        Motivo del cambio
+      </h2>
+      <p class="small" data-reason-context lang="es"></p>
+      <label class="label reason-label" for="reason-input" lang="es"
+        >Motivo</label
+      >
+      <textarea
+        class="input"
+        id="reason-input"
+        data-reason-input
+        rows="3"
+        required
+        lang="es"></textarea>
+      <div class="reason-actions">
+        <button
+          type="button"
+          class="btn btn-secondary"
+          data-reason-cancel
+          lang="es">Cancelar</button
+        >
+        <button
+          type="submit"
+          class="btn btn-primary"
+          value="confirm"
+          data-reason-submit
+          disabled
+          lang="es">Confirmar</button
+        >
+      </div>
+    </form>
+  </dialog>
+</div>
+
+<script is:inline define:vars={{ key: BOARD_ENGAGEMENT_KEY }}>
+  // Applied before paint so the operator's portfolio does not flash the alphabetically
+  // first engagement type on every navigation. The module below re-applies it (and
+  // owns every later switch); this is only the anti-flash pass. It steps aside when
+  // the URL names a project: the page already opened the portfolio that card lives on,
+  // and a stored preference must not fight a link somebody was sent.
+  try {
+    const stored = window.localStorage.getItem(key);
+    const script = document.currentScript;
+    const board = script === null ? null : script.previousElementSibling;
+    const pinned =
+      board !== null && board.getAttribute("data-selected") !== null;
+    const panels =
+      stored === null || board === null || pinned
+        ? []
+        : board.querySelectorAll(
+            `[data-panel][data-engagement-code="${CSS.escape(stored)}"]`,
+          );
+    if (board !== null && stored !== null && panels.length > 0) {
+      board.setAttribute("data-engagement", stored);
+      for (const candidate of board.querySelectorAll("[data-panel]")) {
+        if (candidate.getAttribute("data-engagement-code") === stored) {
+          candidate.removeAttribute("hidden");
+        } else {
+          candidate.setAttribute("hidden", "");
+        }
+      }
+      // The field follows through its options' `selected` attribute: nothing has been
+      // scripted or typed into it yet, so its selectedness still tracks the markup.
+      for (const option of board.querySelectorAll("[data-engagement-option]")) {
+        if (option.getAttribute("data-engagement-code") === stored) {
+          option.setAttribute("selected", "");
+        } else {
+          option.removeAttribute("selected");
+        }
+      }
+    }
+  } catch {
+    /* storage disabled: the server's default type stays selected */
+  }
+</script>
+
+<script>
+  import { navigate } from "astro:transitions/client";
+  import type { ApiError } from "../lib/api/errors";
+  import { getOperator } from "../lib/auth/session";
+  import {
+    countUp,
+    flip,
+    prefersReducedMotion,
+    sampleSpring,
+    shake,
+    travelBy,
+  } from "../lib/motion/spring";
+  import { onReset, onStatus, retry, subscribe } from "../lib/stream/store";
+  import type { Envelope } from "../lib/stream/store";
+  import { toast } from "../lib/toast";
+  import {
+    BOARD_ENGAGEMENT_KEY,
+    BOARD_PROJECT_PARAM,
+    SEL,
+    activePanel,
+    applyStateChip,
+    bodyOf,
+    cardsOf,
+    columnOf,
+    columnsOf,
+    findCard,
+    findColumn,
+    findPanel,
+    isNewer,
+    isPending,
+    labelOf,
+    markUpdatedAt,
+    panelOf,
+    patchStateChip,
+    refreshColumn,
+    rideAttribution,
+    setPending,
+    surfaceOf,
+    visibleCardsOf,
+  } from "../components/board/board-dom";
+  import { fieldList } from "../components/board/board-model";
+  import type { TaskCardModel } from "../components/board/board-model";
+  import {
+    claimBoard,
+    isCurrent,
+    loadTasks,
+    type TaskBoardResult,
+  } from "../components/board/board-tasks";
+  import {
+    invalidateMoves,
+    invalidateTaskMoves,
+    loadMoves,
+    loadTaskMoves,
+    moveErrorCopy,
+    projectSubject,
+    submitMove,
+    submitTaskMove,
+    taskSubject,
+    type MoveOption,
+    type MoveSubject,
+    type MovesResult,
+  } from "../components/board/board-moves";
+
+  /** Movement past which a press becomes a drag instead of a click. */
+  const DRAG_THRESHOLD_PX = 4;
+  /** Follower spring: stiff enough to obey, soft enough that the card visibly trails. */
+  const FOLLOW_STIFFNESS = 260;
+  /** Critical damping (2√k, mass 1): lag without wobble — mass, not jelly. */
+  const FOLLOW_DAMPING = 2 * Math.sqrt(FOLLOW_STIFFNESS);
+  /** Frame clamp, so a backgrounded tab does not integrate one enormous step. */
+  const MAX_FRAME_SECONDS = 0.032;
+  const FALLBACK_FRAME_SECONDS = 1 / 60;
+  /** Tilt ceiling of DESIGN.md's grab step. */
+  const MAX_TILT_DEG = 3;
+  /** Degrees of tilt per px/s of horizontal velocity. */
+  const TILT_PER_VELOCITY = 0.004;
+  /** Grab scale of DESIGN.md's card lifecycle. */
+  const GRAB_SCALE = 1.03;
+  /**
+   * How long a confirmed POST waits for its `*.state_changed` envelope before the card settles
+   * from the response instead. Without it a dropped stream leaves a card spinning forever over
+   * a change the server already made.
+   */
+  const CONFIRM_DEADLINE_MS = 8_000;
+  /** How long the remote-move ring stays on the card. */
+  const REMOTE_RING_MS = 900;
+  const MENU_GAP_PX = 6;
+  const VIEWPORT_MARGIN_PX = 8;
+  /** Band at each edge of a scroller inside which a carried card drags it along. */
+  const AUTOSCROLL_ZONE_PX = 96;
+  /** Top speed of that drag, in px per second at the very edge. */
+  const AUTOSCROLL_MAX_PX_PER_SEC = 1_100;
+  /** Width at which the rail stands up beside the board instead of lying above it. */
+  const RAIL_COLUMN_QUERY = "(min-width: 1024px)";
+  /**
+   * Trailing window for task events that change the *shape* of the board. A single edit can
+   * land as `task.updated` plus `task.created`, and re-reading the list once per frame of a
+   * burst is a request storm for one visible change.
+   */
+  const TASK_REFRESH_DEBOUNCE_MS = 250;
+
+  /**
+   * The id of the sentence that says why "Crear tarea" is off. Shared with `TaskBoard.astro`:
+   * the reason is authored there in Spanish, and this only points the button at it, so the
+   * island never builds user-facing copy.
+   */
+  const CREATE_REASON_ID = "tb-create-reason";
+
+  /** Why a card refuses to be picked up while the stream is down. */
+  const STALE_DRAG_HINT =
+    "Sin conexión en vivo: no puedes arrastrar tarjetas hasta reconectar.";
+  const RESET_SENTENCE =
+    "La conexión se reinició y no se pueden recuperar los eventos perdidos. Actualiza el tablero para volver a la verdad del servidor.";
+
+  /**
+   * One draggable surface: where its zones are, how its legality is learned, and where a move
+   * is posted.
+   *
+   * The rail and the board differ in exactly these four answers. Everything else — the
+   * follower, the tilt, the drop slots, the lock chips, the pending mark, the travel-back, the
+   * menu, the confirmation deadline — is written once against this interface, which is what
+   * keeps the two halves from drifting into two subtly different drags (CLAUDE.md rule 14).
+   */
+  interface Surface {
+    readonly kind: "project" | "task";
+    /** The container element: the rail, or the task board. */
+    readonly root: HTMLElement;
+    /** How a refusal names one of its aggregates. */
+    subject(code: string): MoveSubject;
+    /** The zones a card of this surface may travel between, in DOM order. */
+    zones(card: HTMLElement): HTMLElement[];
+    /** The moves this card may take, read from the server and cached per code. */
+    moves(card: HTMLElement): Promise<MovesResult>;
+    /** Posts one transition and reduces both answers to {@link MoveOutcome}. */
+    submit(
+      code: string,
+      toStateCode: string,
+      reason: string,
+    ): Promise<MoveOutcome>;
+    /** Forgets one code's cached legality; its state just changed. */
+    forget(code: string): void;
+  }
+
+  /**
+   * The server's answer to a move, with the two payload shapes erased.
+   *
+   * `updatedAt` is the watermark the response carries when it has one — a project detail does,
+   * a `TaskView` does not — so the caller can advance the stale-patch guard without knowing
+   * which endpoint answered.
+   */
+  type MoveOutcome =
+    | { readonly kind: "accepted"; readonly updatedAt: string | null }
+    | { readonly kind: "refused"; readonly error: ApiError };
+
+  /** A press that has not yet travelled far enough to become a drag. */
+  interface ArmedPress {
+    readonly card: HTMLElement;
+    readonly surface: Surface;
+    readonly pointerId: number;
+    readonly originX: number;
+    readonly originY: number;
+    /**
+     * The link the press landed on, or `null`.
+     *
+     * Read at `pointerdown` and carried, never re-read at `pointerup`: the grab captures the
+     * pointer to the *card* so a task's title can also be its grip, and a captured pointer
+     * retargets every later pointer event to the capturing element. By `pointerup` the anchor
+     * is no longer anybody's `event.target`, so this is the only remaining record that the
+     * finger went down on the title.
+     */
+    readonly link: HTMLAnchorElement | null;
+  }
+
+  /** One live drag. Everything the follower, the legality paint and the drop need. */
+  interface DragSession {
+    readonly surface: Surface;
+    readonly card: HTMLElement;
+    readonly originZone: HTMLElement;
+    /** The zones this gesture may drop into, measured once at grab. */
+    readonly zones: readonly HTMLElement[];
+    /** Which way the zones are laid out, so the hit test claims the right band. */
+    readonly axis: "x" | "y";
+    /** The scroller the card is travelling over; `null` if there is none. */
+    readonly scroller: HTMLElement | null;
+    /** Holds the card's place in its origin zone, so the hole stays visible. */
+    readonly placeholder: HTMLElement;
+    readonly pointerId: number;
+    readonly cardHeight: number;
+    /** Pointer offset inside the card at grab; the card hangs from this point. */
+    readonly grabX: number;
+    readonly grabY: number;
+    readonly baseLeft: number;
+    readonly baseTop: number;
+    targetX: number;
+    targetY: number;
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    /** Auto-scroll speed in px/s, signed, per axis; zero away from the edges. */
+    autoScrollVx: number;
+    autoScrollVy: number;
+    lastFrame: number;
+    frame: number | null;
+    /** Legal moves by target state code; `null` until the lookup answers. */
+    options: Map<string, MoveOption> | null;
+    readonly slots: HTMLElement[];
+  }
+
+  /**
+   * How a gesture ended.
+   *
+   * `refused` is kept apart from `released` because they mean different things to the hand:
+   * a card dropped on a zone that will not take it answers with the reject shake, while a
+   * card released over nothing simply goes home (DESIGN.md §Motion, steps 3 and 4).
+   */
+  type DropOutcome =
+    | { readonly kind: "accepted"; readonly zone: HTMLElement }
+    | { readonly kind: "refused" }
+    | { readonly kind: "released" };
+
+  /** Where the card physically sits while its transition is in flight. */
+  type CardPlacement =
+    | { readonly kind: "moved"; readonly from: HTMLElement }
+    | { readonly kind: "waiting" };
+
+  /**
+   * One transition in flight, waiting for the envelope that confirms it.
+   *
+   * Registered before the POST departs, because the envelope can outrun the response: an
+   * unregistered confirmation would leave the card spinning over a change already made.
+   * `updatedAt` and `timer` therefore arrive later, when (and if) the response does.
+   */
+  interface PendingMove {
+    readonly surface: Surface;
+    readonly card: HTMLElement;
+    readonly code: string;
+    readonly toStateCode: string;
+    readonly targetLabel: string;
+    readonly placement: CardPlacement;
+    /** The server's watermark, once it lands; `null` while the POST is still in flight. */
+    updatedAt: string | null;
+    /** The confirmation deadline, armed only after the server accepted. */
+    timer: number | null;
+  }
+
+  /** One requested move, from either input path on either surface. */
+  interface MoveRequest {
+    readonly surface: Surface;
+    readonly card: HTMLElement;
+    readonly code: string;
+    readonly option: MoveOption;
+    readonly targetLabel: string;
+    readonly placement: CardPlacement;
+  }
+
+  /** How a selection came about; it decides history and focus, never the paint. */
+  interface SelectOptions {
+    /** Push a history entry, so the back button returns to the previous selection. */
+    readonly push: boolean;
+    /** Move focus onto the card — true only when the selection came from a pointer. */
+    readonly focus: boolean;
+  }
+
+  /** Teardown of the currently mounted board; drained on `astro:before-swap`. */
+  let cleanups: Array<() => void> = [];
+
+  document.addEventListener("astro:page-load", () => {
+    const board = document.querySelector<HTMLElement>(SEL.board);
+    if (board === null || board.dataset["ready"] === "true") return;
+    board.dataset["ready"] = "true";
+    mount(board);
+  });
+
+  document.addEventListener("astro:before-swap", () => {
+    for (const off of cleanups) off();
+    cleanups = [];
+  });
+
+  /**
+   * Wires one board. Everything below closes over `board`, so nothing survives a navigation
+   * except through {@link cleanups} — a subscription left behind would keep patching cards
+   * that are no longer in the document.
+   */
+  function mount(board: HTMLElement): void {
+    const operator = getOperator();
+    const operatorAlias = operator === null ? null : operator.alias;
+
+    const foundRail = board.querySelector<HTMLElement>(SEL.rail);
+    const foundTaskBoard = board.querySelector<HTMLElement>(SEL.taskBoard);
+    if (foundRail === null || foundTaskBoard === null) return;
+
+    // Re-bound with a non-nullable declared type rather than narrowed in place: TypeScript
+    // carries a captured `const`'s narrowing into function *expressions* only, never into the
+    // hoisted `function` declarations that make up the rest of this mount, and both halves are
+    // read from dozens of them below. Declaring the type is how the guard reaches them without
+    // a `!` per call site (`FRONTEND.md`: narrow, never assert).
+    const rail: HTMLElement = foundRail;
+    const taskBoard: HTMLElement = foundTaskBoard;
+
+    const field = board.querySelector<HTMLSelectElement>(SEL.engagementSelect);
+    const menu = board.querySelector<HTMLElement>(SEL.moveMenu);
+    const menuList = board.querySelector<HTMLElement>(SEL.moveMenuList);
+    const menuTitle = board.querySelector<HTMLElement>(SEL.moveMenuTitle);
+    const dialog = board.querySelector<HTMLDialogElement>(
+      "[data-reason-dialog]",
+    );
+    const reasonTitle = board.querySelector<HTMLElement>("[data-reason-title]");
+    const reasonInput = board.querySelector<HTMLTextAreaElement>(
+      "[data-reason-input]",
+    );
+    const reasonSubmit = board.querySelector<HTMLButtonElement>(
+      "[data-reason-submit]",
+    );
+    const reasonCancel = board.querySelector<HTMLButtonElement>(
+      "[data-reason-cancel]",
+    );
+    const reasonContext = board.querySelector<HTMLElement>(
+      "[data-reason-context]",
+    );
+    const staleBanner = board.querySelector<HTMLElement>(SEL.staleBanner);
+    const staleText = board.querySelector<HTMLElement>(SEL.staleText);
+    const staleAction = board.querySelector<HTMLButtonElement>(SEL.staleAction);
+
+    const pendings = new Map<string, PendingMove>();
+    let armed: ArmedPress | null = null;
+    let drag: DragSession | null = null;
+    let suppressClick = false;
+    let menuOwner: HTMLElement | null = null;
+    let resolveReason: ((reason: string | null) => void) | null = null;
+    /** The card the reason dialog was opened for; focus goes back to it when it closes. */
+    let reasonReturn: HTMLElement | null = null;
+    let staleMode: "offline" | "reset" | null =
+      board.dataset["connection"] === "stale" ? "offline" : null;
+    const renderedLastEvent = board.dataset["lastEventAt"] ?? "";
+    let lastEventAt: string | null =
+      renderedLastEvent === "" ? null : renderedLastEvent;
+    let selectedCode: string | null = board.dataset["selected"] ?? null;
+    let memberFilter: string | null = null;
+    let taskRefreshTimer: number | null = null;
+    /** A shape refresh a pending task move deferred; run once the move settles. */
+    let taskRefreshDeferred = false;
+
+    // --- The two surfaces ---------------------------------------------------
+
+    /**
+     * The rail: projects, stacked vertically, legality read from the project itself.
+     *
+     * `panelOf` scopes the zones to the engagement type on screen, because a project may only
+     * move inside the workflow its own portfolio is bound to.
+     */
+    const projectSurface: Surface = {
+      kind: "project",
+      root: rail,
+      subject: projectSubject,
+      zones: (card) => {
+        const panel = panelOf(card);
+        return panel === null ? [] : columnsOf(panel);
+      },
+      moves: (card) => loadMoves(codeOf(card)),
+      submit: async (code, toStateCode, reason) => {
+        const result = await submitMove(code, toStateCode, reason);
+        if (!result.ok) return { kind: "refused", error: result.error };
+        return { kind: "accepted", updatedAt: result.data.updated_at };
+      },
+      forget: invalidateMoves,
+    };
+
+    /**
+     * The board: tasks, laid out horizontally, legality read from the task itself.
+     *
+     * `GET /api/v1/tasks/{code}` publishes a task's `transitions` exactly as a project detail
+     * publishes a project's, so this half asks the same question of the same shape and gets the
+     * same three answers back: which columns are legal, which of them demand a reason, and
+     * which are legal but unsatisfiable today. Guessing instead — offering every column and
+     * letting the `POST` decide — makes a legal move that needs a reason impossible to perform,
+     * because the refusal arrives after the gesture that could have asked for it.
+     */
+    const taskSurface: Surface = {
+      kind: "task",
+      root: taskBoard,
+      subject: taskSubject,
+      zones: (card) => {
+        const panel = panelOf(card);
+        return panel === null ? [] : columnsOf(panel);
+      },
+      moves: (card) => loadTaskMoves(codeOf(card)),
+      submit: async (code, toStateCode, reason) => {
+        const result = await submitTaskMove(code, toStateCode, reason);
+        if (!result.ok) return { kind: "refused", error: result.error };
+        return { kind: "accepted", updatedAt: null };
+      },
+      forget: invalidateTaskMoves,
+    };
+
+    /** Which surface a card belongs to, decided by the container it lives in. */
+    function surfaceFor(card: HTMLElement): Surface | null {
+      const container = surfaceOf(card);
+      if (container === rail) return projectSurface;
+      if (container === taskBoard) return taskSurface;
+      return null;
+    }
+
+    // --- Engagement type ----------------------------------------------------
+
+    /**
+     * Shows one engagement type on both halves. The choice is persisted because an operations
+     * lead lives in one type for a whole morning, and re-picking it on every visit is a tax.
+     *
+     * Both halves switch together: the rail's bands and the board's columns come from two
+     * graphs bound to the same engagement type, so showing one type's rail beside another
+     * type's columns would be a screen describing two portfolios at once.
+     */
+    function selectEngagement(code: string, persist: boolean): void {
+      if (findPanel(rail, code) === null) return;
+      board.dataset["engagement"] = code;
+      for (const panel of board.querySelectorAll<HTMLElement>(SEL.panel)) {
+        panel.hidden = panel.dataset["engagementCode"] !== code;
+      }
+      if (field !== null && field.value !== code) field.value = code;
+      // A selection that lives on another portfolio is no longer on screen, and a board
+      // showing one project's tasks beside a rail that does not contain it is a lie.
+      if (selectedCode !== null) {
+        const panel = findPanel(rail, code);
+        if (panel === null || findCard(panel, selectedCode) === null) {
+          clearSelection({ push: false, focus: false });
+        }
+      }
+      refreshRoving();
+      if (!persist) return;
+      try {
+        window.localStorage.setItem(BOARD_ENGAGEMENT_KEY, code);
+      } catch {
+        /* storage disabled: the choice simply does not outlive the visit */
+      }
+    }
+
+    // --- Selection and the task board ---------------------------------------
+
+    const tb = {
+      title: query("[data-tb-title]"),
+      sub: query("[data-tb-sub]"),
+      project: query("[data-tb-project]"),
+      close: query("[data-tb-close]"),
+      create: query("[data-tb-create]"),
+      code: query("[data-tb-code]"),
+      state: query("[data-tb-state]"),
+      owner: query("[data-tb-owner]"),
+      link: query("[data-tb-link]"),
+      stage: query("[data-tb-stage]"),
+      idle: query("[data-tb-idle]"),
+      error: query("[data-tb-error]"),
+      errorTitle: query("[data-tb-error-title]"),
+      errorDetail: query("[data-tb-error-detail]"),
+      empty: query("[data-tb-empty]"),
+    };
+
+    function query(selector: string): HTMLElement | null {
+      return taskBoard.querySelector<HTMLElement>(selector);
+    }
+
+    function template(name: string): HTMLTemplateElement | null {
+      return taskBoard.querySelector<HTMLTemplateElement>(
+        `[data-template="${name}"]`,
+      );
+    }
+
+    /**
+     * Shows exactly one arm of the board.
+     *
+     * All four states are real markup rendered by `TaskBoard.astro`; this only decides which
+     * one is on screen, so no Spanish string is ever built inside the island. `loading` and
+     * `ready` share the columns on purpose: the skeleton lives *inside* the final geometry,
+     * so the paint never jumps out of the shape its skeleton promised.
+     */
+    function showBoardArm(
+      arm: "idle" | "loading" | "error" | "empty" | "ready",
+    ): void {
+      taskBoard.dataset["state"] = arm;
+      if (tb.idle !== null) tb.idle.hidden = arm !== "idle";
+      if (tb.error !== null) tb.error.hidden = arm !== "error";
+      if (tb.empty !== null) tb.empty.hidden = arm !== "empty";
+      if (tb.stage !== null)
+        tb.stage.hidden = arm !== "loading" && arm !== "ready";
+    }
+
+    /**
+     * Fills the board's header from the project card itself.
+     *
+     * The card already carries every fact the header shows — code, state chip, owner disk — so
+     * reading them here costs nothing, while a second `GET /api/v1/projects/{code}` would be a
+     * second version of the same truth that can disagree with what the operator is looking at
+     * (`PATTERNS_FRONTEND.md` §6). The owner disk is cloned rather than rebuilt so its hue and
+     * its accessible name travel with it.
+     */
+    function fillHeader(card: HTMLElement): void {
+      const code = codeOf(card);
+      if (tb.title !== null) tb.title.textContent = `Tareas de ${code}`;
+      if (tb.code !== null) tb.code.textContent = code;
+      const zone = columnOf(card);
+      if (tb.state !== null && zone !== null) applyStateChip(tb.state, zone);
+      if (tb.owner !== null) {
+        const disk = card.querySelector<HTMLElement>(SEL.cardOwner);
+        tb.owner.replaceChildren(
+          ...(disk === null ? [] : [disk.cloneNode(true)]),
+        );
+      }
+      if (tb.link !== null) {
+        tb.link.setAttribute("href", `/projects/${encodeURIComponent(code)}`);
+      }
+      if (tb.project !== null) tb.project.hidden = false;
+      if (tb.close !== null) tb.close.hidden = false;
+      setCreateAvailability(true);
+    }
+
+    /**
+     * Turns "Crear tarea" on or off with the selection.
+     *
+     * Disabled and named, never hidden: creation needs a project to hang the task on, and a
+     * button that vanishes leaves the operator hunting for a door instead of reading why it is
+     * shut. `aria-describedby` is attached only while it is off, because a description that
+     * outlives its reason is read out on a control that no longer has one.
+     */
+    function setCreateAvailability(enabled: boolean): void {
+      const button = tb.create;
+      if (!(button instanceof HTMLButtonElement)) return;
+      button.disabled = !enabled;
+      if (enabled) button.removeAttribute("aria-describedby");
+      else button.setAttribute("aria-describedby", CREATE_REASON_ID);
+    }
+
+    /**
+     * Selects one project: it becomes the board's subject and the rail's keyboard entry point.
+     *
+     * Re-selecting the same card is a no-op beyond focus — a second click must not restart
+     * the read and blink the board the operator is reading.
+     */
+    function selectCard(card: HTMLElement, options: SelectOptions): void {
+      const code = codeOf(card);
+      if (code === "") return;
+      const changed = code !== selectedCode;
+      selectedCode = code;
+      board.dataset["selected"] = code;
+      markSelection(code);
+      fillHeader(card);
+      refreshRoving();
+      syncUrl(code, options.push && changed);
+      if (options.focus) card.focus();
+      if (!changed) return;
+      if (tb.sub !== null) {
+        tb.sub.textContent = "Cargando las tareas del proyecto…";
+      }
+      clearTaskCards();
+      showBoardArm("loading");
+      playBoardEntrance();
+      void refreshTasks(code);
+    }
+
+    /** Drops the selection: the board goes back to inviting one. */
+    function clearSelection(options: SelectOptions): void {
+      const previous = selectedCode;
+      selectedCode = null;
+      claimBoard(null);
+      delete board.dataset["selected"];
+      markSelection(null);
+      clearTaskCards();
+      refreshRoving();
+      syncUrl(null, options.push && previous !== null);
+      if (tb.title !== null) tb.title.textContent = "Tareas";
+      if (tb.sub !== null) tb.sub.textContent = "Ningún proyecto seleccionado.";
+      if (tb.project !== null) tb.project.hidden = true;
+      if (tb.close !== null) tb.close.hidden = true;
+      setCreateAvailability(false);
+      showBoardArm("idle");
+      if (!options.focus || previous === null) return;
+      const card = findCard(rail, previous);
+      if (card !== null) card.focus();
+    }
+
+    function markSelection(code: string | null): void {
+      for (const card of rail.querySelectorAll<HTMLElement>(SEL.card)) {
+        card.setAttribute(
+          "aria-selected",
+          card.dataset["code"] === code ? "true" : "false",
+        );
+      }
+    }
+
+    /**
+     * Reads the selected project's tasks and paints them.
+     *
+     * The claim is taken *before* the request so a slower answer for a project the operator
+     * already left is dropped instead of overwriting the board they are now reading.
+     */
+    async function refreshTasks(code: string): Promise<void> {
+      claimBoard(code);
+      const result = await loadTasks(code, new Date());
+      if (!isCurrent(code)) return;
+      paintTasks(result);
+    }
+
+    function paintTasks(result: TaskBoardResult): void {
+      if (result.kind === "error") {
+        if (tb.errorTitle !== null) tb.errorTitle.textContent = result.title;
+        if (tb.errorDetail !== null) tb.errorDetail.textContent = result.detail;
+        if (tb.sub !== null) tb.sub.textContent = "No pudimos leer las tareas.";
+        clearTaskCards();
+        showBoardArm("error");
+        return;
+      }
+      if (result.kind === "empty") {
+        clearTaskCards();
+        if (tb.sub !== null) tb.sub.textContent = "Sin tareas registradas.";
+        showBoardArm("empty");
+        return;
+      }
+      const unplaced = distributeTasks(result.cards);
+      if (tb.sub !== null)
+        tb.sub.textContent = countSentence(result.cards.length, unplaced);
+      showBoardArm("ready");
+    }
+
+    /** "18 tareas", plus the ones whose state this workflow no longer publishes. */
+    function countSentence(total: number, unplaced: number): string {
+      const head = total === 1 ? "1 tarea" : `${total} tareas`;
+      if (unplaced === 0) return head;
+      const tail =
+        unplaced === 1
+          ? "1 en un estado que este flujo ya no tiene"
+          : `${unplaced} en estados que este flujo ya no tiene`;
+      return `${head} · ${tail}`;
+    }
+
+    /**
+     * Places every task in the column of the state the server says it is in, and returns how
+     * many had nowhere to go.
+     *
+     * A task sitting in a state the resolved graph no longer publishes has no column; it is
+     * counted and named in the subtitle rather than dropped in silence, because a task that
+     * vanishes from a board is worse than a board that admits it cannot draw one.
+     */
+    function distributeTasks(cards: readonly TaskCardModel[]): number {
+      const panel = activePanel(taskBoard);
+      if (panel === null) return cards.length;
+      clearTaskCards();
+      let unplaced = 0;
+      for (const card of cards) {
+        const column = findColumn(panel, card.stateCode);
+        const body = column === null ? null : bodyOf(column);
+        if (body === null) {
+          unplaced += 1;
+          continue;
+        }
+        const node = buildTaskCard(card);
+        if (node === null) continue;
+        body.append(node);
+      }
+      // A filter that is on must survive a repaint: cards built here arrive
+      // visible, and leaving them so would contradict the pressed member button.
+      applyMemberFilterToTasks();
+      for (const column of columnsOf(panel)) refreshColumn(column);
+      return unplaced;
+    }
+
+    /** Empties every task column of every panel; selection changes must not leave residue. */
+    function clearTaskCards(): void {
+      for (const column of columnsOf(taskBoard)) {
+        const body = bodyOf(column);
+        if (body !== null) body.replaceChildren();
+        refreshColumn(column);
+      }
+    }
+
+    function buildTaskCard(task: TaskCardModel): HTMLElement | null {
+      const tpl = template("task");
+      if (tpl === null) return null;
+      const fragment = tpl.content.cloneNode(true);
+      if (!(fragment instanceof DocumentFragment)) return null;
+      const node = fragment.querySelector<HTMLElement>(SEL.card);
+      if (node === null) return null;
+
+      node.dataset["code"] = task.code;
+      node.dataset["stateCode"] = task.stateCode;
+      // Carried on the card so the member filter can narrow the board without a
+      // refetch, the same way the rail reads a project's owner.
+      node.dataset["ownerAlias"] = task.owner?.alias ?? "";
+      node.setAttribute("aria-label", `${task.title} · ${task.code}`);
+
+      const link = node.querySelector<HTMLAnchorElement>("[data-tb-task-link]");
+      if (link !== null) {
+        link.textContent = task.title;
+        link.href = `/tasks/${encodeURIComponent(task.code)}`;
+      }
+      const code = node.querySelector<HTMLElement>("[data-tb-task-code]");
+      if (code !== null) code.textContent = task.code;
+
+      const owner = node.querySelector<HTMLElement>("[data-tb-task-owner]");
+      if (owner !== null) {
+        const disk = buildOwnerDisk(task);
+        owner.replaceChildren(...(disk === null ? [] : [disk]));
+      }
+
+      const due = node.querySelector<HTMLElement>("[data-tb-task-due]");
+      if (due !== null) {
+        due.classList.add(task.due.toneClass);
+        due.textContent = task.due.text;
+        due.title = task.due.description;
+      }
+
+      const overdue = node.querySelector<HTMLElement>("[data-tb-task-overdue]");
+      if (overdue !== null) overdue.hidden = !task.isOverdue;
+
+      const moveLabel = node.querySelector<HTMLElement>(
+        "[data-tb-task-move-label]",
+      );
+      if (moveLabel !== null) {
+        moveLabel.textContent = `Mover ${task.code} a otro estado`;
+      }
+
+      const deps = node.querySelector<HTMLElement>("[data-tb-task-deps]");
+      if (deps !== null) {
+        deps.hidden = task.dependencies.length === 0;
+        deps.replaceChildren(
+          ...task.dependencies.flatMap((dependency) => {
+            const chip = buildDependency(
+              dependency.text,
+              dependency.description,
+              dependency.isResolved,
+            );
+            return chip === null ? [] : [chip];
+          }),
+        );
+      }
+      // A card built while the stream is down carries the same refusal the rest already do.
+      if (board.dataset["connection"] === "stale") node.title = STALE_DRAG_HINT;
+      return node;
+    }
+
+    function buildOwnerDisk(task: TaskCardModel): HTMLElement | null {
+      const owner = task.owner;
+      if (owner === null) return null;
+      const tpl = template("owner");
+      if (tpl === null) return null;
+      const fragment = tpl.content.cloneNode(true);
+      if (!(fragment instanceof DocumentFragment)) return null;
+      const disk = fragment.querySelector<HTMLElement>("[data-tb-owner-disk]");
+      if (disk === null) return null;
+      disk.textContent = owner.initials;
+      disk.style.setProperty("--avatar-h", String(owner.hue));
+      disk.title = owner.label;
+      disk.setAttribute("aria-label", `Responsable: ${owner.label}`);
+      return disk;
+    }
+
+    function buildDependency(
+      label: string,
+      description: string,
+      isResolved: boolean,
+    ): HTMLElement | null {
+      const tpl = template("dependency");
+      if (tpl === null) return null;
+      const fragment = tpl.content.cloneNode(true);
+      if (!(fragment instanceof DocumentFragment)) return null;
+      const chip = fragment.querySelector<HTMLElement>("[data-tb-dep]");
+      if (chip === null) return null;
+      chip.textContent = label;
+      chip.title = description;
+      chip.dataset["resolved"] = isResolved ? "true" : "false";
+      return chip;
+    }
+
+    /**
+     * The one authored motion beside the drag: the board arrives on the `panel` spring, from
+     * the side it lives on — the right at rail width, from below when the rail lies down.
+     */
+    function playBoardEntrance(): void {
+      if (prefersReducedMotion()) return;
+      const asColumn = window.matchMedia(RAIL_COLUMN_QUERY).matches;
+      const from = asColumn ? "translateX(16px)" : "translateY(24px)";
+      const { duration, easing } = sampleSpring("panel");
+      taskBoard.animate(
+        [
+          { opacity: 0, transform: from },
+          { opacity: 1, transform: "none" },
+        ],
+        { duration, easing },
+      );
+    }
+
+    /**
+     * Writes the selection into the URL.
+     *
+     * `pushState` on a real change so the back button walks the selections the operator made;
+     * `replaceState` otherwise, so restoring a selection from history does not push it again.
+     */
+    function syncUrl(code: string | null, push: boolean): void {
+      const url = new URL(window.location.href);
+      if (code === null) url.searchParams.delete(BOARD_PROJECT_PARAM);
+      else url.searchParams.set(BOARD_PROJECT_PARAM, code);
+      const next = `${url.pathname}${url.search}`;
+      if (next === `${window.location.pathname}${window.location.search}`) {
+        return;
+      }
+      if (push) window.history.pushState({}, "", next);
+      else window.history.replaceState({}, "", next);
+    }
+
+    function onPopState(): void {
+      if (!window.location.pathname.startsWith("/board")) return;
+      const code = new URL(window.location.href).searchParams.get(
+        BOARD_PROJECT_PARAM,
+      );
+      const card = code === null ? null : findCard(rail, code);
+      if (card === null) {
+        clearSelection({ push: false, focus: false });
+        return;
+      }
+      selectCard(card, { push: false, focus: false });
+    }
+
+    // A URL that names a project already opened the right portfolio; a stored preference must
+    // not overrule the link somebody was sent. Restored here, after the board's own plumbing
+    // exists, because switching portfolios can drop a selection that is no longer on screen.
+    if (selectedCode === null) {
+      try {
+        const stored = window.localStorage.getItem(BOARD_ENGAGEMENT_KEY);
+        if (stored !== null) selectEngagement(stored, false);
+      } catch {
+        /* storage disabled: the server's default type stays selected */
+      }
+    }
+
+    // The server rendered the header for `?project=`; the tasks are this island's to fetch.
+    if (selectedCode !== null) void refreshTasks(selectedCode);
+
+    // --- Member filter ------------------------------------------------------
+
+    /**
+     * Narrows the rail to one person's projects, or lifts the filter.
+     *
+     * Cards are hidden, never removed: a filtered board has to snap back without a refetch,
+     * and a card removed mid-transition would lose the pending move it is carrying.
+     *
+     * **Both surfaces narrow.** Picking a person asks "what is on their plate", and a board
+     * that answered it for projects while still showing every colleague's task would answer
+     * half the question — the task columns are where the work actually is. An unowned task
+     * is filtered out too: "sin responsable" is not this person's work either.
+     */
+    function applyMemberFilter(alias: string | null): void {
+      memberFilter = alias;
+      for (const card of rail.querySelectorAll<HTMLElement>(SEL.card)) {
+        const owner = card.dataset["ownerAlias"] ?? "";
+        card.hidden = alias !== null && owner !== alias;
+      }
+      applyMemberFilterToTasks();
+      for (const zone of columnsOf(rail)) refreshColumn(zone);
+      for (const button of board.querySelectorAll<HTMLElement>(SEL.member)) {
+        button.setAttribute(
+          "aria-pressed",
+          button.dataset["alias"] === alias ? "true" : "false",
+        );
+      }
+      refreshEngagementCounts();
+      refreshRoving();
+    }
+
+    /**
+     * Hides the task cards that are not the filtered person's, and re-counts the columns.
+     *
+     * Split out because it also runs after a task refresh: cards painted while a filter is
+     * on would otherwise arrive visible and quietly contradict the pressed member button.
+     */
+    function applyMemberFilterToTasks(): void {
+      for (const card of board.querySelectorAll<HTMLElement>(SEL.card)) {
+        const owner = card.dataset["ownerAlias"] ?? "";
+        card.hidden = memberFilter !== null && owner !== memberFilter;
+      }
+      for (const zone of columnsOf(board)) refreshColumn(zone);
+    }
+
+    /**
+     * The field's counts follow the filter: a count that ignores it names a portfolio nobody
+     * sees. The label lives in `data-label`, so rewriting the count can never eat the name.
+     */
+    function refreshEngagementCounts(): void {
+      if (field === null) return;
+      for (const option of field.querySelectorAll<HTMLOptionElement>(
+        SEL.engagementOption,
+      )) {
+        const code = option.dataset["engagementCode"] ?? "";
+        const panel = findPanel(rail, code);
+        const total =
+          panel === null
+            ? 0
+            : columnsOf(panel).reduce(
+                (sum, zone) => sum + visibleCardsOf(zone).length,
+                0,
+              );
+        option.textContent = `${option.dataset["label"] ?? ""} · ${total}`;
+      }
+    }
+
+    function toggleMemberOverflow(trigger: HTMLElement): void {
+      const expanded = trigger.getAttribute("aria-expanded") === "true";
+      trigger.setAttribute("aria-expanded", expanded ? "false" : "true");
+      const bar = trigger.closest<HTMLElement>("[data-member-bar]");
+      if (bar === null) return;
+      for (const hiddenMember of bar.querySelectorAll<HTMLElement>(
+        "[data-overflow]",
+      )) {
+        hiddenMember.hidden = expanded;
+      }
+    }
+
+    // --- Keyboard -----------------------------------------------------------
+
+    /**
+     * Moves focus onto one card and makes it its surface's tab stop.
+     *
+     * Roving `tabindex` rather than a tab stop per card: forty cards that each take a Tab
+     * press is a surface nobody reaches the end of.
+     */
+    function focusCard(card: HTMLElement): void {
+      refreshRoving(card);
+      card.focus();
+      card.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+
+    /** One tab stop per surface: the selected project on the rail, the first card otherwise. */
+    function refreshRoving(preferred?: HTMLElement): void {
+      for (const card of board.querySelectorAll<HTMLElement>(SEL.card)) {
+        card.tabIndex = -1;
+      }
+      const railPanel = activePanel(rail);
+      const railChosen =
+        preferAt(preferred, rail) ??
+        (selectedCode === null || railPanel === null
+          ? null
+          : findCard(railPanel, selectedCode)) ??
+        (railPanel === null ? null : firstVisibleCard(railPanel));
+      if (railChosen !== null && !railChosen.hidden) railChosen.tabIndex = 0;
+
+      const taskPanel = activePanel(taskBoard);
+      const taskChosen =
+        preferAt(preferred, taskBoard) ??
+        (taskPanel === null ? null : firstVisibleCard(taskPanel));
+      if (taskChosen !== null && !taskChosen.hidden) taskChosen.tabIndex = 0;
+    }
+
+    function preferAt(
+      preferred: HTMLElement | undefined,
+      container: HTMLElement,
+    ): HTMLElement | null {
+      if (preferred === undefined) return null;
+      return container.contains(preferred) ? preferred : null;
+    }
+
+    function firstVisibleCard(panel: HTMLElement): HTMLElement | null {
+      for (const zone of columnsOf(panel)) {
+        const first = visibleCardsOf(zone)[0];
+        if (first !== undefined) return first;
+      }
+      return null;
+    }
+
+    /**
+     * Arrow keys follow the axis each surface is arranged on.
+     *
+     * On the rail the bands are a single stacked list, so Up and Down walk every visible
+     * project across band boundaries and Right hands over to the board — the same journey the
+     * eye makes. On the board Up and Down walk one column and Left and Right change column,
+     * with Left at the first column handing focus back to the selected project.
+     */
+    function onBoardKeyDown(event: KeyboardEvent): void {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const card = target.closest<HTMLElement>(SEL.card);
+      if (card === null) return;
+      const surface = surfaceFor(card);
+      if (surface === null) return;
+
+      if (event.key === "Enter" || event.key === " ") {
+        // The move trigger and the title link keep their own activation keys.
+        if (target.closest("button, a, textarea, input, select") !== null)
+          return;
+        event.preventDefault();
+        if (surface.kind === "project") {
+          selectCard(card, { push: true, focus: false });
+          return;
+        }
+        // A task card's whole point is its detail: activating the row follows its title.
+        const link = card.querySelector<HTMLAnchorElement>(
+          "[data-tb-task-link]",
+        );
+        if (link !== null) link.click();
+        return;
+      }
+
+      const next =
+        surface.kind === "project"
+          ? railNeighbour(card, event.key)
+          : boardNeighbour(card, event.key);
+      if (next === null) return;
+      event.preventDefault();
+      focusCard(next);
+    }
+
+    /** The rail's flat order: every visible project card, band after band. */
+    function railCards(): HTMLElement[] {
+      const panel = activePanel(rail);
+      if (panel === null) return [];
+      return columnsOf(panel).flatMap((zone) => visibleCardsOf(zone));
+    }
+
+    function railNeighbour(card: HTMLElement, key: string): HTMLElement | null {
+      if (key === "ArrowRight") {
+        const panel = activePanel(taskBoard);
+        return panel === null ? null : firstVisibleCard(panel);
+      }
+      if (key !== "ArrowDown" && key !== "ArrowUp") return null;
+      const cards = railCards();
+      return (
+        cards[cards.indexOf(card) + (key === "ArrowDown" ? 1 : -1)] ?? null
+      );
+    }
+
+    function boardNeighbour(
+      card: HTMLElement,
+      key: string,
+    ): HTMLElement | null {
+      const zone = columnOf(card);
+      const panel = panelOf(card);
+      if (zone === null || panel === null) return null;
+      if (key === "ArrowDown" || key === "ArrowUp") {
+        const siblings = visibleCardsOf(zone);
+        return (
+          siblings[siblings.indexOf(card) + (key === "ArrowDown" ? 1 : -1)] ??
+          null
+        );
+      }
+      if (key !== "ArrowRight" && key !== "ArrowLeft") return null;
+      const step = key === "ArrowRight" ? 1 : -1;
+      const zones = columnsOf(panel);
+      const row = visibleCardsOf(zone).indexOf(card);
+      for (
+        let index = zones.indexOf(zone) + step;
+        index >= 0 && index < zones.length;
+        index += step
+      ) {
+        const candidate = zones[index];
+        if (candidate === undefined) continue;
+        const cards = visibleCardsOf(candidate);
+        if (cards.length === 0) continue;
+        return cards[Math.min(Math.max(row, 0), cards.length - 1)] ?? null;
+      }
+      // Off the left edge: the rail is where this board came from.
+      if (step === 1 || selectedCode === null) return null;
+      const railPanel = activePanel(rail);
+      return railPanel === null ? null : findCard(railPanel, selectedCode);
+    }
+
+    // --- Drag: grab ---------------------------------------------------------
+
+    function onPointerDown(event: PointerEvent): void {
+      // A suppression armed by a drag that ended over nothing must not outlive that gesture
+      // and swallow the next real click on a task title.
+      suppressClick = false;
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      if (board.dataset["connection"] === "stale") return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      // Controls keep their own gestures; a link may still be a grip, because on a task card
+      // the title *is* the link and a card you cannot pick up by its name is not an object.
+      if (target.closest("button, textarea, input, select") !== null) return;
+      const card = target.closest<HTMLElement>(SEL.card);
+      if (card === null || isPending(card)) return;
+      const surface = surfaceFor(card);
+      if (surface === null) return;
+      const link = target.closest<HTMLAnchorElement>("a");
+      closeMenu();
+      // Stops the press from starting a text selection that would fight the drag. A link
+      // keeps its default so focus and the click still work when the press never travels.
+      if (link === null) event.preventDefault();
+      armed = {
+        card,
+        surface,
+        pointerId: event.pointerId,
+        originX: event.clientX,
+        originY: event.clientY,
+        link,
+      };
+      // Warmed on the press, not on the drag threshold: the lookup is a request, and a flick
+      // that crosses the board in one motion would otherwise let go before the answer lands.
+      // Both surfaces share one cache, so the grab joins this request instead of repeating it.
+      void surface.moves(card);
+      card.setPointerCapture(event.pointerId);
+    }
+
+    function onPointerMove(event: PointerEvent): void {
+      const session = drag;
+      if (session === null) {
+        const press = armed;
+        if (press === null || press.pointerId !== event.pointerId) return;
+        const travelled = Math.hypot(
+          event.clientX - press.originX,
+          event.clientY - press.originY,
+        );
+        if (travelled < DRAG_THRESHOLD_PX) return;
+        beginDrag(press, event);
+        return;
+      }
+      if (event.pointerId !== session.pointerId) return;
+      session.targetX = event.clientX - session.grabX - session.baseLeft;
+      session.targetY = event.clientY - session.grabY - session.baseTop;
+      applyEdgeVelocity(session, event.clientX, event.clientY);
+      updateHover(session, event.clientX, event.clientY);
+    }
+
+    /**
+     * A press that never became a drag is a click, and a click on a project card selects it.
+     *
+     * Decided here rather than in a `click` listener because the pointer capture the grab
+     * takes can swallow the synthetic click on some browsers; the press we armed is the
+     * honest record that a finger went down and came up on the same card.
+     */
+    function onPointerUp(event: PointerEvent): void {
+      const press = armed;
+      armed = null;
+      const session = drag;
+      if (session === null) {
+        if (press === null || press.pointerId !== event.pointerId) return;
+        // Buttons never arm a press (`onPointerDown` steps aside for them), so reaching here
+        // means the finger went down on the card itself or on its title.
+        if (press.link !== null) {
+          // The press never travelled, so this was a tap on the title, not a grip on it. The
+          // anchor cannot answer that tap by itself: `onPointerDown` captured the pointer to
+          // the card so the title could also *be* the grip, and a captured pointer retargets
+          // both the follow-up `click` and this very `pointerup` to the capturing element —
+          // the anchor's own default never runs, and `event.target` is no longer the anchor
+          // either, which is why the link is read from the armed press and not from the
+          // event. Following it here is what makes the title behave like the link it looks
+          // like. Client-side, because a board reload would cost the operator the selection
+          // and scroll position they arrived with.
+          void navigate(press.link.href);
+          return;
+        }
+        if (press.surface.kind !== "project") return;
+        selectCard(press.card, { push: true, focus: true });
+        return;
+      }
+      if (event.pointerId !== session.pointerId) return;
+      const zone = zoneAt(session, event.clientX, event.clientY);
+      if (zone === null) {
+        concludeDrag(session, { kind: "released" });
+        return;
+      }
+      if (zone.dataset["drop"] === "legal") {
+        concludeDrag(session, { kind: "accepted", zone });
+        return;
+      }
+      concludeDrag(session, { kind: "refused" });
+    }
+
+    function onPointerCancel(event: PointerEvent): void {
+      armed = null;
+      const session = drag;
+      if (session === null || event.pointerId !== session.pointerId) return;
+      concludeDrag(session, { kind: "released" });
+    }
+
+    /**
+     * Lifts the card out of flow and starts the follower.
+     *
+     * The card becomes `position: fixed` at exactly the rect it occupied, and a placeholder
+     * takes its place, so the origin zone keeps the hole the card came out of instead of
+     * closing over it — you can always see where you are moving *from*.
+     */
+    function beginDrag(press: ArmedPress, event: PointerEvent): void {
+      armed = null;
+      const card = press.card;
+      const zone = columnOf(card);
+      if (zone === null) return;
+      const zones = press.surface.zones(card);
+      if (zones.length === 0) return;
+
+      // A drag that started on a link must not also navigate when the finger lifts.
+      if (press.link !== null) suppressClick = true;
+
+      const rect = card.getBoundingClientRect();
+      const placeholder = document.createElement("div");
+      placeholder.className = "drop-slot is-origin";
+      placeholder.setAttribute("role", "presentation");
+      placeholder.style.height = `${rect.height}px`;
+      card.before(placeholder);
+
+      card.style.position = "fixed";
+      card.style.left = `${rect.left}px`;
+      card.style.top = `${rect.top}px`;
+      card.style.width = `${rect.width}px`;
+      card.style.margin = "0";
+      card.dataset["dragging"] = "true";
+      document.documentElement.dataset["boardDragging"] = "true";
+
+      const session: DragSession = {
+        surface: press.surface,
+        card,
+        originZone: zone,
+        zones,
+        axis: layoutAxis(zones),
+        scroller: card.closest<HTMLElement>(SEL.scroller),
+        placeholder,
+        pointerId: press.pointerId,
+        cardHeight: rect.height,
+        grabX: event.clientX - rect.left,
+        grabY: event.clientY - rect.top,
+        baseLeft: rect.left,
+        baseTop: rect.top,
+        targetX: 0,
+        targetY: 0,
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        autoScrollVx: 0,
+        autoScrollVy: 0,
+        lastFrame: performance.now(),
+        frame: null,
+        options: null,
+        slots: [],
+      };
+      drag = session;
+      session.frame = requestAnimationFrame(step);
+      void announceLegality(session);
+    }
+
+    /**
+     * Which way a set of zones is arranged, measured rather than assumed.
+     *
+     * The rail stacks its bands vertically at desk width and lies down into a horizontal strip
+     * below 1024px; reading the geometry means the hit test and the auto-scroll follow the
+     * layout instead of duplicating its breakpoint in TypeScript, where the two would drift.
+     */
+    function layoutAxis(zones: readonly HTMLElement[]): "x" | "y" {
+      const first = zones[0];
+      const second = zones[1];
+      if (first === undefined || second === undefined) return "y";
+      const a = first.getBoundingClientRect();
+      const b = second.getBoundingClientRect();
+      return Math.abs(b.left - a.left) >= Math.abs(b.top - a.top) ? "x" : "y";
+    }
+
+    /**
+     * One frame of the follower: a critically damped spring pulling the card toward the
+     * pointer, plus a tilt proportional to its own horizontal velocity, plus the surface
+     * sliding under it when the card is held at an edge.
+     *
+     * The lag *is* the mass — the card arrives after the hand, which is what makes it read as
+     * an object rather than a cursor decoration. Under reduced motion the card tracks the
+     * pointer exactly and neither tilts nor scales; the auto-scroll stays, because it is
+     * reach, not decoration.
+     */
+    function step(now: number): void {
+      const session = drag;
+      if (session === null) return;
+      const elapsed = (now - session.lastFrame) / 1000;
+      const dt =
+        elapsed > 0
+          ? Math.min(MAX_FRAME_SECONDS, elapsed)
+          : FALLBACK_FRAME_SECONDS;
+      session.lastFrame = now;
+
+      const scroller = session.scroller;
+      if (scroller !== null) {
+        if (session.autoScrollVx !== 0)
+          scroller.scrollLeft += session.autoScrollVx * dt;
+        if (session.autoScrollVy !== 0)
+          scroller.scrollTop += session.autoScrollVy * dt;
+      }
+
+      const reduced = prefersReducedMotion();
+      if (reduced) {
+        session.x = session.targetX;
+        session.y = session.targetY;
+        session.vx = 0;
+        session.vy = 0;
+      } else {
+        const ax =
+          FOLLOW_STIFFNESS * (session.targetX - session.x) -
+          FOLLOW_DAMPING * session.vx;
+        const ay =
+          FOLLOW_STIFFNESS * (session.targetY - session.y) -
+          FOLLOW_DAMPING * session.vy;
+        session.vx += ax * dt;
+        session.vy += ay * dt;
+        session.x += session.vx * dt;
+        session.y += session.vy * dt;
+      }
+
+      const tilt = reduced
+        ? 0
+        : clamp(session.vx * TILT_PER_VELOCITY, -MAX_TILT_DEG, MAX_TILT_DEG);
+      const scale = reduced ? 1 : GRAB_SCALE;
+      session.card.style.transform = `translate3d(${session.x.toFixed(2)}px, ${session.y.toFixed(2)}px, 0) scale(${scale}) rotate(${tilt.toFixed(2)}deg)`;
+      session.frame = requestAnimationFrame(step);
+    }
+
+    /**
+     * How fast the scroller should travel with a card held near its edges, per axis.
+     *
+     * A surface longer than its viewport is unreachable without it: the hand cannot both hold
+     * a card and scroll. Each axis is checked independently against what the container can
+     * actually scroll, so the rail creeps vertically when it stands up and horizontally when
+     * it lies down, with no breakpoint written twice. Speed ramps with depth into the band so
+     * a card resting just inside the edge creeps instead of bolting.
+     */
+    function applyEdgeVelocity(
+      session: DragSession,
+      x: number,
+      y: number,
+    ): void {
+      const scroller = session.scroller;
+      if (scroller === null) {
+        session.autoScrollVx = 0;
+        session.autoScrollVy = 0;
+        return;
+      }
+      const rect = scroller.getBoundingClientRect();
+      session.autoScrollVx = axisVelocity(
+        x - rect.left,
+        rect.right - x,
+        scroller.scrollLeft,
+        scroller.scrollWidth - scroller.clientWidth,
+      );
+      session.autoScrollVy = axisVelocity(
+        y - rect.top,
+        rect.bottom - y,
+        scroller.scrollTop,
+        scroller.scrollHeight - scroller.clientHeight,
+      );
+    }
+
+    function axisVelocity(
+      fromStart: number,
+      fromEnd: number,
+      offset: number,
+      maxOffset: number,
+    ): number {
+      if (maxOffset <= 0) return 0;
+      if (fromStart < AUTOSCROLL_ZONE_PX && offset > 0) {
+        const depth = clamp(1 - fromStart / AUTOSCROLL_ZONE_PX, 0, 1);
+        return -depth * AUTOSCROLL_MAX_PX_PER_SEC;
+      }
+      if (fromEnd < AUTOSCROLL_ZONE_PX && offset < maxOffset) {
+        const depth = clamp(1 - fromEnd / AUTOSCROLL_ZONE_PX, 0, 1);
+        return depth * AUTOSCROLL_MAX_PX_PER_SEC;
+      }
+      return 0;
+    }
+
+    // --- Drag: the surface announces legality -------------------------------
+
+    /**
+     * Asks the card which moves it may take and paints the answer on the zones.
+     *
+     * A failed lookup does not abort the gesture: every zone simply refuses, the drop springs
+     * back, and the operator reads why in a toast. Aborting mid-gesture would yank the card
+     * out of a hand that is still holding it.
+     */
+    async function announceLegality(session: DragSession): Promise<void> {
+      const result = await session.surface.moves(session.card);
+      if (drag !== session) return;
+      if (result.kind === "error") {
+        session.options = new Map();
+        toast({ kind: "error", title: result.title, detail: result.detail });
+      } else {
+        session.options = new Map(
+          result.options.map((option) => [option.toStateCode, option]),
+        );
+      }
+      paintLegality(session);
+    }
+
+    function paintLegality(session: DragSession): void {
+      const options = session.options;
+      if (options === null) return;
+      const originLabel = labelOf(session.originZone);
+      const noun = session.surface.subject(codeOf(session.card)).noun;
+      for (const zone of session.zones) {
+        if (zone === session.originZone) {
+          zone.dataset["drop"] = "origin";
+          continue;
+        }
+        const option = options.get(zone.dataset["stateCode"] ?? "");
+        if (option === undefined) {
+          lockZone(zone, "illegal", `Sin transición desde ${originLabel}`);
+          continue;
+        }
+        if (option.missingFields.length > 0) {
+          lockZone(
+            zone,
+            "blocked",
+            `Falta ${fieldList(option.missingFields)} en ${noun}`,
+          );
+          continue;
+        }
+        openSlot(session, zone);
+      }
+    }
+
+    /** A zone that cannot take the card says so, in words, and steps back. */
+    function lockZone(
+      zone: HTMLElement,
+      drop: "illegal" | "blocked",
+      reason: string,
+    ): void {
+      zone.dataset["drop"] = drop;
+      const text = zone.querySelector<HTMLElement>(SEL.columnLockText);
+      if (text !== null) text.textContent = reason;
+      const chip = zone.querySelector<HTMLElement>(SEL.columnLock);
+      if (chip !== null) chip.hidden = false;
+    }
+
+    /** A legal zone opens a dashed slot the height of the card, and its cards make room. */
+    function openSlot(session: DragSession, zone: HTMLElement): void {
+      zone.dataset["drop"] = "legal";
+      const body = bodyOf(zone);
+      if (body === null) return;
+      const slot = document.createElement("div");
+      slot.className = "drop-slot";
+      slot.dataset["dropSlot"] = "true";
+      // The card list is a grid; a slot is scenery inside it, not a row.
+      slot.setAttribute("role", "presentation");
+      slot.style.height = `${session.cardHeight}px`;
+      const siblings = cardsOf(zone);
+      void flip(siblings, () => {
+        body.prepend(slot);
+      });
+      if (!prefersReducedMotion()) {
+        const { duration, easing } = sampleSpring("carta");
+        slot.animate(
+          [
+            { opacity: 0, transform: "scaleY(0.4)" },
+            { opacity: 1, transform: "none" },
+          ],
+          { duration, easing },
+        );
+      }
+      session.slots.push(slot);
+    }
+
+    function clearLegality(session: DragSession): void {
+      for (const zone of session.zones) {
+        zone.dataset["drop"] = "idle";
+        delete zone.dataset["hover"];
+        const chip = zone.querySelector<HTMLElement>(SEL.columnLock);
+        if (chip !== null) chip.hidden = true;
+      }
+      for (const slot of session.slots) slot.remove();
+      session.slots.length = 0;
+    }
+
+    function updateHover(session: DragSession, x: number, y: number): void {
+      const hovered = zoneAt(session, x, y);
+      for (const zone of session.zones) {
+        if (zone === hovered && zone.dataset["drop"] === "legal") {
+          zone.dataset["hover"] = "true";
+        } else {
+          delete zone.dataset["hover"];
+        }
+      }
+    }
+
+    /**
+     * The zone under the pointer, by rect arithmetic rather than `elementFromPoint`: the
+     * dragged card is captured and floating above everything, so hit testing through it is
+     * exactly what we must not rely on.
+     *
+     * Rects are measured on every call, which is also what keeps the drop slot honest while
+     * the container auto-scrolls under the hand: the zones move, the arithmetic follows.
+     *
+     * A zone is claimed by its own band **across** the layout axis and by the whole extent of
+     * the surface along the other one. Zones are only as big as their contents, and a card
+     * released past the end of a short one is unmistakably aimed at it — refusing because the
+     * box ended two hundred pixels earlier would be the interface being pedantic about its own
+     * layout.
+     */
+    function zoneAt(
+      session: DragSession,
+      x: number,
+      y: number,
+    ): HTMLElement | null {
+      const boxes = session.zones.map((zone) => ({
+        zone,
+        rect: zone.getBoundingClientRect(),
+      }));
+      if (boxes.length === 0) return null;
+      if (session.axis === "x") {
+        const top = Math.min(...boxes.map((box) => box.rect.top));
+        const bottom = Math.max(...boxes.map((box) => box.rect.bottom));
+        if (y < top || y > bottom) return null;
+        for (const box of boxes) {
+          if (x >= box.rect.left && x <= box.rect.right) return box.zone;
+        }
+        return null;
+      }
+      const left = Math.min(...boxes.map((box) => box.rect.left));
+      const right = Math.max(...boxes.map((box) => box.rect.right));
+      if (x < left || x > right) return null;
+      for (const box of boxes) {
+        if (y >= box.rect.top && y <= box.rect.bottom) return box.zone;
+      }
+      return null;
+    }
+
+    // --- Drag: drop and reject ----------------------------------------------
+
+    /**
+     * Ends the gesture: the card returns to flow — in the zone that accepted it, or in the
+     * hole it came out of — and travels there along one arc.
+     *
+     * Layout is mutated first and animated after, which is the contract of
+     * `lib/motion/spring.ts`: measure, mutate, then play the journey from the old rect. Doing
+     * it the other way round leaves reduced-motion users looking at stale positions.
+     */
+    function concludeDrag(session: DragSession, outcome: DropOutcome): void {
+      drag = null;
+      if (session.frame !== null) cancelAnimationFrame(session.frame);
+      delete document.documentElement.dataset["boardDragging"];
+      if (session.card.hasPointerCapture(session.pointerId)) {
+        session.card.releasePointerCapture(session.pointerId);
+      }
+
+      const target = outcome.kind === "accepted" ? outcome.zone : null;
+      const from = session.card.getBoundingClientRect();
+      const affected = affectedCards(session, target);
+
+      void flip(affected, () => {
+        unfix(session.card);
+        if (target === null) {
+          session.placeholder.replaceWith(session.card);
+        } else {
+          const slot = session.slots.find(
+            (candidate) => columnOf(candidate) === target,
+          );
+          if (slot !== undefined) {
+            slot.replaceWith(session.card);
+          } else {
+            const body = bodyOf(target);
+            if (body !== null) body.prepend(session.card);
+          }
+          session.placeholder.remove();
+        }
+        clearLegality(session);
+      });
+
+      const to = session.card.getBoundingClientRect();
+      const journey = glide(session.card, from, to);
+
+      refreshColumn(session.originZone);
+      if (target === null) {
+        // The surface refusing the card is a physical answer, after it lands, not during.
+        if (outcome.kind === "refused") {
+          void journey.then(() => shake(session.card));
+          // A refusal with no legality in hand is not the workflow saying no, it is us not
+          // knowing yet. Saying so is the difference between "you cannot" and "ask again" —
+          // and by the time this is read the answer is cached, so asking again works.
+          if (session.options === null) {
+            toast({
+              kind: "info",
+              title: `${codeOf(session.card)} sigue en su estado`,
+              detail:
+                "Todavía estábamos consultando qué movimientos admite. Vuelve a arrastrarla.",
+            });
+          }
+        }
+        refreshRoving();
+        return;
+      }
+      refreshColumn(target);
+      refreshRoving();
+
+      const options = session.options;
+      const option =
+        options === null
+          ? undefined
+          : options.get(target.dataset["stateCode"] ?? "");
+      if (option === undefined) return;
+      void performMove({
+        surface: session.surface,
+        card: session.card,
+        code: codeOf(session.card),
+        option,
+        targetLabel: labelOf(target),
+        placement: { kind: "moved", from: session.originZone },
+      });
+    }
+
+    /** Every card whose position the drop changes — the FLIP set. */
+    function affectedCards(
+      session: DragSession,
+      target: HTMLElement | null,
+    ): HTMLElement[] {
+      const zones = new Set<HTMLElement>([session.originZone]);
+      for (const slot of session.slots) {
+        const zone = columnOf(slot);
+        if (zone !== null) zones.add(zone);
+      }
+      if (target !== null) zones.add(target);
+      const cards: HTMLElement[] = [];
+      for (const zone of zones) {
+        for (const card of cardsOf(zone)) {
+          if (card !== session.card) cards.push(card);
+        }
+      }
+      return cards;
+    }
+
+    function unfix(card: HTMLElement): void {
+      card.style.position = "";
+      card.style.left = "";
+      card.style.top = "";
+      card.style.width = "";
+      card.style.margin = "";
+      card.style.transform = "";
+      delete card.dataset["dragging"];
+    }
+
+    /**
+     * Plays a card from where it was to where it now sits: an arc on the `carta` spring, or
+     * a 120ms crossfade when the operator asked for reduced motion. Resolves when it settles,
+     * so a caller can chain the reject shake instead of animating over the journey.
+     */
+    async function glide(
+      card: HTMLElement,
+      from: DOMRect,
+      to: DOMRect,
+    ): Promise<void> {
+      if (prefersReducedMotion()) {
+        await crossfade(card);
+        return;
+      }
+      await travelBy(card, from.left - to.left, from.top - to.top);
+    }
+
+    async function crossfade(card: HTMLElement): Promise<void> {
+      const animation = card.animate([{ opacity: 0 }, { opacity: 1 }], {
+        duration: 120,
+      });
+      await animation.finished.catch(() => undefined);
+    }
+
+    // --- The move itself (shared by both drags and both menus) --------------
+
+    /**
+     * Runs one transition: reason if the edge demands one, POST, then wait for the stream.
+     *
+     * Nothing is painted as done here. The card enters the pending state and the *server's*
+     * envelope is what repaints it (`PATTERNS_FRONTEND.md` §8); a refusal sends the card home
+     * along its own path with a shake and a toast naming the rule that refused it.
+     *
+     * The reason is asked for *before* the POST, from the transition's own `requires_reason`,
+     * so the ordinary path never spends a refusal on a field the operator was willing to fill.
+     * The one case that survives is a workflow edited between the lookup and the drop: the
+     * server asks for a motive we did not send, and the board answers by asking for it and
+     * posting again rather than by telling the operator to repeat the gesture themselves.
+     */
+    async function performMove(request: MoveRequest): Promise<void> {
+      const { surface, card, code, option, targetLabel, placement } = request;
+      if (code === "") return;
+      // Pending from the first instant, dialog included: a card sitting in a zone it has not
+      // been accepted into must never look settled.
+      setPending(card, true);
+
+      let reason = "";
+      if (option.requiresReason) {
+        const given = await askReason(request);
+        if (given === null) {
+          abandonMove(request);
+          return;
+        }
+        reason = given;
+      }
+
+      const pending: PendingMove = {
+        surface,
+        card,
+        code,
+        toStateCode: option.toStateCode,
+        targetLabel,
+        placement,
+        updatedAt: null,
+        timer: null,
+      };
+      pendings.set(code, pending);
+
+      let outcome = await surface.submit(code, option.toStateCode, reason);
+      // The stream may have confirmed (or superseded) this move while we waited; whoever
+      // holds the entry now owns the card, and it is no longer us.
+      if (pendings.get(code) !== pending) return;
+
+      // The edge demands a motive the cached legality did not mention. `submit` has already
+      // dropped that stale answer, so all that is left is to ask and post again — the card
+      // stays pending and in place throughout, and the operator performs one gesture.
+      if (outcome.kind === "refused" && demandsReason(outcome.error, reason)) {
+        const given = await askReason(request);
+        if (pendings.get(code) !== pending) return;
+        if (given === null) {
+          pendings.delete(code);
+          abandonMove(request);
+          return;
+        }
+        reason = given;
+        outcome = await surface.submit(code, option.toStateCode, reason);
+        if (pendings.get(code) !== pending) return;
+      }
+
+      if (outcome.kind === "refused") {
+        pendings.delete(code);
+        setPending(card, false);
+        if (placement.kind === "moved")
+          moveCard(card, placement.from, "travel");
+        void shake(card);
+        const copy = moveErrorCopy(
+          outcome.error,
+          surface.subject(code),
+          targetLabel,
+          stateNamer(card),
+        );
+        toast({ kind: "error", title: copy.title, detail: copy.detail });
+        return;
+      }
+
+      pending.updatedAt = outcome.updatedAt;
+      pending.timer = window.setTimeout(() => {
+        settleWithoutEnvelope(code);
+      }, CONFIRM_DEADLINE_MS);
+    }
+
+    /**
+     * A move nobody confirmed and nobody refused: the operator closed the reason dialog.
+     *
+     * Not a refusal, so no shake and no toast — cancelling is an answer, not an error. The
+     * card travels home on the same spring the refusal path uses, because a card left sitting
+     * in a column it never entered would be the board claiming a move that did not happen.
+     */
+    function abandonMove(request: MoveRequest): void {
+      setPending(request.card, false);
+      if (request.placement.kind === "moved") {
+        moveCard(request.card, request.placement.from, "travel");
+      }
+    }
+
+    /**
+     * Names one workflow state the way this surface renders it, so a refusal can list the
+     * destinations that *are* possible in the operator's own vocabulary. A state with no zone
+     * on screen falls back to its code rather than to silence.
+     */
+    function stateNamer(card: HTMLElement): (stateCode: string) => string {
+      const panel = panelOf(card);
+      return (stateCode) => {
+        const zone = panel === null ? null : findColumn(panel, stateCode);
+        return zone === null ? stateCode : labelOf(zone);
+      };
+    }
+
+    /**
+     * Applies the confirmed state to a card: it lands in its zone, the chip snaps, the counts
+     * follow, and the board header follows when the card is the selected project.
+     *
+     * `occurredAt` is the envelope's instant when there was one, so the stale-patch watermark
+     * advances to the event rather than to the moment we happened to render it.
+     */
+    function settle(pending: PendingMove, occurredAt: string | null): void {
+      if (pending.timer !== null) window.clearTimeout(pending.timer);
+      pendings.delete(pending.code);
+      setPending(pending.card, false);
+      const stamp = occurredAt ?? pending.updatedAt;
+      if (stamp !== null) markUpdatedAt(pending.card, stamp);
+      pending.surface.forget(pending.code);
+
+      const panel = panelOf(pending.card);
+      const zone =
+        panel === null ? null : findColumn(panel, pending.toStateCode);
+      if (zone === null) {
+        dropFromSurface(
+          pending.surface,
+          pending.card,
+          pending.code,
+          pending.targetLabel,
+        );
+        return;
+      }
+      if (columnOf(pending.card) !== zone)
+        moveCard(pending.card, zone, "travel");
+      patchStateChip(pending.card, zone);
+      if (pending.surface.kind === "project")
+        syncHeaderState(pending.code, zone);
+      runDeferredTaskRefresh();
+    }
+
+    /** The board header names the same state the card does, or it is telling a second story. */
+    function syncHeaderState(code: string, zone: HTMLElement): void {
+      if (code !== selectedCode || tb.state === null) return;
+      applyStateChip(tb.state, zone);
+    }
+
+    function confirmFromEnvelope(
+      pending: PendingMove,
+      envelope: Envelope,
+    ): void {
+      settle(pending, envelope.occurred_at);
+      toast({
+        kind: "success",
+        title: `${pending.code} → ${pending.targetLabel}`,
+        detail: "Confirmado por el servidor.",
+      });
+    }
+
+    /**
+     * The confirmation deadline: the POST was accepted but no envelope arrived (a stream that
+     * is down, or a fan-out that lost the frame). The change is real — the response proved
+     * it — so the card settles and the toast says the live confirmation is what is missing.
+     */
+    function settleWithoutEnvelope(code: string): void {
+      const pending = pendings.get(code);
+      if (pending === undefined) return;
+      settle(pending, null);
+      toast({
+        kind: "info",
+        title: `${code} → ${pending.targetLabel}`,
+        detail: "El servidor lo aceptó, pero el aviso en vivo no llegó.",
+      });
+    }
+
+    /**
+     * Moves a card into a zone and animates the journey.
+     *
+     * The DOM move happens inside `flip`, so the cards that make room travel with the same
+     * spring as the card itself; the card's own glide is measured around it. Selection is an
+     * attribute on the card, so it travels with the node and survives every reorder.
+     */
+    function moveCard(
+      card: HTMLElement,
+      zone: HTMLElement,
+      motion: "travel" | "none",
+    ): void {
+      const body = bodyOf(zone);
+      if (body === null) return;
+      const previous = columnOf(card);
+      const from = card.getBoundingClientRect();
+      const affected = [
+        ...cardsOf(zone),
+        ...(previous === null ? [] : cardsOf(previous)),
+      ].filter((candidate) => candidate !== card);
+
+      void flip(affected, () => {
+        body.prepend(card);
+      });
+
+      const to = card.getBoundingClientRect();
+      if (previous !== null) refreshColumn(previous);
+      refreshColumn(zone);
+      refreshRoving();
+      if (motion === "travel") void glide(card, from, to);
+    }
+
+    /**
+     * The aggregate moved into a state that has no zone here — the surface draws the states
+     * its workflow publishes, and this one is not among them. The card leaves rather than
+     * lying about where the work is, and the toast says what happened.
+     */
+    function dropFromSurface(
+      surface: Surface,
+      card: HTMLElement,
+      code: string,
+      /** The state's label when we have one; its bare code when the envelope is all we got. */
+      stateName: string,
+    ): void {
+      const zone = columnOf(card);
+      const siblings =
+        zone === null
+          ? []
+          : cardsOf(zone).filter((candidate) => candidate !== card);
+      void flip(siblings, () => {
+        card.remove();
+      });
+      if (zone !== null) refreshColumn(zone);
+      if (surface.kind === "project" && code === selectedCode) {
+        clearSelection({ push: false, focus: false });
+      }
+      refreshRoving();
+      toast({
+        kind: "info",
+        title: `${code} salió del tablero`,
+        detail: `Pasó a ${stateName}, un estado que este flujo no publica. Actualiza el tablero para verlo.`,
+      });
+    }
+
+    // --- Reason dialog ------------------------------------------------------
+
+    /**
+     * Collects the reason an edge marked `requires_reason` demands, before the request.
+     *
+     * One dialog for both surfaces and both input paths: a project dropped on the rail, a task
+     * dropped on the board and either one moved from "Mover a…" all land here, so the sentence
+     * the operator reads and the field they fill cannot drift apart between them.
+     *
+     * A modal is correct here and nowhere else on this surface: it is a confirmation the
+     * operator asked for by dropping the card, and the transition cannot proceed without it
+     * (DESIGN.md, Don'ts). It is titled with the move's own label — "Pedir cambios", not
+     * "Motivo del cambio" — because that is the name the workflow gives what is about to
+     * happen. Cancelling and Escape both resolve `null`, and the card goes home.
+     */
+    function askReason(request: MoveRequest): Promise<string | null> {
+      if (dialog === null || reasonInput === null) return Promise.resolve(null);
+      reasonInput.value = "";
+      if (reasonSubmit !== null) reasonSubmit.disabled = true;
+      if (reasonTitle !== null) reasonTitle.textContent = request.option.label;
+      if (reasonContext !== null) {
+        reasonContext.textContent = `Mover ${request.code} a ${request.targetLabel}. Esta transición exige un motivo.`;
+      }
+      reasonReturn = request.card;
+      // Cleared explicitly rather than trusted to be: a previous confirmation left "confirm"
+      // here, and a dialog dismissed with Escape does not overwrite it in every engine.
+      dialog.returnValue = "";
+      dialog.showModal();
+      reasonInput.focus();
+      return new Promise<string | null>((resolve) => {
+        resolveReason = resolve;
+      });
+    }
+
+    function onDialogClose(): void {
+      const resolve = resolveReason;
+      resolveReason = null;
+      const card = reasonReturn;
+      reasonReturn = null;
+      if (card !== null && card.isConnected) focusCard(card);
+      if (resolve === null) return;
+      const confirmed = dialog !== null && dialog.returnValue === "confirm";
+      const typed = reasonInput === null ? "" : reasonInput.value.trim();
+      resolve(confirmed && typed !== "" ? typed : null);
+    }
+
+    function onReasonInput(): void {
+      if (reasonSubmit === null || reasonInput === null) return;
+      reasonSubmit.disabled = reasonInput.value.trim() === "";
+    }
+
+    // --- "Mover a…": the keyboard and touch twin ----------------------------
+
+    async function openMenu(trigger: HTMLElement): Promise<void> {
+      if (menu === null || menuList === null) return;
+      const card = trigger.closest<HTMLElement>(SEL.card);
+      if (card === null) return;
+      const surface = surfaceFor(card);
+      if (surface === null) return;
+      const code = codeOf(card);
+
+      closeMenu();
+      menuOwner = trigger;
+      trigger.setAttribute("aria-expanded", "true");
+      trigger.classList.add("is-loading");
+      if (menuTitle !== null) menuTitle.textContent = `Mover ${code} a…`;
+      menuList.replaceChildren(buildNote("Consultando movimientos…"));
+      menu.hidden = false;
+      positionMenu(trigger);
+
+      const result = await surface.moves(card);
+      trigger.classList.remove("is-loading");
+      if (menuOwner !== trigger) return;
+      renderMenu(result, surface, card, code);
+      positionMenu(trigger);
+      focusFirstItem();
+    }
+
+    function renderMenu(
+      result: MovesResult,
+      surface: Surface,
+      card: HTMLElement,
+      code: string,
+    ): void {
+      if (menuList === null) return;
+      if (result.kind === "error") {
+        menuList.replaceChildren(
+          buildNote(`${result.title}. ${result.detail}`),
+        );
+        return;
+      }
+      if (result.options.length === 0) {
+        menuList.replaceChildren(
+          buildNote(`Sin movimientos legales desde ${result.stateLabel}.`),
+        );
+        return;
+      }
+      menuList.replaceChildren(
+        ...result.options.map((option, index) =>
+          buildMenuItem(option, surface, card, code, index),
+        ),
+      );
+    }
+
+    /**
+     * One target state as a menu item. A transition whose `requires_fields` are empty on the
+     * aggregate renders present and visibly dead, naming the field — the same rule the drag
+     * paints as a locked zone (`FRONTEND.md` §8).
+     */
+    function buildMenuItem(
+      option: MoveOption,
+      surface: Surface,
+      card: HTMLElement,
+      code: string,
+      index: number,
+    ): HTMLElement {
+      const item = document.createElement("div");
+      item.className = "move-item";
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "move-option";
+      button.setAttribute("role", "menuitem");
+      button.lang = "es";
+      button.textContent = option.label;
+      item.append(button);
+
+      if (option.missingFields.length > 0) {
+        const noteId = `move-missing-${index}`;
+        button.disabled = true;
+        button.setAttribute("aria-describedby", noteId);
+        const note = document.createElement("span");
+        note.className = "small move-missing";
+        note.id = noteId;
+        note.lang = "es";
+        note.textContent = `Falta ${fieldList(option.missingFields)}`;
+        item.append(note);
+        return item;
+      }
+
+      button.addEventListener("click", () => {
+        dismissMenu();
+        const panel = panelOf(card);
+        const zone =
+          panel === null ? null : findColumn(panel, option.toStateCode);
+        void performMove({
+          surface,
+          card,
+          code,
+          option,
+          targetLabel: zone === null ? option.label : labelOf(zone),
+          placement: { kind: "waiting" },
+        });
+      });
+      return item;
+    }
+
+    function buildNote(text: string): HTMLElement {
+      const note = document.createElement("p");
+      note.className = "small move-note";
+      note.lang = "es";
+      note.textContent = text;
+      return note;
+    }
+
+    function positionMenu(trigger: HTMLElement): void {
+      if (menu === null) return;
+      const anchor = trigger.getBoundingClientRect();
+      const width = menu.offsetWidth;
+      const height = menu.offsetHeight;
+      const maxLeft = window.innerWidth - width - VIEWPORT_MARGIN_PX;
+      const left = Math.max(
+        VIEWPORT_MARGIN_PX,
+        Math.min(anchor.right - width, maxLeft),
+      );
+      const below = anchor.bottom + MENU_GAP_PX;
+      const fitsBelow =
+        below + height <= window.innerHeight - VIEWPORT_MARGIN_PX;
+      const top = fitsBelow
+        ? below
+        : Math.max(VIEWPORT_MARGIN_PX, anchor.top - height - MENU_GAP_PX);
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
+    }
+
+    function menuItems(): HTMLButtonElement[] {
+      if (menuList === null) return [];
+      return [
+        ...menuList.querySelectorAll<HTMLButtonElement>(
+          ".move-option:not(:disabled)",
+        ),
+      ];
+    }
+
+    function focusFirstItem(): void {
+      const first = menuItems()[0];
+      if (first !== undefined) first.focus();
+    }
+
+    function closeMenu(): void {
+      if (menu !== null) menu.hidden = true;
+      if (menuOwner !== null) {
+        menuOwner.setAttribute("aria-expanded", "false");
+        menuOwner.classList.remove("is-loading");
+      }
+      menuOwner = null;
+    }
+
+    /** Closes the menu and hands focus back to the control that opened it. */
+    function dismissMenu(): void {
+      const owner = menuOwner;
+      closeMenu();
+      if (owner !== null) owner.focus();
+    }
+
+    function onMenuKeyDown(event: KeyboardEvent): void {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const items = menuItems();
+      if (items.length === 0) return;
+      const active = document.activeElement;
+      const current = items.findIndex((item) => item === active);
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      const next = items[(current + delta + items.length) % items.length];
+      if (next === undefined) return;
+      event.preventDefault();
+      next.focus();
+    }
+
+    // --- Stream -------------------------------------------------------------
+
+    /**
+     * A project changed state somewhere: the same three cases a task change has, on the rail.
+     */
+    function onProjectStateChanged(envelope: Envelope): void {
+      lastEventAt = envelope.occurred_at;
+      applyStateChange(projectSurface, rail, envelope);
+    }
+
+    /**
+     * A task changed state somewhere.
+     *
+     * Only the selected project's tasks are on screen, and every task payload names its
+     * project (`docs/EVENTS.md` §4), so an event about another project is dropped rather than
+     * patched into a board that is not showing it.
+     */
+    function onTaskStateChanged(envelope: Envelope): void {
+      lastEventAt = envelope.occurred_at;
+      if (selectedCode === null) return;
+      if (readString(envelope.payload, "project_code") !== selectedCode) return;
+      applyStateChange(taskSurface, taskBoard, envelope);
+    }
+
+    /**
+     * One state change, on whichever surface holds the card. Three cases, in order:
+     *
+     * 1. it is the move this tab is waiting for → confirm it;
+     * 2. it is a move this tab did not make → the card travels across its surface with the
+     *    author's name riding on it (the signature moment);
+     * 3. it names a state with no zone here → the card leaves, and says so.
+     */
+    function applyStateChange(
+      surface: Surface,
+      container: HTMLElement,
+      envelope: Envelope,
+    ): void {
+      const code = envelope.entity.id;
+      const card = findCard(container, code);
+      if (card === null) return;
+      if (!isNewer(card, envelope.occurred_at)) return;
+      const toStateCode = readString(envelope.payload, "to");
+      if (toStateCode === null) return;
+
+      markUpdatedAt(card, envelope.occurred_at);
+      surface.forget(code);
+
+      const pending = pendings.get(code);
+      if (pending !== undefined) {
+        if (pending.toStateCode === toStateCode) {
+          confirmFromEnvelope(pending, envelope);
+          return;
+        }
+        // Somebody moved it elsewhere while we waited: our pending mark is void.
+        if (pending.timer !== null) window.clearTimeout(pending.timer);
+        pendings.delete(code);
+        setPending(card, false);
+      }
+
+      const panel = panelOf(card);
+      const zone = panel === null ? null : findColumn(panel, toStateCode);
+      if (zone === null) {
+        dropFromSurface(surface, card, code, toStateCode);
+        return;
+      }
+      if (columnOf(card) === zone) {
+        patchStateChip(card, zone);
+        if (surface.kind === "project") syncHeaderState(code, zone);
+        return;
+      }
+
+      moveCard(card, zone, "travel");
+      patchStateChip(card, zone);
+      if (surface.kind === "project") syncHeaderState(code, zone);
+      card.dataset["remote"] = "true";
+      window.setTimeout(() => {
+        delete card.dataset["remote"];
+      }, REMOTE_RING_MS);
+      if (envelope.actor !== operatorAlias) {
+        rideAttribution(card, `${envelope.actor} → ${labelOf(zone)}`);
+      }
+    }
+
+    /**
+     * A task was created or edited: the *shape* of the board changed, so the list is re-read
+     * rather than patched in place. Patching is for values, refetching is for shape
+     * (`PATTERNS_FRONTEND.md` §6) — and a task created elsewhere has no node to patch.
+     *
+     * A pending move defers it: re-reading would replace the very node whose transition is in
+     * flight, and the confirmation would then land on a card that no longer exists.
+     */
+    function onTaskShapeEvent(envelope: Envelope): void {
+      lastEventAt = envelope.occurred_at;
+      // A task's own attributes decide which of its legal transitions are satisfiable today,
+      // so an edit makes the cached answer stale even when the state did not move.
+      invalidateTaskMoves(envelope.entity.id);
+      const code = selectedCode;
+      if (code === null) return;
+      if (readString(envelope.payload, "project_code") !== code) return;
+      if (taskRefreshTimer !== null) window.clearTimeout(taskRefreshTimer);
+      taskRefreshTimer = window.setTimeout(() => {
+        taskRefreshTimer = null;
+        if (selectedCode !== code) return;
+        if (hasPendingTaskMove()) {
+          taskRefreshDeferred = true;
+          return;
+        }
+        void refreshTasks(code);
+      }, TASK_REFRESH_DEBOUNCE_MS);
+    }
+
+    function hasPendingTaskMove(): boolean {
+      for (const pending of pendings.values()) {
+        if (pending.surface.kind === "task") return true;
+      }
+      return false;
+    }
+
+    function runDeferredTaskRefresh(): void {
+      if (!taskRefreshDeferred || hasPendingTaskMove()) return;
+      taskRefreshDeferred = false;
+      const code = selectedCode;
+      if (code !== null) void refreshTasks(code);
+    }
+
+    /**
+     * A recomputed priority: the figure counts to its new value and its breakdown sentence is
+     * rewritten from the envelope, because a number whose tooltip still argues the old case
+     * is worse than no tooltip at all (CLAUDE.md rule 7).
+     */
+    function onPriorityRecalculated(envelope: Envelope): void {
+      lastEventAt = envelope.occurred_at;
+      const card = findCard(rail, envelope.entity.id);
+      if (card === null) return;
+      const value = envelope.payload["value"];
+      if (typeof value !== "number") return;
+      const figure = card.querySelector<HTMLElement>(SEL.cardScore);
+      if (figure === null) return;
+
+      const previous = Number.parseFloat(figure.textContent ?? "");
+      const description = describeScore(value, envelope.payload);
+      // A project scored for the first time stops being an absence chip and becomes a figure.
+      figure.dataset["scoreState"] = "computed";
+      figure.classList.remove("chip", "tone-ambar");
+      figure.classList.add("figure");
+      const slot = card.querySelector<HTMLElement>(SEL.cardScoreSlot);
+      if (slot !== null) slot.title = description;
+      const note = card.querySelector<HTMLElement>(SEL.cardScoreNote);
+      if (note !== null) note.textContent = description;
+      countUp(figure, Number.isNaN(previous) ? value : previous, value);
+    }
+
+    /** Rebuilds the Spanish breakdown sentence from the envelope's own signal lines. */
+    function describeScore(
+      value: number,
+      payload: Record<string, unknown>,
+    ): string {
+      const rounded = Math.round(value);
+      const raw = payload["breakdown"];
+      const version = readString(payload, "policy_version");
+      const head = `Prioridad ${rounded} de 100${version === null ? "" : ` · política ${version}`}`;
+      if (!Array.isArray(raw)) {
+        return `${head} · desglose completo en Prioridades`;
+      }
+      const lines: string[] = [];
+      for (const entry of raw) {
+        if (!isRecord(entry)) continue;
+        const code = entry["code"];
+        const contribution = entry["contribution"];
+        if (typeof code !== "string" || typeof contribution !== "number")
+          continue;
+        const points = Math.round(contribution);
+        lines.push(`${code} ${points >= 0 ? "+" : ""}${points}`);
+      }
+      return lines.length === 0
+        ? `${head} · desglose completo en Prioridades`
+        : `${head} · ${lines.join(" · ")}`;
+    }
+
+    // --- Connection ---------------------------------------------------------
+
+    function staleSentence(): string {
+      if (lastEventAt === null) {
+        return "Sin conexión en vivo. El tablero muestra los datos con los que se cargó la página.";
+      }
+      const time = new Intl.DateTimeFormat("es", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(new Date(lastEventAt));
+      return `Sin conexión en vivo. El tablero muestra los datos de las ${time}.`;
+    }
+
+    function showStale(mode: "offline" | "reset"): void {
+      staleMode = mode;
+      if (staleText !== null) {
+        staleText.textContent =
+          mode === "offline" ? staleSentence() : RESET_SENTENCE;
+      }
+      if (staleAction !== null) {
+        staleAction.textContent =
+          mode === "offline" ? "Reconectar" : "Actualizar tablero";
+        staleAction.dataset["mode"] = mode;
+      }
+      if (staleBanner !== null) staleBanner.hidden = false;
+    }
+
+    function hideStale(): void {
+      staleMode = null;
+      if (staleBanner !== null) staleBanner.hidden = true;
+    }
+
+    /**
+     * Drags are refused on both surfaces while the stream is down: a move whose confirmation
+     * can never arrive would leave a card pending with no way back. The menu stays open on
+     * purpose — it is the explicit path, and its deadline settles it from the response.
+     */
+    function applyConnection(stale: boolean): void {
+      board.dataset["connection"] = stale ? "stale" : "live";
+      for (const card of board.querySelectorAll<HTMLElement>(SEL.card)) {
+        if (stale) card.title = STALE_DRAG_HINT;
+        else card.removeAttribute("title");
+      }
+      if (!stale) {
+        if (staleMode !== "reset") hideStale();
+        return;
+      }
+      if (drag !== null) concludeDrag(drag, { kind: "released" });
+      if (staleMode !== "reset") showStale("offline");
+    }
+
+    function onStaleAction(): void {
+      if (staleAction === null) return;
+      if (staleAction.dataset["mode"] === "reset") {
+        window.location.reload();
+        return;
+      }
+      retry();
+    }
+
+    // --- Wiring -------------------------------------------------------------
+
+    function onEngagementChange(): void {
+      if (field === null) return;
+      selectEngagement(field.value, true);
+    }
+
+    function onBoardClick(event: MouseEvent): void {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const more = target.closest<HTMLElement>(SEL.membersMore);
+      if (more !== null) {
+        toggleMemberOverflow(more);
+        return;
+      }
+      const member = target.closest<HTMLElement>(SEL.member);
+      if (member !== null) {
+        const alias = member.dataset["alias"] ?? "";
+        applyMemberFilter(
+          alias === memberFilter || alias === "" ? null : alias,
+        );
+        return;
+      }
+      if (target.closest("[data-tb-create]") !== null) {
+        // One creation flow, reached from two places. The dialog lives on the project detail
+        // and this button walks the operator to it with `#nueva-tarea`, rather than the board
+        // carrying a second copy: two dialogs would mean two sets of fields, of copy and of
+        // failure handling for the same act, drifting apart the first time either is edited.
+        // Client-side, so the board's selection and scroll survive the trip back.
+        if (selectedCode === null) return;
+        void navigate(
+          `/projects/${encodeURIComponent(selectedCode)}#nueva-tarea`,
+        );
+        return;
+      }
+      if (target.closest("[data-tb-close]") !== null) {
+        clearSelection({ push: true, focus: true });
+        return;
+      }
+      if (target.closest("[data-tb-retry]") !== null) {
+        if (selectedCode === null) return;
+        showBoardArm("loading");
+        void refreshTasks(selectedCode);
+        return;
+      }
+      const trigger = target.closest<HTMLElement>(SEL.moveTrigger);
+      if (trigger !== null) {
+        if (menuOwner === trigger) dismissMenu();
+        else void openMenu(trigger);
+      }
+    }
+
+    /**
+     * Swallows exactly one click after a drag that began on a link.
+     *
+     * A task card's title is a link and also its grip; without this, letting go of a dragged
+     * card would navigate to the task the operator was only moving.
+     */
+    function onCaptureClick(event: MouseEvent): void {
+      if (!suppressClick) return;
+      suppressClick = false;
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    function onDocumentClick(event: MouseEvent): void {
+      if (menuOwner === null) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest(SEL.moveMenu) !== null) return;
+      if (target.closest(SEL.moveTrigger) !== null) return;
+      closeMenu();
+    }
+
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key !== "Escape") return;
+      if (drag !== null) {
+        event.preventDefault();
+        concludeDrag(drag, { kind: "released" });
+        return;
+      }
+      if (menuOwner !== null) {
+        dismissMenu();
+        return;
+      }
+      if (selectedCode === null) return;
+      event.preventDefault();
+      clearSelection({ push: true, focus: true });
+    }
+
+    function onViewportChange(): void {
+      if (menuOwner !== null) closeMenu();
+    }
+
+    refreshRoving();
+
+    board.addEventListener("pointerdown", onPointerDown);
+    board.addEventListener("pointermove", onPointerMove);
+    board.addEventListener("pointerup", onPointerUp);
+    board.addEventListener("pointercancel", onPointerCancel);
+    board.addEventListener("click", onBoardClick);
+    board.addEventListener("click", onCaptureClick, true);
+    board.addEventListener("keydown", onBoardKeyDown);
+    if (field !== null) field.addEventListener("change", onEngagementChange);
+    document.addEventListener("click", onDocumentClick);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("popstate", onPopState);
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    if (menuList !== null) menuList.addEventListener("keydown", onMenuKeyDown);
+    if (dialog !== null) dialog.addEventListener("close", onDialogClose);
+    if (reasonInput !== null)
+      reasonInput.addEventListener("input", onReasonInput);
+    if (reasonCancel !== null && dialog !== null) {
+      reasonCancel.addEventListener("click", () => dialog.close("cancel"));
+    }
+    if (staleAction !== null)
+      staleAction.addEventListener("click", onStaleAction);
+
+    const offState = subscribe("project.state_changed", onProjectStateChanged);
+    const offPriority = subscribe(
+      "project.priority.recalculated",
+      onPriorityRecalculated,
+    );
+    const offTaskCreated = subscribe("task.created", onTaskShapeEvent);
+    const offTaskUpdated = subscribe("task.updated", onTaskShapeEvent);
+    const offTaskState = subscribe("task.state_changed", onTaskStateChanged);
+    const offStatus = onStatus((status) => {
+      applyConnection(status === "disconnected");
+    });
+    const offReset = onReset(() => {
+      showStale("reset");
+    });
+
+    cleanups.push(() => {
+      board.removeEventListener("pointerdown", onPointerDown);
+      board.removeEventListener("pointermove", onPointerMove);
+      board.removeEventListener("pointerup", onPointerUp);
+      board.removeEventListener("pointercancel", onPointerCancel);
+      board.removeEventListener("click", onBoardClick);
+      board.removeEventListener("click", onCaptureClick, true);
+      board.removeEventListener("keydown", onBoardKeyDown);
+      if (field !== null)
+        field.removeEventListener("change", onEngagementChange);
+      document.removeEventListener("click", onDocumentClick);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("popstate", onPopState);
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+      if (menuList !== null)
+        menuList.removeEventListener("keydown", onMenuKeyDown);
+      if (dialog !== null) dialog.removeEventListener("close", onDialogClose);
+      for (const pending of pendings.values()) {
+        if (pending.timer !== null) window.clearTimeout(pending.timer);
+      }
+      pendings.clear();
+      if (taskRefreshTimer !== null) window.clearTimeout(taskRefreshTimer);
+      claimBoard(null);
+      if (drag !== null) concludeDrag(drag, { kind: "released" });
+      offState();
+      offPriority();
+      offTaskCreated();
+      offTaskUpdated();
+      offTaskState();
+      offStatus();
+      offReset();
+    });
+  }
+
+  function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  /** The business code a card carries; `""` when the node is not one. */
+  function codeOf(card: HTMLElement): string {
+    return card.dataset["code"] ?? "";
+  }
+
+  /**
+   * Whether a refusal is the server asking for the motive we did not send.
+   *
+   * Only when we sent none: a reason the server rejected on its own merits is a genuine
+   * refusal, and re-opening the dialog over it would loop the operator through a field that
+   * is not the problem.
+   */
+  function demandsReason(error: ApiError, sent: string): boolean {
+    if (sent !== "") return false;
+    return error.kind === "validation" && error.fields["reason"] !== undefined;
+  }
+
+  function readString(
+    payload: Record<string, unknown>,
+    key: string,
+  ): string | null {
+    const value = payload[key];
+    return typeof value === "string" && value !== "" ? value : null;
+  }
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+  }
+</script>
+
+<style>
+  .board {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    /* The rail's track: wide enough for a project name over its client and owner,
+       narrow enough that the board beside it keeps four task columns. */
+    --rail-track: clamp(340px, 24vw, 380px);
+  }
+
+  .board-bar {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+    padding: 0 var(--space-5) var(--space-3);
+  }
+
+  .board-hint {
+    margin-left: auto;
+    max-width: 42ch;
+  }
+
+  .board-note {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0 var(--space-5) var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background-color: var(--tone-wash);
+    border-color: var(--tone-solid);
+    color: var(--tone-ink);
+    font-size: var(--text-small-size);
+  }
+
+  .stale {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin: 0 var(--space-5) var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background-color: var(--tone-wash);
+    border-color: var(--tone-solid);
+    color: var(--tone-ink);
+  }
+
+  .stale[hidden] {
+    display: none;
+  }
+
+  .stale p {
+    color: var(--tone-ink);
+  }
+
+  .stale button {
+    margin-left: auto;
+  }
+
+  /* --- The stage: the rail, and the board beside it --- */
+
+  .board-stage {
+    display: grid;
+    grid-template-columns: var(--rail-track) minmax(0, 1fr);
+    flex: 1;
+    min-height: 0;
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .board-stage > :global([data-rail]) {
+    border-right: var(--border-width) solid var(--hairline);
+  }
+
+  /* The board goes stale, not blank: it stays readable and refuses the hand. */
+  .board[data-connection="stale"] .board-stage {
+    opacity: 0.72;
+  }
+
+  .board[data-connection="stale"] :global([data-card]) {
+    cursor: not-allowed;
+  }
+
+  /* While a card is in the air the whole page is a grabbing hand, and nothing
+     selects text under it — a drag that highlights paragraphs is not an object. */
+  :global(html[data-board-dragging="true"] body) {
+    cursor: grabbing;
+    user-select: none;
+  }
+
+  /* --- Drop slots: built by the runtime, so global --- */
+
+  .board :global(.drop-slot) {
+    border: 2px dashed var(--cobalto);
+    border-radius: var(--radius-card);
+    background-color: var(--cobalto-papel);
+    flex: none;
+  }
+
+  /* The hole the card came out of: neutral, not an invitation. */
+  .board :global(.drop-slot.is-origin) {
+    border-color: var(--tinta-suave);
+    border-style: dashed;
+    background-color: transparent;
+  }
+
+  /* --- Attribution chip riding a remote move --- */
+
+  .board :global(.card-attribution) {
+    position: absolute;
+    top: calc(var(--space-3) * -1);
+    left: var(--space-3);
+    box-shadow: var(--shadow-resting);
+    transition: opacity var(--motion-panel-duration) var(--motion-panel-ease);
+  }
+
+  .board :global(.card-attribution[data-leaving="true"]) {
+    opacity: 0;
+  }
+
+  /* --- "Mover a…" menu --- */
+
+  .move-menu {
+    position: fixed;
+    z-index: var(--z-drawer);
+    min-width: 232px;
+    max-width: 320px;
+    padding: var(--space-2);
+    box-shadow: var(--shadow-raised);
+  }
+
+  .move-menu[hidden] {
+    display: none;
+  }
+
+  .move-menu-title {
+    padding: var(--space-2) var(--space-2) var(--space-1);
+  }
+
+  .move-menu-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .move-menu :global(.move-item) {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-bottom: var(--space-1);
+  }
+
+  .move-menu :global(.move-option) {
+    display: flex;
+    align-items: center;
+    min-height: 40px;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-control);
+    font-size: var(--text-title-size);
+    font-weight: var(--text-title-weight);
+    text-align: left;
+    color: var(--tinta);
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .move-menu :global(.move-option:hover:not(:disabled)) {
+    background-color: var(--pozo);
+  }
+
+  .move-menu :global(.move-option:disabled) {
+    color: var(--tinta-suave);
+  }
+
+  .move-menu :global(.move-missing) {
+    padding-inline: var(--space-3);
+    color: var(--ambar-ink);
+  }
+
+  .move-menu :global(.move-note) {
+    padding: var(--space-2) var(--space-3);
+  }
+
+  /* --- Reason dialog --- */
+
+  .reason-dialog {
+    width: min(440px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    color: var(--tinta);
+    box-shadow: var(--shadow-lifted);
+  }
+
+  .reason-dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .reason-dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .reason-label {
+    margin-bottom: calc(var(--space-2) * -1);
+  }
+
+  .reason-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
+
+  /* --- Below the rail's own width: it lies down above the board --- */
+
+  @media (max-width: 1023px) {
+    .board-stage {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    .board-stage > :global([data-rail]) {
+      border-right: 0;
+      border-bottom: var(--border-width) solid var(--hairline);
+      max-height: 46dvh;
+    }
+  }
+
+  @media (max-width: 767px) {
+    .board-bar {
+      padding-inline: var(--space-4);
+    }
+
+    .board-note,
+    .stale {
+      margin-inline: var(--space-4);
+    }
+
+    .board-hint {
+      margin-left: 0;
+    }
+  }
+</style>

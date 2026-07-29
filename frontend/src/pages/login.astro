@@ -9,8 +9,13 @@
  */
 import "../styles/tokens.css";
 import "../styles/base.css";
+import BrandMark from "../components/ui/BrandMark.astro";
 import Icon from "../components/ui/Icon.astro";
-import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
+import { loginGuardScript } from "../lib/auth/guard-inline";
+import { SESSION_COOKIE_NAME, SESSION_STORAGE_KEY } from "../lib/auth/tokens";
+
+/** Runs before paint: see `lib/auth/guard-inline.ts` for why it reads the cookie. */
+const loginGuard = loginGuardScript(SESSION_COOKIE_NAME, SESSION_STORAGE_KEY);
 ---
 
 <!doctype html>
@@ -18,23 +23,19 @@ import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script is:inline define:vars={{ key: SESSION_STORAGE_KEY }}>
-      // Inverse guard: an existing session skips the door entirely.
-      try {
-        if (window.localStorage.getItem(key) !== null) {
-          const next = new URLSearchParams(window.location.search).get("next");
-          const safe =
-            next !== null && next.startsWith("/") && !next.startsWith("//")
-              ? next
-              : "/";
-          window.location.replace(safe);
-        }
-      } catch {
-        /* storage disabled: stay on the form */
-      }
-    </script>
+    <script is:inline set:html={loginGuard} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#f4f3ef" />
     <title>Iniciar sesión — Aztec Ops</title>
+    <meta property="og:title" content="Aztec Ops" />
+    <meta
+      property="og:description"
+      content="Prioriza el portafolio y explica por qué."
+    />
+    <meta property="og:image" content="/brand/og.jpg" />
+    <meta name="twitter:card" content="summary_large_image" />
   </head>
   <body>
     <main class="stage">
@@ -45,14 +46,9 @@ import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
       </div>
 
       <section class="card door" aria-labelledby="login-title">
+        <p class="restoring small" role="status">Restaurando tu sesión…</p>
         <header class="door-head">
-          <span class="brand-mark" aria-hidden="true">
-            <svg width="30" height="30" viewBox="0 0 26 26" fill="none">
-              <rect x="3" y="8.5" width="15" height="11" rx="3" fill="var(--cobalto-papel)"></rect>
-              <rect x="6" y="5.5" width="15" height="11" rx="3" fill="var(--cobalto)" opacity="0.35"></rect>
-              <rect x="9" y="2.5" width="15" height="11" rx="3" fill="var(--cobalto)"></rect>
-            </svg>
-          </span>
+          <BrandMark size={34} animate />
           <p class="label">Aztec Ops</p>
           <h1 id="login-title" class="h1">Inicia sesión</h1>
           <p class="small">El tablero del día espera tu decisión.</p>
@@ -101,15 +97,29 @@ import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
         </form>
 
         <p class="small hint">
-          Entorno local: las credenciales del equipo sembrado están en el README.
+          Entorno local: las credenciales del equipo sembrado están en el
+          README.
         </p>
       </section>
     </main>
 
     <script>
       import { shake } from "../lib/motion/spring";
-      import { signIn } from "../lib/auth/session";
+      import { restoreSession, signIn } from "../lib/auth/session";
       import type { ApiError } from "../lib/api/errors";
+
+      // A stored session with no cookie is an expired access token, not a
+      // sign-out. Renew from the refresh token before showing the form; only a
+      // refusal means the credential is really gone.
+      if (document.documentElement.dataset.restoring !== undefined) {
+        void restoreSession().then((restored) => {
+          if (restored) {
+            window.location.replace(safeNext());
+            return;
+          }
+          delete document.documentElement.dataset.restoring;
+        });
+      }
 
       const form = document.getElementById("login-form");
       const errorLine = document.getElementById("login-error");
@@ -129,7 +139,9 @@ import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
         if (error.kind === "validation") {
           return "Escribe tu usuario y tu contraseña.";
         }
-        if (error.kind === "unknown" && error.backendCode === "invalid_credentials") {
+        if (error.kind === "auth") {
+          // One answer for unknown user, wrong password and inactive account:
+          // the API refuses to distinguish them, and so does this form.
           return "Usuario o contraseña incorrectos, o la cuenta está desactivada.";
         }
         return "No se pudo iniciar sesión. Intenta de nuevo.";
@@ -294,6 +306,24 @@ import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
 
       .submit {
         width: 100%;
+      }
+
+      /* Only one of the two is ever on screen: renewing, or asking. */
+      .restoring {
+        display: none;
+        color: var(--tinta-media);
+        text-align: center;
+      }
+
+      :global(html[data-restoring]) .restoring {
+        display: block;
+      }
+
+      :global(html[data-restoring]) form,
+      :global(html[data-restoring]) .hint,
+      :global(html[data-restoring]) .door-head .h1,
+      :global(html[data-restoring]) .door-head .small {
+        display: none;
       }
 
       .hint {

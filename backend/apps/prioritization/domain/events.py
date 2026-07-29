@@ -39,11 +39,16 @@ class BreakdownLine(BaseModel):
     A restatement of ``SignalContribution`` with the decimals rendered as JSON numbers: the UI
     sorts by ``contribution`` to justify a rank, and pydantic's default quoted decimals would put
     ``"9.0"`` above ``"25.0"``.
+
+    ``label`` travels with the line for the same reason ``reason`` does: the queue reorders live off
+    this event, and a client that had to name the signal itself would need a table keyed by signal
+    code — the one thing `docs/standards/FRONTEND.md` forbids.
     """
 
     model_config = ConfigDict(frozen=True)
 
     code: str
+    label: str = Field(min_length=1)
     raw: float = Field(ge=0.0, le=1.0)
     weight: float
     contribution: float
@@ -107,6 +112,7 @@ class PriorityRecalculatedPayload(BaseModel):
             breakdown=tuple(
                 BreakdownLine(
                     code=signal.code,
+                    label=signal.label,
                     raw=signal.raw,
                     weight=float(signal.weight),
                     contribution=float(signal.contribution),

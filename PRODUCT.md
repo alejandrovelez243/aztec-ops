@@ -61,21 +61,35 @@ activity is surfaced as a risk rather than sitting quietly at the bottom of a li
 ## Capabilities and Constraints
 
 - Create and update projects and tasks; store owner, state, priority, due date, next step,
-  blockers and notes.
+  blockers and notes. Everything the system asks for, it lets you answer in place: the next
+  step is written where its absence is reported, and owner and state change from the row that
+  shows them.
+- One screen per task, reachable from anywhere the task is named, carrying its comments,
+  dependencies and legal moves — the place a conversation about one piece of work lives.
 - Detect projects at risk, blocked, or without a clear next step, through composable rules.
 - Prioritized queue with an explainable score, plus manual override with a reason.
 - Configurable taxonomies and workflows, editable from the Django admin without a deploy.
 - Load per person, computed from tasks rather than stored.
-- Real authentication: `POST /auth/token` exchanges credentials for an access/refresh pair; the
-  access token also travels as an HttpOnly cookie so the SSE stream can authenticate. A route
-  guard keeps signed-out visitors on the login screen. Overriding the ranking and rebuilding the
-  portfolio require the ops-lead capability, which the API reports at sign-in — the frontend
-  renders those controls from that answer, never by decoding the token.
+- Real authentication. `POST /auth/token` exchanges username and password for an access/refresh
+  pair and also sets the access token as an HttpOnly cookie, because `EventSource` cannot send a
+  header and the live stream would otherwise be unauthenticated. Writes present the token as
+  `Authorization: Bearer`; the cookie is honoured on safe methods only, so no cross-origin page
+  can forge a state change. Access tokens are short-lived and renewed silently through
+  `POST /auth/token/refresh`; signing out clears the cookie and the local session.
+- **Permissions are two levels, not a matrix.** This is a collaborative tool: any authenticated
+  member may act on any project or task — transition it, raise or resolve a blocker, add a note.
+  "Lo mío" is a filter, never a permission. Exactly three actions need the ops-lead capability,
+  because all three overrule the engine: setting a priority override, clearing it, and rebuilding
+  the whole portfolio's scores. Recomputing a single project is not gated. The API reports
+  `is_ops_lead` at sign-in, so the interface renders those controls from the server's answer and
+  never by decoding the token; the server refuses them regardless of what the UI shows.
 - Direct manipulation on the board: work moves between states by dragging its card — always
   through the workflow's legal transitions; illegal targets are visibly locked, and every drag
   has a keyboard/menu equivalent.
-- A portfolio-wide activity feed alongside the per-project timeline (requires a small backend
-  addition: a global activity endpoint).
+- A portfolio-wide activity feed alongside the per-project timeline: the same trail read across
+  every project, task and blocker, filterable by entity, verb, actor, origin and time window
+  (`GET /api/v1/activity`). `origin` is what separates a person's decision from the engine's
+  recomputation in a feed where both appear side by side.
 - Deliberately out of scope for this version: self-registration and password reset (accounts are
   seeded or admin-created), multi-tenancy, external notifications, historical burndown metrics.
   Board drag & drop and credential authentication are in scope as described above.
@@ -115,6 +129,9 @@ typography are available or assumed, and none may be invented.
 6. **Every action gets an answer.** Hover, press, in-flight, success and failure are all
    visibly acknowledged, and a change caused by someone else arrives as visible motion, not a
    silent re-render. Silent success is a bug; silent failure is a defect.
+7. **The account is the author.** Every write is attributed to a verified account, never to a
+   claimed name, which is what makes the activity trail evidence instead of a story. A refusal
+   states which capability was missing rather than pretending the action never happened.
 
 ## Accessibility & Inclusion
 

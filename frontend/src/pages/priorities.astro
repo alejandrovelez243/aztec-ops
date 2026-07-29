@@ -1,0 +1,319 @@
+---
+/**
+ * `/priorities` — "Prioridades", the ranked queue and the product's heart.
+ *
+ * Master–detail: the whole queue as rows on the left, the selected project's defence
+ * pinned on the right. The point of the surface is that "why is this first" is
+ * answered without leaving the row — a score is never shown without the breakdown
+ * that justifies it, and a manual override is never shown *as* a score.
+ *
+ * This file is the container (`docs/standards/PATTERNS_FRONTEND.md` §5): it performs
+ * the one fetch, maps the result onto the view-state union, and composes. It holds
+ * no queue logic — ordering is the server's (`-score`, then code), the panels are
+ * presentational, and everything live belongs to `PrioritiesLive`.
+ */
+import ContextPanel from "../components/priorities/ContextPanel.astro";
+import PrioritiesLive from "../components/priorities/PrioritiesLive.astro";
+import QueueRow from "../components/priorities/QueueRow.astro";
+import QueueSkeleton from "../components/priorities/QueueSkeleton.astro";
+import RegionMessage from "../components/priorities/RegionMessage.astro";
+import Shell from "../layouts/Shell.astro";
+import { getQueue } from "../lib/api/client";
+import { errorDetailByCode } from "../lib/api/error-copy";
+import type { QueueItem, QueuePage } from "../lib/api/domain";
+import type { ApiErrorCode } from "../lib/api/errors";
+import { assertNever, toViewState } from "../lib/view-state";
+import type { ViewState } from "../lib/view-state";
+
+/**
+ * Rendered per request, never prerendered.
+ *
+ * The queue is fetched in frontmatter and the session travels as a cookie the
+ * middleware reads off the request — neither exists at build time. Prerendered, this
+ * route bakes one operator's queue into HTML and the guard redirects everybody to
+ * `/login`, which is exactly what the dev server warns about when
+ * `Astro.request.headers` is touched on a static route.
+ */
+export const prerender = false;
+
+/**
+ * One page holds the whole portfolio, so the rank plate means what it says.
+ *
+ * The queue is a ranking: split it across pages and "puesto 03" on page two is a lie
+ * about the portfolio. The API's own default (50) would silently paginate a
+ * portfolio that grew, so the ceiling is stated here and the header renders
+ * "N de M" whenever the two disagree.
+ */
+const QUEUE_PAGE_SIZE = 100;
+
+/** What the queue region renders, once the view state is resolved. */
+type QueueRegion =
+  | { kind: "loading" }
+  | { kind: "empty"; message: string }
+  | { kind: "error"; code: ApiErrorCode }
+  | {
+      kind: "list";
+      items: readonly QueueItem[];
+      total: number;
+      /** Data is on screen but the stream is down; the marker says so. */
+      isStale: boolean;
+    };
+
+const result = await getQueue({ page: 1, page_size: QUEUE_PAGE_SIZE });
+
+/** `"connecting"`: the stream has no meaning while the server renders. */
+const state = toViewState(result, "connecting", {
+  isEmpty: (page) => page.items.length === 0,
+  emptyMessage:
+    "Todavía no hay proyectos priorizados. Registra el primero y el motor lo pondrá en la cola.",
+  lastEventAt: null,
+});
+
+/**
+ * Collapses the five-arm view state onto what this page draws, so the template has
+ * one branch per region instead of two that render the same list.
+ */
+function toRegion(view: ViewState<QueuePage>): QueueRegion {
+  switch (view.kind) {
+    case "loading":
+      return { kind: "loading" };
+    case "empty":
+      return { kind: "empty", message: view.message };
+    case "error":
+      return { kind: "error", code: view.code };
+    case "ready":
+      return {
+        kind: "list",
+        items: view.data.items,
+        total: view.data.count,
+        isStale: false,
+      };
+    case "disconnected":
+      return {
+        kind: "list",
+        items: view.data.items,
+        total: view.data.count,
+        isStale: true,
+      };
+    default:
+      return assertNever(view);
+  }
+}
+
+const region = toRegion(state);
+const queueSize = region.kind === "list" ? region.items.length : 0;
+const counter =
+  region.kind !== "list"
+    ? null
+    : region.items.length < region.total
+      ? `${region.items.length} de ${region.total} proyectos`
+      : `${region.total} ${region.total === 1 ? "proyecto" : "proyectos"} en la cola`;
+
+/** When this HTML was produced; the staleness marker's fallback instant. */
+const renderedAt = new Date().toISOString();
+---
+
+<Shell
+  title="Prioridades"
+  active="priorities"
+  crumbs={[{ label: "Inicio", href: "/" }, { label: "Prioridades" }]}
+>
+  <div class="priorities" data-priorities>
+    <header class="head">
+      <div class="titles">
+        <h1 class="h1">Prioridades</h1>
+        <p class="body-text lede">
+          La cola completa, en el orden que calculó el motor. Elige una fila y
+          el panel te dice por qué está ahí.
+        </p>
+      </div>
+      <div class="side">
+        {counter !== null && <p class="figure counter">{counter}</p>}
+        <p class="small hint">
+          Usa <kbd>↑</kbd>
+          <kbd>↓</kbd> para recorrer la cola y <kbd>Enter</kbd> para abrir el proyecto.
+        </p>
+      </div>
+    </header>
+
+    <PrioritiesLive renderedAt={renderedAt} />
+
+    {region.kind === "loading" && <QueueSkeleton />}
+
+    {
+      region.kind === "empty" && (
+        <RegionMessage
+          title="La cola está vacía"
+          body={region.message}
+          icon="flag"
+          tone="tone-piedra"
+        >
+          <a class="btn btn-primary" href="/projects">
+            Ir a Proyectos
+          </a>
+        </RegionMessage>
+      )
+    }
+
+    {
+      region.kind === "error" && (
+        <RegionMessage
+          title="No pudimos cargar la cola priorizada"
+          body={errorDetailByCode(region.code)}
+          icon="alert"
+          tone="tone-rojo"
+        >
+          <button class="btn btn-primary" type="button" data-action="reload">
+            Reintentar
+          </button>
+        </RegionMessage>
+      )
+    }
+
+    {
+      region.kind === "list" && (
+        <div
+          class="board"
+          data-queue-board
+          style={`--entry-count: ${region.items.length}`}
+        >
+          {region.items.map((item, index) => (
+            <div class="entry" data-entry data-code={item.code}>
+              <QueueRow
+                rank={index + 1}
+                code={item.code}
+                name={item.name}
+                clientAlias={item.client_alias}
+                ownerLabel={item.owner?.label ?? null}
+                ownerAlias={item.owner?.alias ?? null}
+                targetDate={item.target_date ?? null}
+                score={item.score.value}
+                riskFlags={item.risk_flags}
+                hasOverride={(item.override ?? null) !== null}
+                updatedAt={item.updated_at}
+                isSelected={index === 0}
+              />
+              <ContextPanel
+                rank={index + 1}
+                code={item.code}
+                name={item.name}
+                clientAlias={item.client_alias}
+                stateLabel={item.state.label}
+                stateColor={item.state.color ?? null}
+                ownerLabel={item.owner?.label ?? null}
+                nextStep={item.next_step ?? null}
+                score={item.score.value}
+                policyVersion={item.score.policy_version}
+                computedAt={item.score.computed_at ?? null}
+                breakdown={item.score.breakdown}
+                riskFlags={item.risk_flags}
+                overridePosition={item.override?.position ?? null}
+                overrideReason={item.override?.reason ?? null}
+                queueSize={queueSize}
+                isSelected={index === 0}
+              />
+            </div>
+          ))}
+        </div>
+      )
+    }
+  </div>
+</Shell>
+
+<style>
+  .priorities {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+
+  .head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+  }
+
+  .titles {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .lede {
+    color: var(--tinta-media);
+  }
+
+  .side {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--space-1);
+    text-align: right;
+  }
+
+  .counter {
+    color: var(--tinta-media);
+  }
+
+  .hint kbd {
+    font-family: var(--font-mono);
+    font-size: var(--text-label-size);
+    padding: 0 var(--space-1);
+    border-radius: var(--radius-chip);
+    background-color: var(--pozo);
+    color: var(--tinta-media);
+  }
+
+  /*
+   * Phone, tablet and small laptop: one column, and the selected row expands
+   * under itself — the approved fallback (comp A) recorded in
+   * `.impeccable/surfaces/frontend-src-pages-priorities-astro.md`.
+   *
+   * THE MASTER–DETAIL BREAKPOINT IS 1280, NOT 1024. The panel's own floor is
+   * 320px and a queue row needs ~404px of fixed tracks before its name gets a
+   * pixel; at 1024 the two together left the name track computing to exactly
+   * 0px, so every project on the surface lost its name while the scores stayed.
+   * A composition that cannot hold both halves is not the composition — it
+   * collapses to the one that fits. The same number is repeated by `QueueRow`,
+   * `ContextPanel` and `QueueSkeleton`, which must switch on the same frame.
+   */
+  .board {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  @media (min-width: 1280px) {
+    .board {
+      /* Panel column: 5–6.5 rhythm units, so the queue keeps roughly 60%. */
+      --panel-min: calc(var(--space-8) * 5);
+      --panel-max: calc(var(--space-8) * 6.5);
+
+      display: grid;
+      grid-template-columns:
+        minmax(0, 1fr)
+        clamp(var(--panel-min), 33%, var(--panel-max));
+      /*
+       * One explicit track per entry plus a filler, so the pinned panel can span
+       * `1 / -1` and `position: sticky` has a tall enough area to travel in even
+       * when the queue is short.
+       */
+      grid-template-rows: repeat(var(--entry-count, 1), auto) 1fr;
+      column-gap: var(--space-5);
+      row-gap: var(--space-2);
+      align-items: start;
+      min-height: 60dvh;
+    }
+
+    /*
+     * The entry keeps a row and its panel together in the DOM — which is what lets
+     * the accordion below 1280px reuse the very same node — while `contents` hands
+     * both to the board's grid so the panel can sit in column two.
+     */
+    .entry {
+      display: contents;
+    }
+  }
+</style>

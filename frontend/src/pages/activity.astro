@@ -1,0 +1,352 @@
+---
+/**
+ * Actividad (`/activity`) — the portfolio-wide audit trail.
+ *
+ * The container (`docs/standards/PATTERNS_FRONTEND.md` §5): this frontmatter
+ * performs the three reads of the first paint — the feed, the portfolio (to turn
+ * `PRJ-22` into a name and a link) and the roster (to offer real people in the
+ * actor filter) — maps the feed onto the view-state union, and composes. It
+ * renders no row markup of its own.
+ *
+ * **Filter state lives in the URL.** `GET /api/v1/activity` sends no next/prev
+ * links precisely so that paging and filtering are addressable
+ * (`backend/apps/shared/pagination.py`), and a feed narrowed to one decision or
+ * one week has to be a link somebody can paste into a thread. Filtering is live
+ * — the island refetches and rewrites the query string on every change — while
+ * paging stays a list of real `<a>`s, because a new page is a new reading and a
+ * server render is the honest way to get it.
+ *
+ * **Correlated records are one decision.** Records written in the same
+ * transaction share a `correlation_id`, and the feed frames a run of them as the
+ * single movement it was — "A bajó para que B subiera" — with a link that
+ * expands the whole decision through `?correlation_id=`.
+ *
+ * **Origin is the distinction that matters.** A `MANUAL` record is a person
+ * overruling the engine and carries a mandatory reason; a `POLICY` record is the
+ * engine recomputing and carries the signal and the delta that moved the score.
+ * They must not look alike, so they do not.
+ *
+ * The one live region is the feed itself, wrapped in `ActivityLive`: everything
+ * above it is static and ships no runtime.
+ */
+import ActivityTable from "../components/activity/ActivityTable.astro";
+import FeedNotice from "../components/activity/FeedNotice.astro";
+import FilterBar from "../components/activity/FilterBar.astro";
+import Pager from "../components/activity/Pager.astro";
+import {
+  FEED_COPY,
+  FILTER_COPY,
+  PAGE_COPY,
+  ROW_COPY,
+} from "../components/activity/copy";
+import Icon from "../components/ui/Icon.astro";
+import ActivityLive from "../islands/ActivityLive.astro";
+import Shell from "../layouts/Shell.astro";
+import {
+  ACTIVITY_PAGE_SIZE,
+  activeFacetCount,
+  pageCount as pagesFor,
+  parseFilters,
+  toQuery,
+} from "../lib/activity/filters";
+import {
+  buildDirectory,
+  groupByCorrelation,
+  toRows,
+  type DecisionGroup,
+  type MemberRef,
+  type ProjectRef,
+} from "../lib/activity/model";
+import { SYSTEM_ACTOR, SYSTEM_ACTOR_LABEL } from "../lib/activity/vocabulary";
+import { getPortfolioActivity, getQueue, getTeamLoad } from "../lib/api/client";
+import { errorCopyByCode } from "../lib/api/error-copy";
+import type { ActivityPage } from "../lib/api/domain";
+import { assertNever, toViewState, type ViewState } from "../lib/view-state";
+
+/** One reference instant for the whole render, so two rows cannot straddle a minute. */
+const now = new Date();
+
+const filters = parseFilters(Astro.url.searchParams);
+const activeCount = activeFacetCount(filters);
+
+// The three reads are independent; serialising them would add two round trips
+// to the first paint for nothing.
+const [feedResult, queueResult, teamResult] = await Promise.all([
+  getPortfolioActivity(
+    toQuery(filters, { page: filters.page, pageSize: ACTIVITY_PAGE_SIZE }),
+  ),
+  getQueue({ page_size: 200 }),
+  // `status: "all"` and not the default active roster: the trail outlives the
+  // rows it describes, and the one record that most needs a name — "Persona
+  // retirada" — is about somebody the active roster no longer returns.
+  getTeamLoad({ status: "all" }),
+]);
+
+/**
+ * Codes the feed can resolve to a name and a link.
+ *
+ * Taken from the portfolio the app already serves rather than from a
+ * denormalized field on the record: the trail stores a business code because it
+ * outlives the row it describes, and asking the API to repeat a project's name
+ * on every one of its records would be a second source of truth for it.
+ */
+const projects: readonly ProjectRef[] = queueResult.ok
+  ? queueResult.data.items.map((item) => ({ code: item.code, name: item.name }))
+  : [];
+
+/**
+ * People, for the records whose subject is a person.
+ *
+ * A member record's `entity_id` is an `accounts.User.code`, not a project code —
+ * running it through the project matcher is what used to put a phantom project
+ * name on a row about somebody being retired.
+ */
+const members: readonly MemberRef[] = teamResult.ok
+  ? teamResult.data.items.map((person) => ({
+      alias: person.alias,
+      label: person.label,
+    }))
+  : [];
+
+const directory = buildDirectory(projects, members);
+
+/** One block for the island to hydrate from; the page already read both lists. */
+const directoryJson = JSON.stringify([...projects, ...members]);
+
+/**
+ * How the person picker names the actor the URL is filtering by.
+ *
+ * The picker fills its own options when it opens, from the roster read shared
+ * with the project owner pickers; only the *trigger* has to be right on first
+ * paint, and that is one name. An alias the roster does not know renders as
+ * itself, so a saved link shows what it is filtering by instead of a blank
+ * control — and `system` is named, never dressed as a colleague.
+ */
+function actorLabelFor(alias: string | null): string {
+  if (alias === null) return FILTER_COPY.any;
+  if (alias === SYSTEM_ACTOR) return SYSTEM_ACTOR_LABEL;
+  if (!teamResult.ok) return alias;
+  const person = teamResult.data.items.find((item) => item.alias === alias);
+  return person?.label ?? alias;
+}
+
+const actorLabel = actorLabelFor(filters.actor);
+
+// SSR has no stream, so `"connecting"` is the only honest status: a successful
+// read is `ready` and a failed one is `error`. `disconnected` is the island's
+// arm — it is what learns the stream dropped.
+const state: ViewState<ActivityPage> = toViewState(feedResult, "connecting", {
+  isEmpty: (page) => page.items.length === 0,
+  emptyMessage:
+    activeCount > 0 ? FEED_COPY.emptyFilteredBody : FEED_COPY.emptyBody,
+  lastEventAt: null,
+});
+
+/**
+ * What the feed region renders, one arm at a time.
+ *
+ * `disconnected` collapses into `rows` here because on the server the read is
+ * fresh by construction; staleness is the island's banner, not a server fact.
+ * `empty` still carries the (empty) groups so the list, its templates and the
+ * island's contract exist on the page — a record arriving over the stream then
+ * lands in a real list instead of finding nothing to fill.
+ */
+type FeedPlan =
+  | { mode: "loading" }
+  | { mode: "rows"; groups: readonly DecisionGroup[]; count: number }
+  | { mode: "empty" }
+  | { mode: "error"; title: string; detail: string };
+
+function planFor(view: ViewState<ActivityPage>): FeedPlan {
+  switch (view.kind) {
+    case "ready":
+    case "disconnected":
+      return {
+        mode: "rows",
+        groups: groupByCorrelation(toRows(view.data.items, directory, now)),
+        count: view.data.count,
+      };
+    case "empty":
+      return { mode: "empty" };
+    case "error":
+      return {
+        mode: "error",
+        title: FEED_COPY.errorTitle,
+        detail: errorCopyByCode(view.code).detail,
+      };
+    case "loading":
+      return { mode: "loading" };
+    default:
+      return assertNever(view);
+  }
+}
+
+const plan = planFor(state);
+const groups: readonly DecisionGroup[] =
+  plan.mode === "rows" ? plan.groups : [];
+const total = plan.mode === "rows" ? plan.count : 0;
+const pages = pagesFor(total, ACTIVITY_PAGE_SIZE);
+const hasRows = plan.mode === "rows";
+
+/** Copy of the empty arm, which is a different sentence once a facet is on. */
+const emptyTitle =
+  activeCount > 0 ? FEED_COPY.emptyFilteredTitle : FEED_COPY.emptyTitle;
+const emptyDetail =
+  activeCount > 0 ? FEED_COPY.emptyFilteredBody : FEED_COPY.emptyBody;
+
+const errorTitle = plan.mode === "error" ? plan.title : FEED_COPY.errorTitle;
+const errorDetail = plan.mode === "error" ? plan.detail : "";
+
+const CRUMBS = [
+  { label: PAGE_COPY.crumbHome, href: "/" },
+  { label: PAGE_COPY.title },
+];
+---
+
+<Shell title={PAGE_COPY.title} active="activity" crumbs={CRUMBS}>
+  <section class="activity">
+    <header>
+      <h1 class="h1">{PAGE_COPY.title}</h1>
+      <p class="body-text lead">{PAGE_COPY.lead}</p>
+    </header>
+
+    <ActivityLive>
+      <FilterBar
+        filters={filters}
+        actorLabel={actorLabel}
+        activeCount={activeCount}
+      />
+
+      {
+        filters.correlationId !== null && (
+          <div class="card decision-banner tone-cielo" role="status">
+            <span class="dot" aria-hidden="true" />
+            <p class="small">
+              <strong>{ROW_COPY.viewingDecision}.</strong>{" "}
+              {ROW_COPY.viewingDecisionBody}
+            </p>
+            <a class="btn btn-secondary" href="/activity">
+              <Icon name="close" size={18} />
+              {ROW_COPY.clearDecision}
+            </a>
+          </div>
+        )
+      }
+
+      {
+        /*
+        Every arm is rendered and all but the current one hidden. Filtering is
+        live, so which arm is true changes without a navigation — and an arm
+        that only exists in one of the two render paths is an arm the island
+        cannot reach.
+      */
+      }
+      <div class="region" data-activity-region data-state={plan.mode}>
+        <div data-activity-error hidden={plan.mode !== "error"}>
+          <FeedNotice
+            kind="error"
+            title={errorTitle}
+            detail={errorDetail}
+            actionLabel={FEED_COPY.errorAction}
+            action="retry-feed"
+          />
+        </div>
+
+        <div data-activity-empty hidden={plan.mode !== "empty"}>
+          <FeedNotice
+            kind="empty"
+            title={emptyTitle}
+            detail={emptyDetail}
+            actionLabel={FEED_COPY.emptyFilteredAction}
+            action="clear-filters"
+            actionHidden={activeCount === 0}
+          />
+        </div>
+
+        {
+          /* Unreachable on the server — the read has already returned by the
+            time this renders — but the arm exists so the union is complete and
+            the island has something to reveal. */
+        }
+        <p
+          class="skeleton loading-block"
+          aria-label={FEED_COPY.loadingLabel}
+          hidden={plan.mode !== "loading"}
+        >
+        </p>
+
+        <div class="body" data-activity-body hidden={!hasRows}>
+          <ActivityTable groups={groups} count={total} />
+          <Pager filters={filters} page={filters.page} pageCount={pages} />
+        </div>
+
+        {
+          /* The code→name map the island hydrates from, so a record arriving
+            over the stream can name its project without a second read. */
+        }
+        <script
+          is:inline
+          type="application/json"
+          data-activity-projects
+          set:html={directoryJson}
+        />
+      </div>
+    </ActivityLive>
+  </section>
+</Shell>
+
+<style>
+  /* Same shape as the roster (`pages/team.astro`), because it is the same
+     grammar: a wide table inside its own scroller only scrolls if the track and
+     the arm above it are allowed to be narrower than it. */
+  .activity {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-5);
+  }
+
+  .activity > * {
+    min-width: 0;
+  }
+
+  .lead {
+    margin-top: var(--space-2);
+    color: var(--tinta-media);
+  }
+
+  .decision-banner {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background-color: var(--tone-wash);
+    border-color: color-mix(in srgb, var(--tone-solid) 30%, var(--hairline));
+    color: var(--tone-ink);
+  }
+
+  .decision-banner p {
+    margin-right: auto;
+    color: var(--tone-ink);
+  }
+
+  .region {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .region > [hidden] {
+    display: none;
+  }
+
+  .loading-block {
+    height: var(--space-8);
+  }
+</style>

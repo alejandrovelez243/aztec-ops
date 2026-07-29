@@ -1,0 +1,98 @@
+---
+import ProjectRailSection from "./ProjectRailSection.astro";
+import type { BoardSurfaceModel } from "./board-model";
+
+/**
+ * The rail: the portfolio as a narrow vertical stack, one band per project workflow state.
+ *
+ * This is the half an operations lead reads first — where every project currently sits — and
+ * the half they act on by dragging a card up or down into another state. It is deliberately
+ * narrow and deliberately scrollable as *one* column: the eye runs down a single list of
+ * zones instead of across a wall, which is what makes "what is blocked" a glance rather than
+ * a scan.
+ *
+ * One panel per engagement type, because `Workflow.objects.resolve` binds a graph per type:
+ * switching the select swaps the whole set of bands, not just their contents. Exactly one
+ * panel is ever visible; the others stay in the DOM so the switch costs no request.
+ *
+ * Presentational. The island owns selection, dragging, filtering and every live patch; this
+ * component decides the markup and holds the Spanish.
+ */
+export interface Props {
+  surfaces: readonly BoardSurfaceModel[];
+  /** Engagement type painted first; the browser may swap to the operator's stored choice. */
+  active: string;
+  /** The project rendered as selected, when one is. */
+  selectedCode?: string | null;
+}
+
+const { surfaces, active, selectedCode = null } = Astro.props;
+---
+
+<aside class="rail" data-rail data-scroller aria-label="Proyectos por estado">
+  {
+    surfaces.map((surface) => (
+      <section
+        class="rail-panel"
+        data-panel
+        data-engagement-code={surface.engagementType.code}
+        hidden={surface.engagementType.code !== active}
+        aria-label={`Proyectos de ${surface.engagementType.label}`}
+      >
+        {surface.sections.map((section) => (
+          <ProjectRailSection section={section} selectedCode={selectedCode} />
+        ))}
+      </section>
+    ))
+  }
+</aside>
+
+<style>
+  .rail {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    min-width: 0;
+    padding: var(--space-4);
+    background-color: var(--papel);
+    /* One column that scrolls as one: the stack of zones is the unit of reading. */
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior-y: contain;
+    scroll-snap-type: y proximity;
+  }
+
+  .rail-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    min-width: 0;
+  }
+
+  .rail-panel[hidden] {
+    display: none;
+  }
+
+  /* A carried card must land where the hand is, not where a snap point decides. */
+  :global(html[data-board-dragging="true"]) .rail {
+    scroll-snap-type: none;
+  }
+
+  /* Below the rail's own width it lies down: a horizontal strip of the same zones,
+     above the task board, still complete and still droppable. */
+  @media (max-width: 1023px) {
+    .rail {
+      overflow-x: auto;
+      overflow-y: hidden;
+      overscroll-behavior-x: contain;
+      scroll-snap-type: x proximity;
+      padding: var(--space-3) var(--space-4);
+    }
+
+    .rail-panel {
+      flex-direction: row;
+      align-items: flex-start;
+      gap: var(--space-4);
+    }
+  }
+</style>

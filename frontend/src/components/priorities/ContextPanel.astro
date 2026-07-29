@@ -1,0 +1,335 @@
+---
+/**
+ * The pinned context panel: the defence of one row's position.
+ *
+ * Above 1280px this sits in the board's right column, pinned while the queue
+ * scrolls. Below it, the very same node expands in place under its row — one DOM
+ * node, one set of ids, so the accordion and the panel can never disagree about what
+ * they show.
+ *
+ * Two rules govern what it renders. The computed score and a manual override are
+ * shown *side by side* and never merged: `score.value` is unchanged by an override,
+ * and a UI that shows one instead of the other destroys the only evidence that
+ * somebody argued with the ranking (`docs/API.md` §2.6). And every signal in the
+ * breakdown renders with the reason the engine persisted — a score without its
+ * breakdown is not shown at all, because it would be an unfalsifiable number.
+ */
+import type { RiskFlag, ScoreBreakdownEntry } from "../../lib/api/domain";
+import OverrideForm from "./OverrideForm.astro";
+import RiskChips from "./RiskChips.astro";
+import ScoreArc from "./ScoreArc.astro";
+import SignalBar from "./SignalBar.astro";
+import {
+  barRatio,
+  detailDomId,
+  formatInstant,
+  formatPoints,
+  formatRank,
+  widestContribution,
+} from "./format";
+import { toneForColor } from "./tone";
+
+export interface Props {
+  /** 1-based position in the queue as the server ordered it. */
+  rank: number;
+  code: string;
+  name: string;
+  clientAlias: string;
+  /** Operator-editable label of the workflow state; rendered, never translated. */
+  stateLabel: string;
+  /** The state's own colour, or `null` when the operator set none. */
+  stateColor: string | null;
+  ownerLabel: string | null;
+  nextStep: string | null;
+  /** Computed 0–100 score. Never the override's forced position. */
+  score: number;
+  policyVersion: string;
+  computedAt: string | null;
+  /** Signals in the server's order (descending contribution); rendered as sent. */
+  breakdown: readonly ScoreBreakdownEntry[];
+  riskFlags: readonly RiskFlag[];
+  /** Forced position, or `null` when the ranking is the engine's own. */
+  overridePosition: number | null;
+  /** The recorded justification; `null` exactly when there is no override. */
+  overrideReason: string | null;
+  /** How many rows the queue holds — the ceiling a forced position may take. */
+  queueSize: number;
+  /** Exactly one panel is visible; it belongs to the selected row. */
+  isSelected: boolean;
+}
+
+const {
+  rank,
+  code,
+  name,
+  clientAlias,
+  stateLabel,
+  stateColor,
+  ownerLabel,
+  nextStep,
+  score,
+  policyVersion,
+  computedAt,
+  breakdown,
+  riskFlags,
+  overridePosition,
+  overrideReason,
+  queueSize,
+  isSelected,
+} = Astro.props;
+
+const stateTone = toneForColor(stateColor);
+const widest = widestContribution(
+  breakdown.map((signal) => signal.contribution),
+);
+const computedLabel = computedAt === null ? null : formatInstant(computedAt);
+const hasOverride = overrideReason !== null;
+const trimmedNextStep = nextStep === null ? "" : nextStep.trim();
+---
+
+<section
+  class="detail card"
+  id={detailDomId(code)}
+  data-detail
+  data-code={code}
+  aria-label={`Contexto de ${name}`}
+  hidden={!isSelected}
+>
+  <header class="head">
+    <p class="tags">
+      <span class="chip chip-code">{code}</span>
+      <span class:list={["chip", stateTone.className]} style={stateTone.style}>
+        {stateLabel}
+      </span>
+    </p>
+    <h2 class="h2 name">{name}</h2>
+    <p class="small">
+      {clientAlias} · {ownerLabel ?? "sin responsable"}
+    </p>
+  </header>
+
+  <div class="score-block">
+    <ScoreArc value={score} />
+    <dl class="meta">
+      <dt class="label">Puesto</dt>
+      <dd class="figure">
+        <span data-slot="rank">{formatRank(rank)}</span> de <span
+          >{queueSize}</span
+        >
+      </dd>
+      <dt class="label">Política</dt>
+      <dd class="figure" data-slot="policy">{policyVersion}</dd>
+      <dt class="label">Calculado</dt>
+      <dd class="figure" data-slot="computed">
+        {computedLabel ?? "sin registro"}
+      </dd>
+    </dl>
+  </div>
+
+  <div class="manual well" data-override-state hidden={!hasOverride}>
+    <p class="tags">
+      <span class="chip tone-ambar">Ajuste manual</span>
+      <span class="small">
+        puesto forzado <span class="figure" data-slot="override-position"
+          >{overridePosition ?? "—"}</span
+        >
+      </span>
+    </p>
+    <p class="body-text" data-slot="override-reason">{overrideReason ?? ""}</p>
+    <p class="small" data-slot="override-actor">
+      El autor y la fecha del ajuste están en la ficha del proyecto.
+    </p>
+    <p>
+      <button
+        class="btn btn-ghost clear"
+        type="button"
+        data-action="clear-override"
+        data-ops-lead
+        aria-describedby={`${detailDomId(code)}-clear-hint`}
+        hidden
+      >
+        Quitar ajuste
+      </button>
+    </p>
+    <p class="small" id={`${detailDomId(code)}-clear-hint`}>
+      Devuelve el proyecto al orden que calculó el motor.
+    </p>
+  </div>
+
+  <section class="block">
+    <h3 class="label">Por qué está aquí</h3>
+    {
+      breakdown.length === 0 ? (
+        <p class="small">
+          El motor todavía no registró el desglose de este puntaje. Recalcula la
+          cartera para reconstruirlo.
+        </p>
+      ) : (
+        <ul class="signals" data-signals>
+          {breakdown.map((signal) => (
+            <SignalBar
+              code={signal.code}
+              label={signal.label}
+              points={formatPoints(signal.contribution)}
+              reason={signal.reason}
+              ratio={barRatio(signal.contribution, widest)}
+            />
+          ))}
+        </ul>
+      )
+    }
+  </section>
+
+  <section class="block">
+    <h3 class="label">Riesgos abiertos</h3>
+    <RiskChips flags={riskFlags} />
+  </section>
+
+  <section class="block">
+    <h3 class="label">Próximo paso</h3>
+    {
+      trimmedNextStep === "" ? (
+        <p>
+          <span class="chip tone-ambar">sin próximo paso</span>
+        </p>
+      ) : (
+        <p class="body-text">{trimmedNextStep}</p>
+      )
+    }
+  </section>
+
+  <footer class="actions">
+    <a class="btn btn-secondary" href={`/projects/${code}`}>Ver proyecto</a>
+    <button
+      class="btn btn-primary"
+      type="button"
+      data-action="open-override"
+      data-ops-lead
+      aria-expanded="false"
+      hidden
+    >
+      Ajustar prioridad
+    </button>
+  </footer>
+
+  <OverrideForm
+    code={code}
+    queueSize={queueSize}
+    currentPosition={overridePosition}
+  />
+</section>
+
+<style>
+  .detail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    padding: var(--space-5);
+  }
+
+  /*
+   * `hidden` must win over the flex display above it; the attribute's UA rule is
+   * weaker than a class selector, so an unhidden panel is the default failure.
+   */
+  .detail[hidden] {
+    display: none;
+  }
+
+  .head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .tags {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .name {
+    overflow-wrap: anywhere;
+  }
+
+  .score-block {
+    display: flex;
+    align-items: center;
+    gap: var(--space-5);
+    flex-wrap: wrap;
+  }
+
+  .meta {
+    display: grid;
+    grid-template-columns: auto auto;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-3);
+    min-width: 0;
+  }
+
+  .meta dd {
+    margin: 0;
+    color: var(--tinta);
+  }
+
+  .manual {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4);
+  }
+
+  .manual[hidden] {
+    display: none;
+  }
+
+  /*
+   * `.btn` sets `display: inline-flex`, which outranks the UA's `[hidden]` rule —
+   * without this, every ops-lead control would ship visible to everybody.
+   */
+  .clear[hidden],
+  .actions .btn[hidden] {
+    display: none;
+  }
+
+  .block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .signals {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  /* The master–detail frame; the number is argued in `pages/priorities.astro`. */
+  @media (min-width: 1280px) {
+    .detail {
+      /*
+       * Column two of the board's grid, spanning every row track so `sticky` has
+       * room to travel: the panel stays under the topbar while the queue scrolls.
+       */
+      grid-column: 2;
+      grid-row: 1 / -1;
+      align-self: start;
+      position: sticky;
+      top: calc(var(--size-topbar) + var(--space-4));
+      max-height: calc(100dvh - var(--size-topbar) - var(--space-6));
+      overflow-y: auto;
+    }
+  }
+
+  @media (max-width: 1279px) {
+    .detail {
+      margin-top: var(--space-2);
+    }
+  }
+</style>

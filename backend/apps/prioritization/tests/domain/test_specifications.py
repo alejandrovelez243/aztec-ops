@@ -36,7 +36,13 @@ class IsBlockedTests(SimpleTestCase):
 
     def test_detail_names_the_blocker_age_when_a_blocker_is_open(self) -> None:
         data = risk_input(open_blocker_count=1, oldest_blocker_age_days=19)
-        self.assertIn("19 day(s)", self.specification.detail(data))
+        self.assertIn("19 días", self.specification.detail(data))
+
+    def test_a_single_blocker_reads_in_the_singular(self) -> None:
+        """Spanish agrees the adjective too, so "1 bloqueos abiertos" is wrong twice."""
+        data = risk_input(open_blocker_count=1, oldest_blocker_age_days=1)
+        self.assertIn("1 bloqueo abierto", self.specification.detail(data))
+        self.assertIn("1 día", self.specification.detail(data))
 
     def test_a_quiet_project_is_not_blocked(self) -> None:
         self.assertFalse(
@@ -50,14 +56,16 @@ class IsOverdueTests(SimpleTestCase):
     specification = IsOverdue()
 
     def test_past_target_date_is_overdue_and_the_detail_counts_the_days(self) -> None:
-        data = risk_input(target_date=NOW.date() - timedelta(days=6))
+        target_date = NOW.date() - timedelta(days=6)
+        data = risk_input(target_date=target_date)
         self.assertTrue(self.specification.is_satisfied_by(data))
-        self.assertIn("6 day(s) past the target date", self.specification.detail(data))
+        self.assertIn("6 días de retraso", self.specification.detail(data))
+        self.assertIn(target_date.isoformat(), self.specification.detail(data))
 
     def test_late_tasks_are_overdue_even_when_the_project_date_still_holds(self) -> None:
         data = risk_input(target_date=NOW.date() + timedelta(days=30), overdue_task_count=4)
         self.assertTrue(self.specification.is_satisfied_by(data))
-        self.assertIn("4 task(s)", self.specification.detail(data))
+        self.assertIn("4 tareas pasaron su fecha", self.specification.detail(data))
 
 
 class HasNoNextStepTests(SimpleTestCase):
@@ -113,8 +121,9 @@ class OwnerOverloadedTests(SimpleTestCase):
     def test_load_above_capacity_names_both_numbers(self) -> None:
         data = risk_input(owner_code="camila", owner_load_points=24, owner_capacity_points=20)
         self.assertTrue(self.specification.is_satisfied_by(data))
-        self.assertIn("24 point(s)", self.specification.detail(data))
-        self.assertIn("20", self.specification.detail(data))
+        self.assertIn("24 puntos", self.specification.detail(data))
+        self.assertIn("20 puntos", self.specification.detail(data))
+        self.assertIn("camila", self.specification.detail(data))
 
 
 class SpecificationCompositionTests(SimpleTestCase):
@@ -127,7 +136,12 @@ class SpecificationCompositionTests(SimpleTestCase):
 
         blocked_or_overdue = IsBlocked() | IsOverdue()
         self.assertTrue(blocked_or_overdue.is_satisfied_by(data))
-        self.assertIn("past the target date", blocked_or_overdue.detail(data))
+        self.assertIn("de retraso sobre la fecha objetivo", blocked_or_overdue.detail(data))
+
+    def test_a_composite_names_itself_from_the_operands_it_was_built_from(self) -> None:
+        """A composed specification is registrable, so it needs a label like any other."""
+        self.assertEqual((IsBlocked() | IsOverdue()).label, "Bloqueado o Vencido")
+        self.assertEqual((~IsBlocked()).label, "No bloqueado")
 
 
 class RiskEvaluationTests(SimpleTestCase):
@@ -147,9 +161,18 @@ class RiskEvaluationTests(SimpleTestCase):
                 self.assertIn(flag.severity, set(Severity))
                 self.assertNotEqual(flag.detail, "")
 
+    def test_every_raised_flag_is_named_so_no_client_has_to_map_the_code(self) -> None:
+        """The label reaches the wire with the flag; that is what keeps rule 8 a backend change."""
+        data = risk_input(open_blocker_count=2, oldest_blocker_age_days=19)
+        for flag in evaluate_risk(data):
+            with self.subTest(flag=flag.code):
+                self.assertNotEqual(flag.label, "")
+                self.assertNotEqual(flag.label, flag.code)
+                self.assertEqual(flag.to_view().label, flag.label)
+
     def test_health_is_derived_from_severity_not_from_a_field(self) -> None:
-        critical = (RiskFlag(code="BLOCKED", severity=Severity.CRITICAL, detail="."),)
-        medium = (RiskFlag(code="STALE", severity=Severity.MEDIUM, detail="."),)
+        critical = (RiskFlag(code="BLOCKED", severity=Severity.CRITICAL, label="B", detail="."),)
+        medium = (RiskFlag(code="STALE", severity=Severity.MEDIUM, label="I", detail="."),)
         self.assertEqual(derive_health(critical), Health.BLOCKED)
         self.assertEqual(derive_health(medium), Health.AT_RISK)
         self.assertEqual(derive_health(()), Health.HEALTHY)

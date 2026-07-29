@@ -39,8 +39,18 @@ from typing import ClassVar, Self
 from django.contrib.auth.models import AbstractUser
 from django.contrib.auth.models import UserManager as AuthUserManager
 from django.db import models
+from django.utils.text import slugify
 
-from apps.shared.refs import ActorRef
+from apps.accounts.domain.views import MemberView
+from apps.shared.refs import ActorRef, TaxonomyRef
+
+#: Longest a minted code may be, mirroring ``accounts_user.code``.
+CODE_MAX_LENGTH = 32
+
+#: What a name that slugifies to nothing becomes. A person whose label is written entirely in
+#: punctuation, or in a script ``slugify`` strips, still has to be registerable — an operator
+#: cannot be told their colleague's name is unacceptable.
+FALLBACK_CODE_STEM = "persona"
 
 #: Default weekly capacity of a person, in points. It is the divisor of owner load, so the
 #: database refuses zero (DATA_MODEL §9.2) and the default is a working week's worth of tasks.
@@ -96,6 +106,96 @@ class UserQuerySet(models.QuerySet["User"]):
         operation"; a second flag for the roster would be the same fact stored twice.
         """
         return self.filter(is_active=True)
+
+    def inactive(self) -> "UserQuerySet":
+        """Narrow to the people retired from the operation.
+
+        Named rather than left to callers as ``.exclude(is_active=True)``, because the roster
+        screen offers it as a filter and a negation written at three call sites is three chances
+        to write ``.exclude(active())``, which is not the same query.
+        """
+        return self.filter(is_active=False)
+
+    def with_role_in(self, role_codes: Sequence[str]) -> "UserQuerySet":
+        """Narrow to the people classified under any of these roles.
+
+        An empty sequence is a no-op rather than "nobody", the opposite of :meth:`by_codes`: this
+        is a facet an operator either applied or did not, and an unticked filter must not empty
+        the roster.
+
+        Args:
+            role_codes: ``catalog.Role.code`` values.
+        """
+        if not role_codes:
+            return self
+        return self.filter(role__code__in=list(role_codes))
+
+    def matching(self, term: str) -> "UserQuerySet":
+        """Narrow to the people whose code or display name contains ``term``.
+
+        Case-insensitive substring, deliberately not a full-text search: the haystack is a roster
+        of a few dozen names, an operator typing "cami" means "start of a word I half remember",
+        and ranking is what the ordering already decides.
+
+        A blank or whitespace-only term is a no-op rather than a match against ``""``, so an empty
+        search box shows everybody instead of appearing to filter.
+
+        Args:
+            term: Raw text from the search field.
+        """
+        needle = term.strip()
+        if not needle:
+            return self
+        return self.filter(models.Q(code__icontains=needle) | models.Q(alias__icontains=needle))
+
+    def allocate_code(self, label: str) -> str:
+        """Mint the code for a person named ``label`` — ``"Alejandro Vélez"`` → ``alejandro.velez``.
+
+        **Ends the chain**: it queries the codes already in use.
+
+        Derived from the name rather than typed, and the reason is that this string is permanent.
+        It is the person's username, the ``actor`` of every activity record they cause and the
+        ``entity.id`` of every event about them, so a typo made once in a form is a typo the audit
+        trail carries forever. A name is something an operator can be trusted to spell; a slug is
+        not something they should have to invent.
+
+        First and last token, matching the convention the seeded roster already follows
+        (``camila.torres``). A middle name is dropped rather than concatenated: the code is an
+        identifier, not a full legal name, and ``maria.de.los.angeles.perez`` is nobody's idea of
+        one.
+
+        A collision appends the lowest free number — ``alejandro.velez2`` — rather than raising.
+        Two people genuinely share a name; refusing to register the second is not an option, and
+        asking the operator to invent a distinguishing slug is the typo risk this method exists to
+        remove.
+
+        Not collision-proof under concurrency: two simultaneous creations can read the same free
+        code and the unique constraint rejects the loser. Acceptable while registering a person is
+        an operator filling a form, exactly as it is for ``Project.objects.next_code``.
+
+        Args:
+            label: The display name, as the operator typed it.
+
+        Returns:
+            A code no current row carries. Never empty: a name that slugifies to nothing — one
+            written entirely in punctuation or in a script ``slugify`` strips — falls back to
+            :data:`FALLBACK_CODE_STEM`, because a person with no identifier cannot be saved at all.
+        """
+        # ``slugify`` strips the accents and the punctuation and joins on "-"; the dot is this
+        # roster's own separator, so the two are one substitution apart.
+        stem = slugify(label).replace("-", ".").strip(".")[:CODE_MAX_LENGTH] or FALLBACK_CODE_STEM
+        parts = stem.split(".")
+        base = f"{parts[0]}.{parts[-1]}" if len(parts) > 1 else parts[0]
+
+        taken = set(self.model.objects.filter(code__startswith=base).values_list("code", flat=True))
+        if base not in taken:
+            return base
+        # Starts at 2, so the second Alejandro Vélez is ``alejandro.velez2`` and the first keeps
+        # the unadorned code they were already registered under.
+        suffix = 2
+        while f"{base}{suffix}" in taken:
+            suffix += 1
+        return f"{base}{suffix}"
 
     def keyed_by_code(self) -> dict[str, "User"]:
         """Materialise the selection as a mapping of code to person, ending the chain.
@@ -216,4 +316,35 @@ class User(AbstractUser):
             code=self.code,
             label=self.alias,
             role=self.role.label if self.role else None,
+        )
+
+    def to_member_view(self) -> MemberView:
+        """Describe this person as the roster write routes hand them back.
+
+        A second projection beside :meth:`to_ref` rather than a widening of it, because the two
+        answer different questions. ``ActorRef`` is "who is the owner of this project" and appears
+        inside dozens of payloads, where a capacity and an ``is_active`` would be noise nobody
+        renders; this one is "the row you just edited", and a form needs the role's ``code`` to
+        preselect its picker, which ``ActorRef`` deliberately does not carry.
+
+        Reads ``role`` through the relation, so a caller projecting many people chains
+        :meth:`UserQuerySet.with_role` first.
+
+        Returns:
+            The person as an immutable :class:`~apps.accounts.domain.views.MemberView`.
+        """
+        return MemberView(
+            alias=self.code,
+            label=self.alias,
+            role=(
+                TaxonomyRef.of(code=self.role.code, label=self.role.label, color=self.role.color)
+                if self.role is not None
+                else None
+            ),
+            weekly_capacity_points=self.weekly_capacity_points,
+            is_active=self.is_active,
+            is_ops_lead=self.is_ops_lead,
+            # ``has_usable_password`` is false for a seeded person whose hash was never set, which
+            # is the fact the roster shows as "cannot sign in yet" — never the hash itself.
+            has_password=self.has_usable_password(),
         )

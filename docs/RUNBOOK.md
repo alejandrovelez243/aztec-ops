@@ -588,6 +588,59 @@ timer.
 - If the loop only happens with the app open in several tabs, check the per-origin connection cap:
   one connection per tab is expected, one per island is a bug.
 
+## 12b. The frontend container crash-loops with "Another astro dev server is already running"
+
+**Symptom.** `make up` brings everything else up, but `frontend` restarts over and over, logging:
+
+```
+Another astro dev server is already running.
+  URL:  http://localhost:4321
+  PID:  18
+```
+
+The pid is always the same small number, and nothing is actually listening on 4321.
+
+**Cause.** Astro records the dev server's pid in `frontend/.astro/dev.json`. That path is inside
+the bind-mounted source tree, so the file outlives the container that wrote it — a `stop`, a
+crash or a `SIGKILL` never gets to remove it. The next container numbers its own processes from 1
+again, the recorded pid names a live process there, and Astro refuses to start. `restart:
+on-failure:5` turns that refusal into a loop.
+
+**Fix.** Already in the image: the frontend `CMD` deletes `.astro/dev.json` before starting the
+dev server. One container runs exactly one dev server, so a lock present at startup can only be
+stale. If you hit this on an image built before that change, rebuild it:
+
+```bash
+rm -f frontend/.astro/dev.json
+docker compose build frontend && docker compose up -d --force-recreate frontend
+```
+
+**Do not use `astro dev --force` here.** Its remedy is to kill the recorded pid, which inside the
+new container is Astro's own npm parent: the server shuts itself down on startup, exiting with
+`npm error signal SIGTERM` instead of the lock message. That is a worse failure, because it looks
+like an unrelated crash.
+
+## 12c. Tests fail with `database "test_aztec" does not exist`
+
+**Symptom.** `make test` reports errors on tests that have nothing to do with each other, all of
+them at setup, with `django.db.utils.OperationalError: ... database "test_aztec" does not exist —
+It seems to have just been dropped or renamed.` Running the same files again on their own passes.
+
+**Cause.** Two test runs at once. Django derives one test-database name from the real one, so both
+runs target `test_aztec`; the second run's setup drops it while the first is still using it. The
+failures land on whichever tests happened to be running, which is why they look random and why the
+file you blame passes in isolation.
+
+**Fix.** Give each run its own database with `TEST_DB_SUFFIX`:
+
+```bash
+docker compose exec -T -e TEST_DB_SUFFIX=_mine api python -m pytest apps
+```
+
+The suffix is empty by default, so a single run keeps the ordinary name. Reach for it whenever
+something else might be testing at the same time — a parallel agent, a colleague on the same host,
+a second shell.
+
 ## 13. `loaddata` fails on a foreign key, or appears to duplicate rows
 
 **Symptom A.** `DeserializationError: Problem installing fixture ... matching query does not exist`.
@@ -709,6 +762,34 @@ The same thing lives in the admin as **"Recompute priority for selected projects
 repair tool, not a workaround: if you need it after every change, the event chain is broken and one
 of §8-§10 applies. Note that it emits no event, so an open dashboard will not see the new score
 until its next legitimate event.
+
+**When a recompute reports `changed: 0` and the rows are still wrong.** Recomputation
+short-circuits when `input_hash` and `policy_version` both match the stored row — same facts, same
+criterion, so no write. The hash covers the *facts*, not the engine, so a release that only changed
+what a signal *says* (its label, the wording of its `reason`) leaves every stored `breakdown`
+untouched, forever, until some fact moves. That is the correct default for an audit trail and the
+wrong one right after such a release. Clear the cache key and recompute — `input_hash` is blank by
+default and blank means "unknown", so this asks for a genuine rebuild rather than faking one:
+
+```bash
+docker compose exec api python manage.py shell -c "
+from apps.prioritization.models import PriorityScore
+PriorityScore.objects.update(input_hash='')"
+curl -s -X POST localhost:8000/api/v1/recompute -H "Authorization: Bearer $TOKEN"
+```
+
+The read model holds its own copy of the document, and the recompute emits nothing, so the queue
+keeps serving the old sentences until each project's next event. Rebuild it in the same pass:
+
+```bash
+docker compose exec api python manage.py shell -c "
+from django.utils import timezone
+from apps.portfolio.models import Project
+from apps.portfolio.services.rebuild_snapshot import rebuild_snapshot
+now = timezone.now()
+for code in Project.objects.values_list('code', flat=True):
+    rebuild_snapshot(project_code=code, now=now)"
+```
 
 If the score changed but the number looks wrong rather than stale, the active `PriorityPolicy`
 version may have moved. Every `PriorityScore` persists `policy_version` and its per-signal

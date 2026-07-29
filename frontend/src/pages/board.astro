@@ -1,0 +1,290 @@
+---
+import BoardCanvas from "../islands/BoardCanvas.astro";
+import BoardNotice from "../components/board/BoardNotice.astro";
+import BoardSkeleton from "../components/board/BoardSkeleton.astro";
+import Shell from "../layouts/Shell.astro";
+import {
+  NO_MEMBER_PHOTOS,
+  buildMembers,
+  buildSurfaces,
+  findCardLocation,
+} from "../components/board/board-model";
+import type {
+  BoardSurfaceModel,
+  MemberChipModel,
+  ProjectCardModel,
+  Tone,
+} from "../components/board/board-model";
+import { BOARD_PROJECT_PARAM } from "../components/board/board-dom";
+import { getQueue, getTeamLoad, getWorkflows } from "../lib/api/client";
+import type { ApiErrorCode } from "../lib/api/errors";
+import type { QueuePage, WorkflowCatalog } from "../lib/api/domain";
+import { assertNever, toViewState } from "../lib/view-state";
+import type { ViewState } from "../lib/view-state";
+
+/**
+ * `/board` — "Tablero": the portfolio as a rail of workflow states, and the selected
+ * project's work as the board beside it. Full-bleed.
+ *
+ * This file is a container and nothing else (`PATTERNS_FRONTEND.md` §5): it fetches on the
+ * server, turns the answers into the surface's view model, and hands that to
+ * `islands/BoardCanvas.astro`, which owns every interaction from there. No component below
+ * fetches anything for the first paint, and the island never refetches what this render
+ * already produced.
+ *
+ * Three reads, in parallel, because the toolbar, the rail and the columns are one screen and
+ * three round trips in series is a screen that paints in three parts:
+ *
+ * - `GET /api/v1/queue` is the read model that already carries state, engagement type, owner,
+ *   due date, risk flags and score per project — exactly the card — in one request.
+ * - `GET /api/v1/workflows` is what makes an *unoccupied* state renderable, and therefore
+ *   droppable. Without it the bands could only be the states projects happen to sit in, so an
+ *   empty "Bloqueado" would have no band, the rail could not say nothing is blocked, and a
+ *   card would have nowhere to be dropped. It publishes no transitions on purpose: legality
+ *   still comes from the aggregate's own `transitions` (`docs/API.md` §2.18).
+ * - `GET /api/v1/team/load` is the roster behind the "Miembros" bar; it also carries what each
+ *   person is currently holding, which is what the avatar's accessible name says out loud.
+ *
+ * Only the queue can fail the page. A failed roster costs the owner filter and says so; a
+ * failed workflow catalog costs the empty states — the bands fall back to the occupied ones —
+ * and says so too. Neither is worth blanking a board an operator is reading (`FRONTEND.md` §1).
+ */
+
+/**
+ * One page big enough to hold the whole portfolio.
+ *
+ * The server clamps to `MAX_PAGE_SIZE` (200), and a board is not a paginated surface: half a
+ * portfolio is not a portfolio. A portfolio that outgrows this needs per-band paging, which is
+ * a different design, not a bigger number.
+ */
+const BOARD_PAGE_SIZE = 200;
+
+/** What the page decided to render, after the fetch and before the markup. */
+type BoardRender =
+  | { kind: "loading" }
+  | { kind: "empty"; detail: string }
+  | { kind: "error"; detail: string }
+  | {
+      kind: "board";
+      surfaces: BoardSurfaceModel[];
+      defaultEngagement: string;
+      connection: "live" | "stale";
+      lastEventAt: string | null;
+      selected: { card: ProjectCardModel; tone: Tone } | null;
+    };
+
+const EMPTY_DETAIL =
+  "El carril dibuja una banda por cada estado del flujo. En cuanto exista un proyecto activo, aparecerá aquí.";
+
+const MEMBERS_FAILED =
+  "No pudimos cargar el equipo, así que el filtro por responsable no está disponible.";
+
+const WORKFLOWS_FAILED =
+  "No pudimos leer los flujos de trabajo, así que solo se dibujan los estados que hoy tienen trabajo: puede faltar alguna banda o columna vacía.";
+
+/**
+ * Spanish copy per failure code. `error.message` is generated English prose meant for logs
+ * (`docs/API.md` §4.2), so the view maps the machine code and never renders the message.
+ */
+function errorDetail(code: ApiErrorCode): string {
+  switch (code) {
+    case "network_error":
+      return "No pudimos hablar con el servidor. Revisa la conexión y vuelve a intentarlo.";
+    case "not_found":
+      return "La cola de proyectos no respondió a esta petición.";
+    case "validation_error":
+      return "El servidor rechazó los parámetros con los que pedimos el tablero.";
+    case "authentication_required":
+    case "invalid_token":
+    case "invalid_credentials":
+      return "Tu sesión ya no es válida. Vuelve a iniciar sesión para ver el tablero.";
+    case "permission_denied":
+      return "Tu cuenta no tiene permiso para leer el portafolio completo.";
+    case "transition_not_allowed":
+    case "conflicting_state":
+    case "domain_error":
+    case "unknown_error":
+      return "El servidor respondió con un error inesperado al armar el tablero.";
+    default:
+      return "El servidor respondió con un error inesperado al armar el tablero.";
+  }
+}
+
+/**
+ * Maps the view state onto what the markup renders, exhaustively.
+ *
+ * `ready` and `disconnected` share the board arm on purpose: the disconnected state keeps the
+ * data on screen and marks it stale, because blanking a board an operator is reading is the
+ * one failure mode this surface must not have (`FRONTEND.md` §1).
+ *
+ * `requestedProject` decides two things at once: which card renders selected, and which
+ * portfolio is on screen — a link to a project of another engagement type must open the rail
+ * that project actually lives on, not the alphabetically first one.
+ */
+function planBoard(
+  state: ViewState<QueuePage>,
+  catalog: WorkflowCatalog | null,
+  requestedProject: string | null,
+  now: Date,
+): BoardRender {
+  switch (state.kind) {
+    case "loading":
+      return { kind: "loading" };
+    case "empty":
+      return { kind: "empty", detail: state.message };
+    case "error":
+      return { kind: "error", detail: errorDetail(state.code) };
+    case "ready":
+    case "disconnected": {
+      const surfaces = buildSurfaces(state.data.items, catalog, now);
+      const first = surfaces[0];
+      if (first === undefined) return { kind: "empty", detail: EMPTY_DETAIL };
+      const located =
+        requestedProject === null
+          ? null
+          : findCardLocation(surfaces, requestedProject);
+      return {
+        kind: "board",
+        surfaces,
+        defaultEngagement:
+          located === null
+            ? first.engagementType.code
+            : located.surface.engagementType.code,
+        connection: state.kind === "ready" ? "live" : "stale",
+        lastEventAt: state.lastEventAt,
+        selected:
+          located === null
+            ? null
+            : { card: located.card, tone: located.section.tone },
+      };
+    }
+    default:
+      return assertNever(state);
+  }
+}
+
+const requestedProject = Astro.url.searchParams.get(BOARD_PROJECT_PARAM);
+
+const [result, teamResult, workflowResult] = await Promise.all([
+  getQueue({ page: 1, page_size: BOARD_PAGE_SIZE }),
+  getTeamLoad(),
+  getWorkflows(),
+]);
+
+/**
+ * `"connecting"` is the honest stream status during a server render: the browser has not
+ * opened the connection yet, so the board is neither live nor known to be stale. The island
+ * corrects it within a frame of hydrating, from the store's own status.
+ */
+const state = toViewState(result, "connecting", {
+  isEmpty: (page) => page.items.length === 0,
+  emptyMessage: EMPTY_DETAIL,
+  lastEventAt: null,
+});
+
+const catalog: WorkflowCatalog | null = workflowResult.ok
+  ? workflowResult.data
+  : null;
+const workflowsNote = workflowResult.ok ? null : WORKFLOWS_FAILED;
+
+const plan = planBoard(state, catalog, requestedProject, new Date());
+
+/**
+ * The roster, or nothing plus a sentence saying why.
+ *
+ * `NO_MEMBER_PHOTOS` is the lookup, because `TeamLoadView` carries no image field today; the
+ * day it does, this is the one line that changes and every avatar starts rendering photos.
+ */
+const members: readonly MemberChipModel[] = teamResult.ok
+  ? buildMembers(teamResult.data.items, NO_MEMBER_PHOTOS)
+  : [];
+const membersNote = teamResult.ok ? null : MEMBERS_FAILED;
+---
+
+<Shell
+  title="Tablero"
+  active="board"
+  wide
+  crumbs={[{ label: "Inicio", href: "/" }, { label: "Tablero" }]}
+>
+  <header class="head">
+    <h1 class="h1" lang="es">Tablero</h1>
+    <p class="body-text" lang="es">
+      A la izquierda, cada proyecto en su estado: arrástralo hacia arriba o
+      hacia abajo para moverlo de fase. Elige uno y a la derecha aparecen sus
+      tareas, una columna por estado, para moverlas de izquierda a derecha.
+    </p>
+  </header>
+
+  {plan.kind === "loading" && <BoardSkeleton />}
+
+  {
+    plan.kind === "empty" && (
+      <div class="notice-wrap">
+        <BoardNotice
+          kind="empty"
+          title="Todavía no hay nada en el muro"
+          detail={plan.detail}
+          link={{ label: "Ir a Proyectos", href: "/projects" }}
+        />
+      </div>
+    )
+  }
+
+  {
+    plan.kind === "error" && (
+      <div class="notice-wrap">
+        <BoardNotice
+          kind="error"
+          title="No pudimos cargar el tablero"
+          detail={plan.detail}
+          retryLabel="Reintentar"
+        />
+      </div>
+    )
+  }
+
+  {
+    plan.kind === "board" && (
+      <BoardCanvas
+        surfaces={plan.surfaces}
+        defaultEngagement={plan.defaultEngagement}
+        connection={plan.connection}
+        lastEventAt={plan.lastEventAt}
+        members={members}
+        membersNote={membersNote}
+        workflowsNote={workflowsNote}
+        selected={plan.selected}
+      />
+    )
+  }
+</Shell>
+
+<style>
+  /* The page owns its own gutters now that the shell hands over a full-bleed
+     region (`Shell.astro`, the `wide` prop). */
+  .head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-5) var(--space-5) var(--space-4);
+  }
+
+  .head p {
+    color: var(--tinta-media);
+  }
+
+  .notice-wrap {
+    padding: 0 var(--space-5) var(--space-6);
+  }
+
+  @media (max-width: 767px) {
+    .head {
+      padding: var(--space-4) var(--space-4) var(--space-3);
+    }
+
+    .notice-wrap {
+      padding: 0 var(--space-4) var(--space-5);
+    }
+  }
+</style>

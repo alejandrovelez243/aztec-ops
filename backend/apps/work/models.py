@@ -31,7 +31,14 @@ from django.db.models import Count, F, Min, Q
 
 from apps.shared.refs import TaxonomyRef
 from apps.work.domain.value_objects import BlockerKind, OpenBlockerSummary, ProjectTaskCounts
-from apps.work.domain.views import BlockerView, DependencyRef, NoteView, TaskView
+from apps.work.domain.views import (
+    BlockerView,
+    DependencyRef,
+    NoteView,
+    TaskDetailView,
+    TaskProjectRef,
+    TaskView,
+)
 from apps.workflow.models import StateCategory
 
 if TYPE_CHECKING:
@@ -39,6 +46,7 @@ if TYPE_CHECKING:
 
     from apps.accounts.models import User
     from apps.portfolio.models import Project
+    from apps.workflow.domain.views import TransitionOption
 
 #: ``choices`` rendered from the domain enum, so the closed set is declared once. It is a
 #: structural vocabulary, not a taxonomy: adding a member is a migration, by design.
@@ -350,6 +358,11 @@ class Task(models.Model):
     due_date = models.DateField(null=True, blank=True)
     title = models.CharField(max_length=200)
     detail = models.TextField(default="", blank=True)
+    #: The long-form description, Markdown as the operator wrote it.
+    #: Separate from ``detail``, which stays the one-line summary the task lists
+    #: and the header subtitle render: a field that had to serve both would make
+    #: every table row carry a document.
+    description = models.TextField(default="", blank=True)
     last_progress = models.CharField(max_length=255, default="", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -405,6 +418,59 @@ class Task(models.Model):
             is_overdue=self.due_date is not None and self.due_date < today,
             last_progress=self.last_progress,
             dependencies=tuple(edge.to_ref() for edge in self.dependencies.all()),
+        )
+
+    def to_detail_view(
+        self,
+        *,
+        today: date,
+        transitions: tuple[TransitionOption, ...],
+        notes: tuple[NoteView, ...],
+    ) -> TaskDetailView:
+        """Describe this task as the single-screen projection the task detail renders.
+
+        The task maps its own columns — including the reference to the project it hangs off, which
+        is a projection of a field it already holds. The two collections it cannot derive are
+        passed in: ``transitions`` belongs to the workflow context and ``notes`` to a sibling table,
+        and a model that queried either would put an N+1 inside a projection and make the legal-move
+        set a property of the row rather than of the graph.
+
+        Reads ``project``, ``priority``, ``workflow_state``, ``assignee`` and the prefetched
+        ``dependencies``; chain :meth:`TaskQuerySet.with_relations` and
+        :meth:`TaskQuerySet.with_dependencies` on the query that produced this instance, or the
+        response costs six queries.
+
+        Args:
+            today: The date ``is_overdue`` is measured against, supplied by the caller so the whole
+                response — and a replay of it — uses one instant.
+            transitions: The active edges leaving this task's current state, already projected.
+                Empty means the task is terminal, which is a legitimate answer and not a defect.
+            notes: The task's comments, newest first, already projected.
+
+        Returns:
+            The task as an immutable :class:`~apps.work.domain.views.TaskDetailView`.
+        """
+        return TaskDetailView(
+            code=self.code,
+            title=self.title,
+            detail=self.detail,
+            description=self.description,
+            project=TaskProjectRef(code=self.project.code, name=self.project.name),
+            assignee=self.assignee.to_ref() if self.assignee else None,
+            priority=TaxonomyRef.of(
+                code=self.priority.code,
+                label=self.priority.label,
+                color=self.priority.color,
+            ),
+            state=self.workflow_state.to_ref(),
+            due_date=self.due_date,
+            is_overdue=self.due_date is not None and self.due_date < today,
+            last_progress=self.last_progress,
+            dependencies=tuple(edge.to_ref() for edge in self.dependencies.all()),
+            transitions=transitions,
+            notes=notes,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
         )
 
 
@@ -745,15 +811,39 @@ class NoteQuerySet(models.QuerySet["Note"]):
             return self.filter(project_id=project)
         return self.filter(project=project)
 
+    def for_task(self, task: Task | int | str) -> NoteQuerySet:
+        """Narrow to the comments written against one task, named by row, primary key or code.
+
+        Strictly narrower than :meth:`for_project`: a project-level note carries no task and is
+        excluded here, which is the point. The task detail shows the conversation about *this*
+        piece of work, and folding the project's own timeline into it would make every task on the
+        project look like it was being discussed.
+        """
+        if isinstance(task, str):
+            return self.filter(task__code=task)
+        if isinstance(task, int):
+            return self.filter(task_id=task)
+        return self.filter(task=task)
+
     def recent(self, limit: int) -> NoteQuerySet:
         """The newest ``limit`` notes of the current selection, newest first.
 
-        Backed by the ``(project, -created_at)`` index, so ``limit`` stops the scan after that
-        many index entries however large the table grows. Slicing is what makes this the last
-        *filtering* step: the result is still lazy, but Django refuses further ``filter()``
-        calls on it, so chain the scope — ``Note.objects.for_project(pk).recent(20)``.
+        Backed by the ``(project, -created_at)`` index when scoped by :meth:`for_project` and by
+        the partial ``(task, -created_at)`` one when scoped by :meth:`for_task`, so ``limit`` stops
+        the scan after that many index entries however large the table grows. Slicing is what makes
+        this the last *filtering* step: the result is still lazy, but Django refuses further
+        ``filter()`` calls on it, so chain the scope — ``Note.objects.for_project(pk).recent(20)``.
         """
         return self.select_related("task").order_by("-created_at")[:limit]
+
+    def as_views(self) -> tuple[NoteView, ...]:
+        """Materialise the selection as the projections the API renders.
+
+        **Ends the chain**: the query executes here, so nothing downstream can narrow the set after
+        the response shape was decided. Chain the scope and :meth:`recent` first —
+        ``Note.objects.for_task(pk).recent(50).as_views()``.
+        """
+        return tuple(note.to_view() for note in self)
 
 
 class Note(models.Model):
@@ -794,6 +884,14 @@ class Note(models.Model):
         ]
         indexes = [
             models.Index(fields=["project", "-created_at"], name="work_note_project_recent"),
+            # Partial: most notes hang off the project alone, and the task detail's read never
+            # looks at those. Indexing them would double the write cost of every project note to
+            # serve a query that excludes it by definition.
+            models.Index(
+                fields=["task", "-created_at"],
+                condition=Q(task__isnull=False),
+                name="work_note_task_recent",
+            ),
         ]
 
     def __str__(self) -> str:

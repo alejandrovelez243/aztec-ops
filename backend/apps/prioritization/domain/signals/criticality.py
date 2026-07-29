@@ -19,6 +19,9 @@ class Criticality:
     from the admin. Boundaries: no urgent open tasks returns 0.0; five or more returns 1.0.
     """
 
+    # Spanish on purpose: ``label`` and every ``reason`` below are user-facing (CLAUDE.md §Language).
+    label = "Criticidad"
+
     def evaluate(self, data: SignalInput) -> SignalResult:
         """Read the volume of urgent open work.
 
@@ -30,10 +33,10 @@ class Criticality:
             The normalized volume and a sentence naming the count.
         """
         if data.urgent_open_task_count == 0:
-            return SignalResult(score=0.0, reason="No open tasks at an urgent priority.")
+            return SignalResult(score=0.0, reason="Sin tareas abiertas de prioridad urgente.")
 
         score = data.urgent_open_task_count / URGENT_SATURATION_TASKS
         return SignalResult.clamped(
             round(score, 4),
-            f"{data.urgent_open_task_count} open task(s) at an urgent priority.",
+            f"{data.urgent_open_task_count} tarea(s) abierta(s) de prioridad urgente.",
         )

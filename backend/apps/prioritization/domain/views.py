@@ -16,7 +16,7 @@ Pure Pydantic, no Django: a consumer, a test or a router can construct one witho
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 #: Keys of the breakdown document written by ``ScoreBreakdown.as_document`` (DATA_MODEL §6.3).
 #: Named rather than inlined because this module *reads* a document another module writes, and a
@@ -33,15 +33,48 @@ class ScoreSignalView(BaseModel):
     ``contribution`` is ``raw * weight * 100`` as it was computed, not as the client should
     recompute it — floating point in a browser would put a row a hundredth of a point out of order
     against a server that used ``Decimal``.
+
+    ``label`` is the Spanish name of what the signal measures and ``reason`` the Spanish sentence
+    naming the fact it read. Both ship from the server because `docs/standards/FRONTEND.md` forbids
+    any table in the frontend keyed by signal code — which is exactly what keeps a seventh signal a
+    backend-only change. ``label`` is non-empty by validation; ``code`` stays on the wire as the
+    stable identifier a client may key state on, never as something to render.
     """
 
     model_config = ConfigDict(frozen=True)
 
     code: str
+    label: str = Field(min_length=1)
     raw: float
     weight: float
     contribution: float
     reason: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _caption_a_row_written_before_labels(cls, data: object) -> object:
+        """Fill in the label of a breakdown line persisted before the field existed.
+
+        Labels are stored with the line (see
+        :class:`~apps.prioritization.domain.types.SignalContribution`), so every document written
+        from now on carries its own. A row written earlier carries none, and it must degrade to a
+        readable caption rather than to a validation error that empties the whole breakdown — the
+        queue would then show a score nobody can defend.
+
+        Args:
+            data: Whatever pydantic was handed; only a mapping is inspected, anything else is
+                passed through for the normal validation to reject.
+
+        Returns:
+            The input unchanged when it already carries a label, otherwise a copy captioned from
+            the registry — or from the code itself, when no strategy claims that code any more.
+        """
+        if not isinstance(data, dict) or data.get("label"):
+            return data
+        code = data.get("code")
+        if not isinstance(code, str) or not code:
+            return data
+        return {**data, "label": _current_label(code)}
 
 
 class ScoreView(BaseModel):
@@ -125,15 +158,44 @@ class RiskFlagView(BaseModel):
     """One raised risk, as the panels and the row indicators render it.
 
     ``code`` is deliberately an open set (`docs/API.md` §4.2): adding a specification adds a code
-    (CLAUDE.md rule 8), so a client that does not recognise one renders it with its ``reason``
-    rather than dropping it — a dropped flag is a risk nobody sees.
+    (CLAUDE.md rule 8), so a client that does not recognise one renders it with its ``label`` and
+    ``reason`` rather than dropping it — a dropped flag is a risk nobody sees.
+
+    ``label`` is the Spanish chip text and ``reason`` the Spanish sentence naming the fact, both
+    written by the specification that raised the flag. They travel on the wire because the frontend
+    is forbidden from keeping an object literal keyed by a flag code
+    (`docs/standards/FRONTEND.md` §7) — that map is what would make a seventh specification a
+    frontend change. ``label`` is non-empty by validation; ``severity`` stays a bare code, because
+    it is what the client branches on to pick a tone.
     """
 
     model_config = ConfigDict(frozen=True)
 
     code: str
     severity: str
+    label: str = Field(min_length=1)
     reason: str = ""
+
+
+def _current_label(code: str) -> str:
+    """The registry's label for a signal code, falling back to the code itself.
+
+    The import is local on purpose: ``registry`` imports ``types``, which imports this module for
+    ``RiskFlagView``, so a module-level import here would close that cycle at startup. Nothing is
+    resolved before the registry is fully populated — this runs only when a persisted document is
+    read, long after app-ready.
+
+    Args:
+        code: The signal code the stored line carried.
+
+    Returns:
+        The registered strategy's label, or ``code`` when the strategy has since been retired. The
+        code is the last resort and is visibly wrong in an interface, which is the point: it says a
+        row predates the label and no strategy explains it any more.
+    """
+    from .registry import signal_label  # noqa: PLC0415
+
+    return signal_label(code) or code
 
 
 def _as_list(value: object) -> list[object]:

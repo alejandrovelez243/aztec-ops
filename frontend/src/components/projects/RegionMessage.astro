@@ -1,0 +1,97 @@
+---
+/**
+ * The `empty` and `error` arms of a data region, as real markup.
+ *
+ * Both name what is missing and offer the way out: the empty arm says what
+ * would fill the region, the error arm says what failed and re-runs the same
+ * read. A blank area or an unstyled string is not one of the four states — it
+ * is the absence of all four.
+ *
+ * The recovery control reloads the route, because the read that produced this
+ * region runs in the page's frontmatter: re-running it *is* the reload.
+ */
+import Icon from "../ui/Icon.astro";
+
+export interface Props {
+  /** Which arm this is; decides the icon and the tone, never the copy. */
+  kind: "empty" | "error";
+  /** One Spanish sentence naming what is empty or what failed. */
+  title: string;
+  /** The second line: the cause, or what would fill it. */
+  detail: string;
+  /** Label of the recovery control; `null` renders none. */
+  actionLabel: string | null;
+}
+
+const { kind, title, detail, actionLabel } = Astro.props;
+const isError = kind === "error";
+---
+
+<div
+  class:list={["region-message", isError ? "tone-rojo" : "tone-piedra"]}
+  data-region-message
+>
+  <span class="glyph" aria-hidden="true">
+    <Icon name={isError ? "alert" : "folder"} size={22} />
+  </span>
+  <p class="title">{title}</p>
+  <p class="small">{detail}</p>
+  {
+    actionLabel !== null && (
+      <button
+        class="btn btn-secondary"
+        type="button"
+        data-action="retry-region"
+      >
+        <Icon name="refresh" size={18} />
+        {actionLabel}
+      </button>
+    )
+  }
+  <slot />
+</div>
+
+<script>
+  // One delegated listener for every instance on the page; re-running the
+  // frontmatter read means reloading the route.
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest("[data-action='retry-region']") === null) return;
+    window.location.reload();
+  });
+</script>
+
+<style>
+  .region-message {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-7) var(--space-5);
+    text-align: center;
+    background-color: var(--carta);
+    border: var(--border-width) dashed var(--hairline);
+    border-radius: var(--radius-card);
+  }
+
+  .glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--space-7);
+    height: var(--space-7);
+    border-radius: var(--radius-full);
+    background-color: var(--tone-wash);
+    color: var(--tone-ink);
+    margin-bottom: var(--space-1);
+  }
+
+  .region-message .small {
+    max-width: 46ch;
+  }
+
+  .region-message .btn {
+    margin-top: var(--space-3);
+  }
+</style>

@@ -28,13 +28,18 @@ from apps.shared.refs import ActorRef, StateRef, TaxonomyRef
 from apps.work.domain.views import BlockerView, TaskView
 from apps.workflow.domain.views import TransitionOption
 
-#: Display text for the three derived health values. Declared here, in the pure layer, and read
-#: back by ``ProjectSnapshot.Health`` so the admin, the read model and the wire cannot end up with
-#: three spellings of the same three states.
+#: Display text for the three derived health values, in the source spreadsheet's own Spanish
+#: vocabulary (ARCHITECTURE §5) because the interface is Spanish (PRODUCT.md) — the same exception
+#: the database's user-facing labels have; identifiers and documentation stay English
+#: (CLAUDE.md §Language). Do not translate these back.
+#:
+#: This is a closed structural set of exactly three derived values, not an extension point: unlike
+#: a risk flag or a signal, no deploy can add a fourth, so naming them here costs nothing and
+#: keeps every surface spelling them the same way.
 HEALTH_LABELS: dict[str, str] = {
-    "HEALTHY": "Healthy",
-    "AT_RISK": "At risk",
-    "BLOCKED": "Blocked",
+    "HEALTHY": "Sano",
+    "AT_RISK": "En riesgo",
+    "BLOCKED": "Bloqueado",
 }
 
 
@@ -144,6 +149,8 @@ class ProjectDetailView(BaseModel):
     code: str
     name: str
     summary: str | None = None
+    #: Long-form Markdown; ``""`` when nobody wrote one.
+    description: str = ""
     client: TaxonomyRef
     owner: ActorRef | None = None
     engagement_type: TaxonomyRef
@@ -180,6 +187,17 @@ class TeamLoadView(BaseModel):
     ``is_overloaded`` never lowers a project's score. It raises ``OWNER_OVERLOADED`` on that
     person's projects, because being short-staffed is a staffing decision and not a reason for the
     work itself to matter less (ARCHITECTURE §4.1).
+
+    ``role`` is the label and ``role_code`` the slug, and both travel because the row is both read
+    and edited from the same screen: text renders from the label, while the edit dialog has to send
+    a code back and must never map the Spanish label onto one itself (CLAUDE.md rule 1). They are
+    two fields rather than a :class:`~apps.shared.refs.TaxonomyRef` only because this shape
+    predates the roster being editable and widening it is not a breaking change, while replacing
+    ``role`` would be.
+
+    ``is_active`` and ``has_password`` are identity facts served here rather than through a second
+    request, because the table renders them in columns beside the load: who is retired, and who is
+    a real assignee that cannot sign in yet.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -187,6 +205,9 @@ class TeamLoadView(BaseModel):
     alias: str
     label: str
     role: str | None = None
+    role_code: str | None = None
+    is_active: bool = True
+    has_password: bool = False
     weekly_capacity_points: int = Field(gt=0)
     load_points: int = Field(ge=0)
     utilization: float = Field(ge=0)

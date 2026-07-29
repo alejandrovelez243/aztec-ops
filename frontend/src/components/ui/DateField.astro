@@ -1,0 +1,286 @@
+---
+/**
+ * One date, and the calendar that changes it.
+ *
+ * The trigger *is* the due chip: the thing that reports the date is the thing
+ * that edits it, so there is no second affordance to discover — the same rule
+ * `OwnerMenu` follows, where the owner badge is the button. "Sin fecha" is
+ * therefore an ámbar button rather than an empty cell (Present-Absence Rule):
+ * an undated task is exactly the one that slips, and an absence you can act on
+ * beats a blank you cannot.
+ *
+ * This is the single-date twin of `DateRangeField`, and deliberately not a
+ * configuration of it. A range carries a draft state machine — an anchor, a
+ * preview, an inverted-range case made unrepresentable — and none of that
+ * exists here: one click is the whole edit. Sharing the component would mean
+ * carrying that machine past every branch that cannot reach it. What *is*
+ * shared is everything that answers a calendar question: `lib/ui/calendar.ts`
+ * owns the arithmetic, the month matrix and the Spanish labels, so the two
+ * pickers can never disagree about what a month holds.
+ *
+ * The panel is opened by `lib/ui/menu.ts` — one open control app-wide, viewport
+ * anchored so a table's `overflow-x` cannot clip it, Escape and focus return
+ * for free.
+ */
+import Icon from "./Icon.astro";
+import { dueState } from "../projects/format";
+
+export interface Props {
+  /** Which aggregate this edits; the delegated mount branches on it. */
+  scope: "task" | "project";
+  /** Business code of that aggregate — `PRJ-01`, `PRJ-01-T02`. */
+  code: string;
+  /** ISO calendar date (`YYYY-MM-DD`), or `null` when there is none. */
+  date: string | null;
+  /** Accessible name of the field, in Spanish: "Vence", "Fecha objetivo". */
+  label: string;
+  /**
+   * Why the control cannot be used, in Spanish. Present means the trigger
+   * renders disabled with this as its tooltip and its description.
+   */
+  disabledReason?: string;
+}
+
+const { scope, code, date, label, disabledReason } = Astro.props;
+
+const due = dueState(date);
+const isDisabled = disabledReason !== undefined;
+const reasonId = isDisabled ? `date-off-${scope}-${code}` : undefined;
+---
+
+<div
+  class="date-control"
+  data-date-control
+  data-scope={scope}
+  data-code={code}
+  data-value={date ?? ""}
+  data-label={label}
+>
+  <button
+    class:list={["chip", "trigger", due.tone]}
+    type="button"
+    data-menu-trigger
+    disabled={isDisabled}
+    title={"title" in due ? due.title : null}
+    aria-haspopup="dialog"
+    aria-expanded="false"
+    aria-label={`${label}. Ahora: ${due.label}`}
+    aria-describedby={reasonId}
+  >
+    <span data-field="date-label">{due.label}</span>
+    <Icon name="chevron-down" size={14} />
+  </button>
+
+  {
+    isDisabled && (
+      <span class="visually-hidden" id={reasonId} data-date-reason>
+        {disabledReason}
+      </span>
+    )
+  }
+
+  <div
+    class="panel card"
+    role="dialog"
+    aria-label={label}
+    data-menu-panel
+    hidden
+  >
+    {
+      /* The typed path is not a convenience, it is the accessible path: stating
+        a date must not require walking a grid of forty-two buttons. */
+    }
+    <label class="typed">
+      <span class="label">{label}</span>
+      <input
+        class="input"
+        type="text"
+        data-date-input
+        placeholder="dd/mm/aaaa"
+        inputmode="numeric"
+        autocomplete="off"
+        spellcheck="false"
+      />
+    </label>
+
+    <div class="head">
+      <button
+        class="btn btn-ghost btn-icon nav"
+        type="button"
+        data-date-nav="previous-month"
+        aria-label="Mes anterior"
+      >
+        <Icon name="back" size={18} />
+      </button>
+      <span class="month" data-field="date-month"></span>
+      <button
+        class="btn btn-ghost btn-icon nav next"
+        type="button"
+        data-date-nav="next-month"
+        aria-label="Mes siguiente"
+      >
+        <Icon name="back" size={18} />
+      </button>
+    </div>
+
+    <div class="grid" role="grid" aria-label={label} data-date-grid>
+      <div class="week weekdays" role="row" data-date-weekdays></div>
+      <div data-date-weeks></div>
+    </div>
+
+    <div class="foot">
+      <button class="btn btn-ghost clear" type="button" data-date-clear>
+        <Icon name="close" size={16} />
+        Sin fecha
+      </button>
+    </div>
+
+    {
+      /* The chosen day, spoken once. The grid is not a live region: announcing
+        forty-two cells on every month page is worse than silence. */
+    }
+    <p class="visually-hidden" role="status" data-date-announce></p>
+
+    <template data-template="date-week">
+      <div class="week" role="row"></div>
+    </template>
+    <template data-template="date-weekday">
+      <span class="weekday" role="columnheader"></span>
+    </template>
+    <template data-template="date-day">
+      <span class="cell" role="gridcell">
+        <button class="day" type="button" data-date-day></button>
+      </span>
+    </template>
+  </div>
+</div>
+
+<style>
+  .date-control {
+    display: inline-flex;
+    min-width: 0;
+  }
+
+  .trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    /* A chip is smaller than a hit target; the padding is what makes it one. */
+    min-height: 32px;
+    padding: 0 var(--space-2);
+    border: var(--border-width) solid transparent;
+    cursor: pointer;
+    transition:
+      border-color var(--motion-micro-duration) var(--motion-micro-ease),
+      transform var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .trigger:hover:not(:disabled) {
+    border-color: currentColor;
+  }
+
+  .trigger:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .panel {
+    /* Anchored in viewport coordinates by `menu.ts`; see OwnerMenu for why. */
+    position: fixed;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    width: 300px;
+    padding: var(--space-3);
+    box-shadow: var(--shadow-lifted);
+  }
+
+  .panel[hidden] {
+    display: none;
+  }
+
+  .typed {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .month {
+    font-weight: var(--weight-medium);
+    text-transform: capitalize;
+  }
+
+  .next :global(svg) {
+    transform: rotate(180deg);
+  }
+
+  .week {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+  }
+
+  .weekdays {
+    margin-bottom: var(--space-1);
+  }
+
+  .weekday {
+    display: grid;
+    place-items: center;
+    height: 28px;
+    color: var(--tinta-media);
+    font-size: var(--text-small-size);
+    text-transform: capitalize;
+  }
+
+  .cell {
+    display: grid;
+    place-items: center;
+  }
+
+  .day {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 36px;
+    border: var(--border-width) solid transparent;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--tinta);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .day:hover {
+    background: var(--wash);
+  }
+
+  .day[data-outside="true"] {
+    color: var(--tinta-suave);
+  }
+
+  .day[data-today="true"] {
+    border-color: var(--hairline-strong);
+    font-weight: var(--weight-medium);
+  }
+
+  .day[aria-selected="true"] {
+    background: var(--cobalto);
+    border-color: var(--cobalto);
+    color: var(--carta);
+  }
+
+  .foot {
+    display: flex;
+    justify-content: flex-end;
+    border-top: var(--border-width) solid var(--hairline);
+    padding-top: var(--space-2);
+  }
+</style>

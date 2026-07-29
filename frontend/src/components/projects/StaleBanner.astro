@@ -1,0 +1,72 @@
+---
+/**
+ * The `disconnected` view state, rendered above the data it describes.
+ *
+ * Server-rendered hidden: the first paint always comes from a fresh read, so
+ * the banner only appears once the stream drops in this tab. The data
+ * underneath stays on screen — that is the whole point of the arm — marked with
+ * how old it is and with the reconnection beside it.
+ */
+import Icon from "../ui/Icon.astro";
+---
+
+<div class="stale card tone-ambar" role="status" data-stale-banner hidden>
+  <Icon name="alert" size={18} />
+  <p class="small">
+    Sin conexión en vivo. Los datos siguen visibles, pero pueden haber cambiado.
+  </p>
+  <span class="chip" data-field="last-event"></span>
+  <button class="btn btn-secondary" type="button" data-action="reconnect">
+    <Icon name="refresh" size={18} />
+    Reconectar
+  </button>
+</div>
+
+<script>
+  import { watchStale } from "./stale";
+
+  let teardown: (() => void) | null = null;
+
+  document.addEventListener("astro:before-swap", () => {
+    teardown?.();
+    teardown = null;
+  });
+
+  document.addEventListener("astro:page-load", () => {
+    const banner = document.querySelector<HTMLElement>("[data-stale-banner]");
+    if (banner === null) return;
+    teardown = watchStale(banner);
+  });
+</script>
+
+<style>
+  .stale {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    margin-bottom: var(--space-4);
+    background-color: var(--tone-wash);
+    border-color: color-mix(in srgb, var(--tone-solid) 30%, var(--hairline));
+    color: var(--tone-ink);
+  }
+
+  /* `hidden` must beat the flex display, or the banner never hides. */
+  .stale[hidden] {
+    display: none;
+  }
+
+  .stale p {
+    margin-right: auto;
+    color: var(--tone-ink);
+  }
+
+  .stale .chip {
+    background-color: color-mix(in srgb, var(--tone-solid) 18%, var(--carta));
+  }
+
+  .stale .chip:empty {
+    display: none;
+  }
+</style>

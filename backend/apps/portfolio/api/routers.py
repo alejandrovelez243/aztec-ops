@@ -27,6 +27,7 @@ from apps.portfolio.api.schemas import (
 )
 from apps.portfolio.domain.value_objects import (
     CreateProjectCommand,
+    RosterFilters,
     SnapshotQueueFilters,
     UpdateProjectCommand,
 )
@@ -176,16 +177,28 @@ def post_project_transition(
 
 @router.get("/team/load", response=TeamLoadPage, url_name="team_load")
 def get_team_load(request: HttpRequest, filters: Query[TeamLoadQuery]) -> TeamLoadPage:
-    """Load per person, computed from task rows at read time.
+    """The roster: load per person, computed from task rows at read time.
 
     The source ``Team`` sheet's counters are a stale projection of the same rows and are
     deliberately not imported: a stored count and the tasks it summarises drift apart in silence.
+
+    Reading who is on the team is everybody's business; changing it is not. The writes are
+    ``POST``/``PATCH``/``DELETE /team/members`` in the identity context, behind an ops-lead check —
+    the roster row is ``accounts.User``, and only its *load* belongs to the portfolio.
+
+    ``order_by`` outside the allowlist is ``422 validation_error`` carrying what may be sorted by.
     """
     del request
     return TeamLoadPage(
         items=read_team_load(
-            owner_codes=filters.owner,
-            include_inactive=filters.include_inactive,
+            RosterFilters(
+                owner_codes=tuple(filters.owner),
+                role_codes=tuple(filters.role),
+                status=filters.status,
+                overloaded=filters.overloaded,
+                search=filters.q,
+                order_by=filters.order_by,
+            ),
             as_of=timezone.localdate(),
         )
     )

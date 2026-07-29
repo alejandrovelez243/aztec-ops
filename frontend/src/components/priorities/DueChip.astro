@@ -1,0 +1,46 @@
+---
+/**
+ * The queue's due column: a target date, or the named absence that replaces it.
+ *
+ * Never renders an empty cell. A project with no committed date shows "sin fecha" in
+ * ámbar, because the missing commitment is the finding (DESIGN.md, The
+ * Present-Absence Rule) and a blank would read as "nothing to see here".
+ */
+import { describeDue, toneForDue } from "./format";
+
+export interface Props {
+  /** `target_date` exactly as the API sent it; `null` means no date is committed. */
+  targetDate: string | null;
+}
+
+const { targetDate } = Astro.props;
+const due = describeDue(targetDate);
+const tone = toneForDue(due.kind);
+---
+
+<span class:list={["chip", "due", tone]} title={due.detail}>
+  <span class="visually-hidden">{due.detail}</span>
+  <span aria-hidden="true">{due.lead}</span>
+  {
+    due.figure !== null && (
+      <span class="figure" aria-hidden="true">
+        {due.figure}
+      </span>
+    )
+  }
+</span>
+
+<style>
+  .due {
+    justify-content: flex-end;
+    gap: var(--space-1);
+    text-transform: none;
+    letter-spacing: 0;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .due .figure {
+    font-size: var(--text-label-size);
+  }
+</style>

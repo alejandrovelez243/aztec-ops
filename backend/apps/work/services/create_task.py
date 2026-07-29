@@ -97,6 +97,7 @@ def create_task(command: CreateTaskCommand) -> Task:
         due_date=command.due_date,
         title=command.title,
         detail=command.detail,
+        description=command.description,
         last_progress=command.last_progress,
     )
     _link_dependencies(task=task, dependencies=command.dependencies)

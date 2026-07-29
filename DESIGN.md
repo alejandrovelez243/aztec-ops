@@ -124,22 +124,50 @@ breadcrumbs on the left; live-connection indicator, search and the operator's av
 the right. Content region on Papel, max-width 1360px, 24–32px gutters, on an 8px spacing base
 (4px permitted inside chips).
 
-Surfaces:
-- **/login** — operator selection, centered roster cards. The guard redirects here without a session.
-- **/ (Resumen)** — KPI row, "Decidir hoy" top of the queue, owner load, latest activity.
-- **/prioridades** — the ranked queue: rank plate, delta, project, owner, risk strip, due chip,
-  score; the breakdown opens one gesture away, never a page away. The product's heart.
-- **/proyectos** — card grid ↔ table toggle, filters as a pill bar.
-- **/proyectos/{code}** — detail: header card with state and legal transitions, score with
+Surfaces. Routes are English (CLAUDE.md §Language); every label on them is Spanish.
+
+- **/login** — the door: credentials form on the wall motif. The guard redirects here without a session.
+- **/** ("Resumen") — the day in tiers: what to attend today, this week, the radar; owner load and
+  latest activity beside them.
+- **/priorities** ("Prioridades") — the ranked queue: rank plate, project, owner, risk strip, due
+  chip, score, with the breakdown one gesture away, never a page away. The product's heart.
+- **/projects** ("Proyectos") — card grid ↔ table toggle, filters as a pill bar.
+- **/projects/{code}** — detail: header card with state and legal transitions, score with
   breakdown, tabs (tareas / bloqueos / notas / actividad).
-- **/tablero** — board by workflow state; columns are data, one engagement type at a time.
-- **/equipo** — load per person, bars plus task lists.
-- **/actividad** — portfolio-wide feed.
+- **/board** ("Tablero") — board by workflow state; columns are data, one engagement type at a time.
+- **/team** ("Equipo") — load per person, bars plus task lists.
+- **/activity** ("Actividad") — portfolio-wide feed.
 
 Responsive: ≥1440 full; 1024–1439 sidebar rail; 768–1023 drawer, tables shed tertiary columns;
 <768 rows become stacked cards, the board becomes horizontally snap-scrolled columns, detail
 tabs stack. Hit targets ≥40px on touch. Nothing disappears without a way back in: every dropped
 column reappears inside the card form.
+
+## Brand & illustration
+
+**The mark** is three cards climbing the wall (`public/brand/mark.svg`): equal rounded squares
+ascending left to right, the bottom in Cobalto papel, the middle in a mid tint, the top solid
+Cobalto — the portfolio ordered, with the top one decided. The favicon drops to two cards,
+because at 16px a third collapses into a smudge. The wordmark is not an asset: "Aztec Ops" is
+set live in Schibsted Grotesk 700 beside the mark, so it inherits the type system instead of
+freezing a traced outline of it.
+
+**Illustrations** are inline SVG components (`components/ui/Illustration.astro`), never files in
+`public/`. Three reasons, all load-bearing: their strokes read design tokens, so an illustration
+cannot drift from the palette; their pieces carry handles the motion system animates; and each
+scene costs a line of markup instead of the tens of kilobytes of traced béziers a generated file
+spends on the same four rectangles. Generation art-directs the composition; the shipped asset is
+authored.
+
+The grammar is the world's own: hairline card outlines on the wall, one real paper card, exactly
+one accent per scene. Four scenes exist — `clear` (nothing pending), `quiet` (an empty timeline),
+`nothing-found` (a search that returned blank cards), `lost` (a wall with one card knocked out).
+Every empty state pairs one with a sentence naming the absence and the action that fills it
+(`components/ui/EmptyState.astro`), and its pieces settle in sequence on the `carta` spring — the
+invisible hand placing them.
+
+**No stock photography, no 3D renders, no gradient meshes.** This product's imagery is the same
+paper and ink its interface is made of.
 
 ## Elevation & Depth
 

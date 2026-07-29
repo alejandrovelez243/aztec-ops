@@ -5,6 +5,8 @@ property of the code rather than a sentence in a document. Fields, ``Meta``, ``_
 named reads of the trail: what a record *means* is still decided by the service that writes it.
 """
 
+from collections.abc import Sequence
+from datetime import datetime
 from typing import Any, ClassVar
 from uuid import UUID
 
@@ -22,9 +24,13 @@ class ActivityRecordQuerySet(models.QuerySet["ActivityRecord"]):
     """The named reads of the audit trail.
 
     Every selection here composes; only :meth:`as_entries` and :meth:`recent` end the chain, and
-    both say so. The two questions the product asks — "what happened to this project" and "what
-    else moved as part of this decision" — are the same table read through different predicates,
-    which is why they are two methods on one queryset rather than two functions.
+    both say so. The questions the product asks — "what happened to this project", "what else
+    moved as part of this decision", "what has the portfolio done this week" — are the same table
+    read through different predicates, which is why they are methods on one queryset rather than
+    a function per combination.
+
+    Each facet is spelled as its own predicate and each returns ``self`` unchanged when the facet
+    is absent, so a read service states the question and never the four-way branch around it.
     """
 
     def for_entity(self, entity_type: str, entity_id: str) -> "ActivityRecordQuerySet":
@@ -52,6 +58,94 @@ class ActivityRecordQuerySet(models.QuerySet["ActivityRecord"]):
             project_code: ``Project.code``, e.g. ``PRJ-01``.
         """
         return self.for_entity(ActivityRecord.EntityType.PROJECT, project_code)
+
+    def about(
+        self, entity_type: str | None = None, entity_id: str | None = None
+    ) -> "ActivityRecordQuerySet":
+        """Narrow to an entity, to a kind of entity, or to neither.
+
+        The optional form of :meth:`for_entity`, and the reason the portfolio-wide feed contains
+        no branch: "everything about blockers", "everything about ``PRJ-22``" and "everything"
+        are one call with different arguments. Passing both is exactly :meth:`for_entity` and
+        matches ``activity_entity_recent_idx``; passing only ``entity_type`` scans that index's
+        leading column without an equality prefix on the rest, so it is read with a page limit and
+        never materialised whole.
+
+        Args:
+            entity_type: ``project`` | ``task`` | ``blocker``, from
+                :class:`ActivityRecord.EntityType`. ``None`` leaves the kind open. An unknown
+                value selects nothing rather than raising — the caller is a query string, not a
+                developer.
+            entity_id: Business code of the entity. ``None`` leaves it open.
+        """
+        selection = self
+        if entity_type is not None:
+            selection = selection.filter(entity_type=entity_type)
+        if entity_id is not None:
+            selection = selection.filter(entity_id=entity_id)
+        return selection
+
+    def with_verbs(self, verbs: Sequence[str]) -> "ActivityRecordQuerySet":
+        """Narrow to the records stating any of ``verbs``.
+
+        ORs its values, because an operator asking for state changes *and* blocker events wants
+        both kinds of row rather than the empty intersection. An empty sequence means "no verb
+        facet" and returns the selection untouched, so a caller never has to branch around it.
+
+        Args:
+            verbs: Values from :class:`ActivityRecord.Verb`. Unrecognised ones simply match
+                nothing: the verb set is versioned by migration and a retired verb must not turn
+                a working feed into an error.
+        """
+        if not verbs:
+            return self
+        return self.filter(verb__in=verbs)
+
+    def by_actor(self, actor: str) -> "ActivityRecordQuerySet":
+        """Narrow to what one actor caused, human or otherwise.
+
+        ``actor`` is the alias the record was written with (``camila``, ``system``), not a foreign
+        key: the trail outlives the account, so an actor whose user row is gone still reads back.
+        With :meth:`newest_first` this matches ``activity_actor_recent_idx``.
+
+        Args:
+            actor: The alias stored on the record.
+        """
+        return self.filter(actor=actor)
+
+    def from_origin(self, origin: str) -> "ActivityRecordQuerySet":
+        """Narrow to the facts caused by one kind of author.
+
+        This is the coarse form of :meth:`caused_by_people`, and the two are not
+        interchangeable: that one encodes the staleness rule ("anything but the engine"), while
+        this one answers an operator's explicit question, including "show me only ``POLICY``" —
+        which is how the engine's own behaviour is audited.
+
+        Args:
+            origin: ``MANUAL`` | ``POLICY`` | ``SYSTEM``, from :class:`ActivityRecord.Origin`.
+        """
+        return self.filter(origin=origin)
+
+    def occurred_between(
+        self, since: datetime | None = None, until: datetime | None = None
+    ) -> "ActivityRecordQuerySet":
+        """Narrow to the facts that happened inside a time window.
+
+        Both bounds are inclusive and both are optional, so one call expresses "since", "until",
+        "between" and "no window at all" — which is what keeps the four-way branch out of every
+        read service. The window is applied to ``occurred_at``, the time the fact happened, never
+        to insertion order: a record written late still belongs to the moment it describes.
+
+        Args:
+            since: Lower bound, inclusive. ``None`` leaves the past open.
+            until: Upper bound, inclusive. ``None`` leaves the present open.
+        """
+        selection = self
+        if since is not None:
+            selection = selection.filter(occurred_at__gte=since)
+        if until is not None:
+            selection = selection.filter(occurred_at__lte=until)
+        return selection
 
     def for_correlation(self, correlation_id: UUID) -> "ActivityRecordQuerySet":
         """Narrow to every record written under one ``correlation_id``.
@@ -122,14 +216,38 @@ class ActivityRecord(models.Model):
     """
 
     class EntityType(models.TextChoices):
-        """What kind of thing the record is about."""
+        """What kind of thing the record is about.
+
+        ``MEMBER`` is the roster: a person's ``accounts.User.code`` is the ``entity_id``, exactly
+        as a project's is its ``PRJ-NN``. Who joined, who was retired and whose capacity was
+        raised are operational facts with the same standing as a state change — the ``OWNER_LOAD``
+        risk flag is computed against the capacity somebody typed, so a flag nobody can explain is
+        a flag nobody trusts.
+        """
 
         PROJECT = "project", "Project"
         TASK = "task", "Task"
         BLOCKER = "blocker", "Blocker"
+        MEMBER = "member", "Member"
+        # The vocabulary itself. A taxonomy row is what every other context compares against, so
+        # renaming or retiring one changes what half the product means; the trail is what makes
+        # that editable from the product at all rather than only from the admin.
+        ROLE = "role", "Role"
+        # The lifecycle itself, addressed by ``Workflow.code``. Its states and its edges are
+        # recorded under the graph rather than under themselves, because a state ``code`` is unique
+        # only inside its workflow: ``bloqueada`` is not an identifier the trail could address, and
+        # a reader asking "what happened to this lifecycle" wants the nodes, the arrows and the
+        # renames on one timeline anyway.
+        WORKFLOW = "workflow", "Workflow"
 
     class Verb(models.TextChoices):
-        """The closed set of facts the trail can state (DATA_MODEL §5)."""
+        """The closed set of facts the trail can state (DATA_MODEL §5).
+
+        There is deliberately no generic ``UPDATED``. Each verb names *which* fact moved, so the
+        timeline reads as a sentence and a reader filtering on ``CAPACITY_CHANGED`` gets exactly
+        the decisions that changed what "overloaded" means — which a catch-all verb with the field
+        buried in ``metadata`` could only answer by scanning every row.
+        """
 
         CREATED = "CREATED", "Created"
         STATE_CHANGED = "STATE_CHANGED", "State changed"
@@ -141,6 +259,27 @@ class ActivityRecord(models.Model):
         TASK_ADDED = "TASK_ADDED", "Task added"
         NOTE_ADDED = "NOTE_ADDED", "Note added"
         SEEDED = "SEEDED", "Seeded"
+        RENAMED = "RENAMED", "Renamed"
+        ROLE_CHANGED = "ROLE_CHANGED", "Role changed"
+        CAPACITY_CHANGED = "CAPACITY_CHANGED", "Capacity changed"
+        DEACTIVATED = "DEACTIVATED", "Deactivated"
+        REACTIVATED = "REACTIVATED", "Reactivated"
+        # The fact that a password was replaced, and nothing about the password itself: no
+        # ``from_value``, no ``to_value``, no hash. The trail answers "who reset whose credential
+        # and when", which is the only question an audit can legitimately ask of this row.
+        PASSWORD_RESET = "PASSWORD_RESET", "Password reset"
+        # Authoring a lifecycle: the six facts an operator can state about the shape of a graph.
+        # ``STATE_CHANGED`` is not one of them and must never be reused for one — it means "a record
+        # moved", and a verb that meant both would make "how often did work get blocked" unanswerable.
+        # A node's label, category, colour and order collapse into one ``STATE_EDITED`` on purpose:
+        # they are one act of authoring performed in one form, and four verbs would report four
+        # decisions where an operator made one. Which of them moved is in ``metadata.changed``.
+        STATE_ADDED = "STATE_ADDED", "State added"
+        STATE_EDITED = "STATE_EDITED", "State edited"
+        STATE_RETIRED = "STATE_RETIRED", "State retired"
+        TRANSITION_ADDED = "TRANSITION_ADDED", "Transition added"
+        TRANSITION_EDITED = "TRANSITION_EDITED", "Transition edited"
+        TRANSITION_RETIRED = "TRANSITION_RETIRED", "Transition retired"
 
     class Origin(models.TextChoices):
         """Who or what caused the fact, which is what makes a score movement arguable."""
@@ -164,7 +303,7 @@ class ActivityRecord(models.Model):
     objects = ActivityRecordQuerySet.as_manager()
 
     class Meta:
-        """Ordering and the four indexes DATA_MODEL §10.2 names, each for a stated query."""
+        """Ordering and the indexes DATA_MODEL §10.2 names, each for a stated query."""
 
         ordering: ClassVar[list[str]] = ["-occurred_at", "-id"]
         verbose_name = "activity record"
@@ -180,6 +319,12 @@ class ActivityRecord(models.Model):
             models.Index(fields=["correlation_id"], name="activity_correlation_idx"),
             models.Index(fields=["verb", "-occurred_at"], name="activity_verb_recent_idx"),
             models.Index(fields=["actor", "-occurred_at"], name="activity_actor_recent_idx"),
+            # The portfolio-wide feed (`GET /api/v1/activity`), unfiltered or filtered only on a
+            # low-selectivity column such as `origin`: no equality prefix, so none of the four
+            # above can serve it and the planner would sort the whole table to return 50 rows.
+            # Matches the model ordering exactly, which is what lets the first page stop after
+            # 50 index entries.
+            models.Index(fields=["-occurred_at", "-id"], name="activity_recent_idx"),
         ]
 
     def __str__(self) -> str:

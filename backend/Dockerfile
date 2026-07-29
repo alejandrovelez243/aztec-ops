@@ -63,11 +63,19 @@ RUN groupadd --gid 1000 app \
 
 WORKDIR /app
 
+# Under /usr/local/bin, not /app: compose bind-mounts ./backend over /app and would hide it.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 COPY --chown=app:app . /app
 
 USER app
 
 EXPOSE 8000
+
+# The image owns the start-up sequence for each role; compose only names the role.
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["api"]
 
 # --- runtime (production) ------------------------------------------------------------
 FROM base AS runtime
@@ -82,9 +90,9 @@ RUN DJANGO_SECRET_KEY=build-time-only-not-used-at-runtime \
     ENVIRONMENT=production \
     python manage.py collectstatic --noinput --clear
 
-CMD ["uvicorn", "config.asgi:application", "--host", "0.0.0.0", "--port", "8000"]
-
 # --- dev (local compose) -------------------------------------------------------------
 FROM base AS dev
 COPY --from=builder-dev --chown=app:app /opt/venv /opt/venv
-CMD ["uvicorn", "config.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+# Reload is a property of this image, not of the compose file.
+ENV UVICORN_RELOAD=true

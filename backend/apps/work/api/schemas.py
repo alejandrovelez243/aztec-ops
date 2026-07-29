@@ -31,10 +31,40 @@ class TaskCreateIn(Schema):
     title: str = Field(min_length=1, max_length=200)
     priority: str = Field(min_length=1, max_length=32)
     detail: str = ""
+    description: str = ""
     assignee: str | None = None
     due_date: date | None = None
     last_progress: str = Field(default="", max_length=255)
     depends_on: list[str] = Field(default_factory=list)
+
+
+class TaskUpdateIn(Schema):
+    """Body of ``PATCH /api/v1/tasks/{code}``.
+
+    Every field is optional and "absent" and "``null``" mean different things — the same contract
+    ``ProjectUpdateIn`` documents. An absent field is left untouched; an explicit ``null`` clears
+    the column, which is how a task is unassigned or loses its due date. The router reads which
+    fields actually arrived from Pydantic's ``model_fields_set`` and carries that set into the
+    command, so the distinction survives to the service. With a plain dict, "unassign this task"
+    and "do not touch the assignee" would be the same request.
+
+    ``null`` is therefore accepted only where the column is nullable. ``title``, ``detail``,
+    ``last_progress`` and ``priority`` are ``NOT NULL``, so sending ``null`` for one of them is a
+    422 rather than a silent clear: the value that would clear ``detail`` is ``""``, and it is
+    accepted. ``title`` and ``priority`` additionally refuse ``""`` — a task with no title is not
+    an edit anybody meant to make.
+
+    ``workflow_state`` is absent, as it is from every schema in this module: a state moves through
+    ``POST /api/v1/tasks/{code}/transition`` and nowhere else (CLAUDE.md rule 2).
+    """
+
+    title: str = Field(default="", min_length=1, max_length=200)
+    detail: str = ""
+    description: str = ""
+    last_progress: str = Field(default="", max_length=255)
+    priority: str = Field(default="", min_length=1, max_length=32)
+    assignee: str | None = None
+    due_date: date | None = None
 
 
 class TaskTransitionIn(Schema):

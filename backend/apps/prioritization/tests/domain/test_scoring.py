@@ -106,6 +106,13 @@ class BreakdownInvariantTests(SimpleTestCase):
         self.assertEqual(contributions, sorted(contributions, reverse=True))
         self.assertEqual(document["policy_version"], "v1")
 
+    def test_every_stored_line_carries_the_label_of_the_signal_that_wrote_it(self) -> None:
+        data = signal_input(target_date=NOW.date() - timedelta(days=6), open_task_count=1)
+        document = compute_breakdown(data=data, policy=active_policy(), flags=()).as_document()
+        labels = {entry["code"]: entry["label"] for entry in document["signals"]}
+        self.assertEqual(labels["deadline_pressure"], "Presión de fecha")
+        self.assertEqual(len(labels), len(WEIGHTS))
+
 
 class ValidUntilTests(SimpleTestCase):
     """The instant the clock tick will select this project on."""

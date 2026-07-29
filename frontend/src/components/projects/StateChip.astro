@@ -1,0 +1,37 @@
+---
+/**
+ * One workflow state, rendered as a washed chip with a solid dot.
+ *
+ * The colour is the operator's: `stateTone` prefers the state's own `color` and
+ * falls back to the semantic tone of its `category`, so a state added in the
+ * admin renders correctly with no frontend change (Data-Owns-Color Rule). The
+ * component never compares `code` against anything.
+ *
+ * The `data-state-chip` hook is how the island repaints this chip when a
+ * `project.state_changed` envelope lands; without it the chip would keep the
+ * old label until the next full load.
+ */
+import { stateTone, toneStyle } from "./tone";
+
+export interface Props {
+  /** The state's own Spanish label, straight from the API. */
+  label: string;
+  /** Structural group (`BACKLOG` … `CANCELLED`); the only field branched on. */
+  category: string;
+  /** Operator-configured colour, or `null` when none is set. */
+  color: string | null;
+}
+
+const { label, category, color } = Astro.props;
+const tone = stateTone({ category, color });
+---
+
+<span
+  class:list={["chip", tone.className]}
+  style={toneStyle(tone)}
+  data-state-chip
+  data-category={category}
+>
+  <span class="dot" aria-hidden="true"></span>
+  <span data-field="state-label">{label}</span>
+</span>

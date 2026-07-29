@@ -1,0 +1,310 @@
+---
+/**
+ * One person as a table row: who they are, what they are carrying, and what can be done to them.
+ *
+ * Every cell the island patches carries a `data-field`, and every one of them is always
+ * rendered — hidden when it carries nothing, never absent — so a refetch writes text into slots
+ * the server already laid out rather than rebuilding markup only Astro should own.
+ *
+ * The action buttons are rendered for everybody and revealed by the island once the session says
+ * the reader is an ops lead. Hidden-by-default rather than shown-and-then-hidden: a control that
+ * flashes into view and disappears is a control somebody will click in the meantime.
+ */
+import Icon from "../ui/Icon.astro";
+import {
+  alertTone,
+  barPercent,
+  formatCount,
+  formatPoints,
+  formatRole,
+  formatStatus,
+  formatUtilization,
+  loadTone,
+  statusTone,
+  urgentTone,
+} from "./table";
+import type { TeamLoadEntry } from "../../lib/api/domain";
+import { avatarHue, initials } from "../../lib/auth/session";
+
+export interface Props {
+  /** The row's data, exactly as `GET /api/v1/team/load` returned it. */
+  entry: TeamLoadEntry;
+}
+
+const { entry } = Astro.props;
+---
+
+<tr
+  class:list={["member-row", { "is-retired": !entry.is_active }]}
+  data-alias={entry.alias}
+  data-role-code={entry.role_code ?? ""}
+  data-label={entry.label}
+  data-capacity={entry.weekly_capacity_points}
+  data-active={String(entry.is_active)}
+  data-utilization={entry.utilization}
+>
+  <td class="col-person">
+    <span class="person">
+      <span
+        class="avatar"
+        data-field="avatar"
+        style={`--avatar-h: ${avatarHue(entry.alias)}`}
+        aria-hidden="true">{initials(entry.label)}</span
+      >
+      <span class="who">
+        <span class="title" data-field="label">{entry.label}</span>
+        <span class="small code" data-field="alias">{entry.alias}</span>
+      </span>
+    </span>
+  </td>
+
+  <td class="col-role small" data-field="role">{formatRole(entry.role)}</td>
+
+  <td class="col-load">
+    <span class:list={["load", loadTone(entry.is_overloaded)]}>
+      <span class="track" aria-hidden="true">
+        <span
+          class="bar"
+          data-field="bar"
+          style={`--bar: ${barPercent(entry.utilization) / 100}`}></span>
+      </span>
+      <span class="figure pct" data-field="utilization"
+        >{formatUtilization(entry.utilization)}</span
+      >
+    </span>
+  </td>
+
+  <td class="col-points figure" data-field="points">
+    {formatPoints(entry.load_points, entry.weekly_capacity_points)}
+  </td>
+
+  <td class="col-num col-open">
+    <span class="figure" data-field="open_tasks"
+      >{formatCount(entry.open_tasks)}</span
+    >
+  </td>
+  <td class="col-num col-overdue">
+    <span
+      class:list={["figure", alertTone(entry.overdue_tasks)]}
+      data-field="overdue_tasks">{formatCount(entry.overdue_tasks)}</span
+    >
+  </td>
+  <td class="col-num col-blocked">
+    <span
+      class:list={["figure", alertTone(entry.blocked_tasks)]}
+      data-field="blocked_tasks">{formatCount(entry.blocked_tasks)}</span
+    >
+  </td>
+  <td class="col-num col-urgent">
+    <span
+      class:list={["figure", urgentTone(entry.high_or_critical_open)]}
+      data-field="urgent_tasks">{formatCount(entry.high_or_critical_open)}</span
+    >
+  </td>
+  <td class="col-num col-projects">
+    <span class="figure" data-field="projects_owned"
+      >{formatCount(entry.projects_owned)}</span
+    >
+  </td>
+
+  <td class="col-status">
+    <span class:list={["chip", statusTone(entry)]} data-field="status"
+      >{formatStatus(entry)}</span
+    >
+  </td>
+
+  <td class="col-actions">
+    {
+      /*
+       * `title` for the pointer and `aria-label` for the reader, both on the button, and the
+       * icon itself `aria-hidden`. Putting the name on the `<svg>` instead — which is what
+       * `Icon`'s `label` prop does — makes a screen reader announce the control twice, once as
+       * a button with no name and once as an image with one.
+       */
+    }
+    <span class="actions" data-roster-actions hidden>
+      <button
+        class="btn btn-ghost btn-icon"
+        type="button"
+        data-member-action="edit"
+        title="Editar"
+        aria-label={`Editar a ${entry.label}`}
+      >
+        <Icon name="pencil" size={16} />
+      </button>
+      <button
+        class="btn btn-ghost btn-icon"
+        type="button"
+        data-member-action="password"
+        title="Cambiar contraseña"
+        aria-label={`Cambiar la contraseña de ${entry.label}`}
+      >
+        <Icon name="lock" size={16} />
+      </button>
+      {
+        /*
+         * Both directions are rendered and one is hidden, rather than one icon whose markup is
+         * swapped after a refetch: the island patches attributes and visibility, and an island
+         * that generated SVG would be a second place the two states are drawn.
+         */
+      }
+      <button
+        class="btn btn-ghost btn-icon"
+        type="button"
+        data-member-action="toggle-active"
+        data-field="retire"
+        title="Retirar del equipo"
+        aria-label={`Retirar a ${entry.label} del equipo`}
+        hidden={!entry.is_active}
+      >
+        <Icon name="trash" size={16} />
+      </button>
+      <button
+        class="btn btn-ghost btn-icon"
+        type="button"
+        data-member-action="toggle-active"
+        data-field="restore"
+        title="Restaurar"
+        aria-label={`Restaurar a ${entry.label}`}
+        hidden={entry.is_active}
+      >
+        <Icon name="refresh" size={16} />
+      </button>
+    </span>
+  </td>
+</tr>
+
+<style>
+  /* The row rule, the paper background, the hover and the cell padding are the
+     shared table grammar (`src/styles/table.css`). */
+
+  /* A retired person stays legible and stops competing for attention: their work still
+     exists and somebody may need to find it. */
+  .member-row.is-retired .person,
+  .member-row.is-retired .col-role,
+  .member-row.is-retired .col-points {
+    opacity: 0.6;
+  }
+
+  .person {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .avatar {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: var(--space-6);
+    height: var(--space-6);
+    border-radius: var(--radius-full);
+    background-color: hsl(var(--avatar-h) 60% 92%);
+    color: hsl(var(--avatar-h) 45% 28%);
+    font-size: var(--text-small-size);
+    font-weight: 600;
+  }
+
+  .who {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .code {
+    color: var(--tinta-media);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .load {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 9rem;
+  }
+
+  .track {
+    flex: 1;
+    height: 6px;
+    border-radius: var(--radius-full);
+    background-color: var(--pozo);
+    overflow: hidden;
+  }
+
+  /*
+   * Scaled, not resized: a roster is a column of these, and animating `width`
+   * would re-lay-out the whole table on every frame of a refetch.
+   */
+  .bar {
+    display: block;
+    height: 100%;
+    width: 100%;
+    transform: scaleX(var(--bar, 0));
+    transform-origin: left center;
+    border-radius: var(--radius-full);
+    background-color: var(--tone-solid);
+    transition: transform var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .pct {
+    min-width: 3.5rem;
+    text-align: right;
+    color: var(--tone-ink);
+    white-space: nowrap;
+  }
+
+  .col-points,
+  .col-num {
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .col-actions {
+    text-align: right;
+  }
+
+  .actions {
+    display: inline-flex;
+    gap: var(--space-1);
+  }
+
+  /* Load-bearing, not cosmetic: the island hides this whole group for anyone who is not an ops
+     lead, and `display: inline-flex` would otherwise beat the user agent's `[hidden]` rule and
+     show every reader controls the API will refuse. */
+  .actions[hidden] {
+    display: none;
+  }
+
+  .btn-icon {
+    padding: var(--space-2);
+    line-height: 0;
+  }
+
+  /* `.btn` sets `display: inline-flex`, and an author rule beats the user agent's
+     `[hidden] { display: none }` — so without this the retire and the restore buttons render
+     side by side and the row offers two ways to do opposite things. */
+  .actions [hidden] {
+    display: none;
+  }
+
+  /* Columns drop from the least load-bearing inward. The load bar, the counts of late and
+     blocked work and the actions survive every width — they are what the screen is for. */
+  @media (max-width: 1279px) {
+    .col-projects {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1119px) {
+    .col-urgent {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1023px) {
+    .col-role,
+    .col-points {
+      display: none;
+    }
+  }
+</style>

@@ -1,0 +1,347 @@
+---
+/**
+ * What is stopping the work: the open blockers, the way to clear one, the way
+ * to raise one, and the history of the ones already resolved.
+ *
+ * A blocker is a typed row, never a sentence in a note (`docs/EVENTS.md`
+ * §4 `blocker.raised`): the blockage signal and the `BLOCKED` risk flag both
+ * read these rows, so raising one here is what makes the ranking move.
+ *
+ * `resolved_at === null` *is* the definition of open — there is no second
+ * boolean, because two representations of one fact are how a panel and a score
+ * come to disagree.
+ */
+import Icon from "../ui/Icon.astro";
+import { formatInstant } from "./format";
+import { BLOCKER_KINDS, blockerKindLabel } from "./messages";
+import { blockerMeta, resolvedBlockerMeta } from "./presentation";
+import type { Blocker } from "../../lib/api/domain";
+
+export interface Props {
+  projectCode: string;
+  blockers: readonly Blocker[];
+}
+
+const { projectCode, blockers } = Astro.props;
+
+const open = blockers.filter(
+  (blocker) => (blocker.resolved_at ?? null) === null,
+);
+const resolved = blockers.filter(
+  (blocker) => (blocker.resolved_at ?? null) !== null,
+);
+---
+
+<section class="blockers" data-blockers data-project-code={projectCode}>
+  <div class="stack">
+    <div class="head">
+      <h3 class="h2">Bloqueos abiertos</h3>
+      <span class="chip tone-verde" data-open-empty hidden={open.length > 0}>
+        Nada bloquea este proyecto
+      </span>
+    </div>
+
+    <ul class="list" data-open-blockers>
+      {
+        open.map((blocker) => (
+          <li class="blocker card" data-blocker data-blocker-id={blocker.id}>
+            <div class="blocker-head">
+              <span class="chip tone-rojo" data-field="blocker-kind">
+                {blockerKindLabel(blocker.kind)}
+              </span>
+              <span class="chip chip-code">{blocker.code}</span>
+              {blocker.task_code !== null &&
+                blocker.task_code !== undefined && (
+                  <span class="chip chip-code">{blocker.task_code}</span>
+                )}
+              <button
+                class="btn btn-secondary resolve"
+                type="button"
+                data-action="resolve"
+              >
+                <Icon name="check" size={18} />
+                Resolver
+              </button>
+            </div>
+            <p class="body-text" data-field="blocker-description">
+              {blocker.description}
+            </p>
+            <p
+              class="small"
+              data-field="blocker-meta"
+              title={formatInstant(blocker.raised_at) ?? undefined}
+            >
+              {blockerMeta(blocker)}
+            </p>
+          </li>
+        ))
+      }
+    </ul>
+  </div>
+
+  <form class="raise card" data-raise-form>
+    <h3 class="h2">Registrar bloqueo</h3>
+    <div class="fields">
+      <label class="field">
+        <span class="label">Tipo</span>
+        <select class="input" name="kind" required>
+          {
+            BLOCKER_KINDS.map((kind) => (
+              <option value={kind}>{blockerKindLabel(kind)}</option>
+            ))
+          }
+        </select>
+      </label>
+      <label class="field wide">
+        <span class="label">Qué está detenido y por qué</span>
+        <textarea
+          class="input"
+          name="description"
+          rows="2"
+          required
+          placeholder="Ej.: esperamos las credenciales del cliente para el ambiente de pruebas"
+        ></textarea>
+      </label>
+    </div>
+    <p class="small error" data-field="raise-error" hidden></p>
+    <div class="actions">
+      <button class="btn btn-primary" type="submit" data-action="raise">
+        <Icon name="plus" size={18} />
+        Registrar
+      </button>
+    </div>
+  </form>
+
+  <details class="resolved">
+    <summary class="title">
+      Resueltos <span class="figure" data-field="resolved-count"
+        >{resolved.length}</span
+      >
+    </summary>
+    <ul class="list" data-resolved-blockers>
+      {
+        resolved.map((blocker) => (
+          <li class="blocker well" data-blocker data-blocker-id={blocker.id}>
+            <div class="blocker-head">
+              <span class="chip tone-verde" data-field="blocker-kind">
+                {blockerKindLabel(blocker.kind)}
+              </span>
+              <span class="chip chip-code">{blocker.code}</span>
+            </div>
+            <p class="body-text" data-field="blocker-description">
+              {blocker.description}
+            </p>
+            <p
+              class="small"
+              data-field="blocker-meta"
+              title={formatInstant(blocker.resolved_at ?? null) ?? undefined}
+            >
+              {resolvedBlockerMeta(blocker)}
+            </p>
+            <p class="small" data-field="blocker-resolution">
+              {blocker.resolution_reason}
+            </p>
+          </li>
+        ))
+      }
+    </ul>
+  </details>
+
+  {
+    /* One home for both list shapes; the island clones them after every write
+      and after every blocker envelope for this project. */
+  }
+  <template data-template="open-blocker">
+    <li class="blocker card" data-blocker>
+      <div class="blocker-head">
+        <span class="chip tone-rojo" data-field="blocker-kind"></span>
+        <span class="chip chip-code" data-field="blocker-code"></span>
+        <span class="chip chip-code" data-field="blocker-task" hidden></span>
+        <button
+          class="btn btn-secondary resolve"
+          type="button"
+          data-action="resolve"
+        >
+          Resolver
+        </button>
+      </div>
+      <p class="body-text" data-field="blocker-description"></p>
+      <p class="small" data-field="blocker-meta"></p>
+    </li>
+  </template>
+
+  <template data-template="resolved-blocker">
+    <li class="blocker well" data-blocker>
+      <div class="blocker-head">
+        <span class="chip tone-verde" data-field="blocker-kind"></span>
+        <span class="chip chip-code" data-field="blocker-code"></span>
+      </div>
+      <p class="body-text" data-field="blocker-description"></p>
+      <p class="small" data-field="blocker-meta"></p>
+      <p class="small" data-field="blocker-resolution"></p>
+    </li>
+  </template>
+
+  <dialog class="dialog" data-resolve-dialog aria-labelledby="resolve-title">
+    <form method="dialog" data-resolve-form>
+      <h2 class="h2" id="resolve-title">Resolver el bloqueo</h2>
+      <p class="small">
+        Cómo se destrabó. Es obligatorio: un bloqueo cerrado sin decir cómo es
+        indistinguible de uno que nunca existió.
+      </p>
+      <label class="field">
+        <span class="label">Resolución</span>
+        <textarea class="input" name="resolution" rows="3" required></textarea>
+      </label>
+      <p class="small error" data-field="resolve-error" hidden></p>
+      <div class="dialog-actions">
+        <button class="btn btn-ghost" type="button" data-action="close-resolve"
+          >Cancelar</button
+        >
+        <button
+          class="btn btn-primary"
+          type="submit"
+          data-action="submit-resolve"
+        >
+          Marcar como resuelto
+        </button>
+      </div>
+    </form>
+  </dialog>
+</section>
+
+<script>
+  import { onPage } from "./island";
+  import { mountBlockers } from "./blockers";
+
+  onPage("[data-blockers]", mountBlockers);
+</script>
+
+<style>
+  .blockers {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  /* `hidden` must beat the inline-flex of `.chip`. */
+  .head .chip[hidden],
+  .blocker .chip[hidden] {
+    display: none;
+  }
+
+  .list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .blocker {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4);
+  }
+
+  .blocker-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .resolve {
+    margin-left: auto;
+  }
+
+  .raise {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+  }
+
+  .fields {
+    display: grid;
+    grid-template-columns: minmax(180px, 220px) 1fr;
+    gap: var(--space-3);
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .field.wide {
+    grid-column: span 1;
+  }
+
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .error {
+    color: var(--rojo-ink);
+  }
+
+  .error[hidden] {
+    display: none;
+  }
+
+  .resolved summary {
+    cursor: pointer;
+    padding: var(--space-2) 0;
+  }
+
+  .resolved .list {
+    margin-top: var(--space-3);
+  }
+
+  .dialog {
+    width: min(460px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+  }
+
+  .dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  @media (max-width: 767px) {
+    .fields {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

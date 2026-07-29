@@ -69,10 +69,23 @@ BEARER_SCHEME: Final = "bearer"
 #: the *second* lock: the cookie is refused outright on unsafe methods above.
 COOKIE_SAMESITE: Final[Literal["Lax"]] = "Lax"
 
-#: What :class:`OpsLeadAuth` reports as refused. One phrase for both routes because both are the
-#: same capability — overruling the engine — and an operator reading a 403 needs to know which
+#: What :class:`OpsLeadAuth` reports as refused on the two engine-overruling routes. One phrase for
+#: both because both are the same capability, and an operator reading a 403 needs to know which
 #: capability they lack, not which URL they happened to hit.
 OPS_LEAD_ACTION: Final = "Overriding the ranking or rebuilding the whole portfolio"
+
+#: The same rule guarding a different capability: who is on the roster, what they are allowed to be
+#: carrying, and whose credential gets replaced. A separate phrase rather than a second rule,
+#: because the account that may overrule the engine is the account that may staff it — but a 403
+#: that said "overriding the ranking" to somebody who pressed "Añadir persona" would send them
+#: looking for a bug that is not there.
+ROSTER_ACTION: Final = "Registering, editing or retiring a person on the roster"
+
+#: The same rule again, guarding the shape of the lifecycles themselves. Authoring a workflow
+#: decides how everyone else's work is allowed to behave — which columns exist, which moves are
+#: offered, which of them demand a reason — so it is the most consequential capability of the three
+#: and the least often used. Reading a graph stays available to any member.
+WORKFLOW_ACTION: Final = "Shaping a workflow: its states, its transitions and its bindings"
 
 
 class TokenAuth(JWTBaseAuthentication, HttpBearer):
@@ -147,15 +160,32 @@ class TokenAuth(JWTBaseAuthentication, HttpBearer):
 class OpsLeadAuth(TokenAuth):
     """Authentication plus the one authorization rule this product has.
 
-    Exactly two routes use it, and both override the engine rather than participate in it: forcing
-    a project's rank against its computed score, and rebuilding the ranking of the entire
-    portfolio. Everything else is collaborative by design.
+    Three capabilities use it. Two routes override the engine rather than participate in it —
+    forcing a project's rank against its computed score, and rebuilding the ranking of the entire
+    portfolio. Four more edit the roster: registering a person, changing what they are allowed to
+    be carrying, retiring them, and replacing a credential. Eight more author the lifecycles: the
+    graphs, their states, their transitions and their bindings — the rules everyone else's work then
+    obeys. Everything a project or a task can do is collaborative by design and stays that way.
+
+    The *rule* is the same in both cases (``User.is_ops_lead``) and only the phrase differs, which
+    is why this is one class taking its action rather than two classes with one line each. A second
+    rule would need a second source of truth for who holds it, and there is exactly one.
 
     A subclass rather than a decorator or a permission list because ninja resolves ``auth`` per
     route: ``auth=ops_lead`` on the operation *is* the declaration, it appears in the OpenAPI
     document, and there is no second place where a route could be added to a protected set and
     forgotten.
     """
+
+    def __init__(self, action: str = OPS_LEAD_ACTION) -> None:
+        """Bind the phrase this instance reports as refused.
+
+        Args:
+            action: What the caller was attempting, in the words the 403's ``details.action``
+                carries. Defaults to the engine-overruling capability.
+        """
+        super().__init__()
+        self.action = action
 
     def authorize(self, user: User) -> None:
         """Refuse anyone who is not an ops lead.
@@ -168,15 +198,21 @@ class OpsLeadAuth(TokenAuth):
                 again cannot help.
         """
         if not user.is_ops_lead:
-            raise OpsLeadRequired(OPS_LEAD_ACTION)
+            raise OpsLeadRequired(self.action)
 
 
 #: The API-wide default, set on the ``NinjaAPI`` instance so a new route is authenticated unless
 #: someone deliberately writes ``auth=None``.
 token_auth = TokenAuth()
 
-#: The two-rule scheme, declared per route.
+#: The engine-overruling scheme, declared per route.
 ops_lead = OpsLeadAuth()
+
+#: The same rule guarding the roster writes, declared per route.
+roster_admin = OpsLeadAuth(ROSTER_ACTION)
+
+#: The same rule guarding every write that reshapes a lifecycle, declared per route.
+workflow_author = OpsLeadAuth(WORKFLOW_ACTION)
 
 
 def authenticate_request(request: HttpRequest) -> User:

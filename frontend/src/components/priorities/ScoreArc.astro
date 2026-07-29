@@ -1,0 +1,64 @@
+---
+/**
+ * The score dial: a 0–100 figure inside a thin arc filled to its own value.
+ *
+ * The arc is Cobalto on a Pozo track because it is the interface reporting its own
+ * measurement, not a state or a priority — a score of 91 and a score of 12 are the
+ * same colour, and only the arc's length differs (DESIGN.md, The One-Voice Rule).
+ *
+ * The figure is the readout the island count-ups on `project.priority.recalculated`;
+ * `--pct` is patched beside it, so the ring and the number can never disagree.
+ */
+import { formatScore } from "../../lib/format/score";
+
+export interface Props {
+  /** Computed score, 0–100. Never the override's forced position. */
+  value: number;
+}
+
+const { value } = Astro.props;
+const rendered = formatScore(value);
+---
+
+<p
+  class="arc"
+  data-arc
+  style={`--pct: ${value}`}
+  role="img"
+  aria-label={`Puntaje calculado ${rendered} sobre 100`}
+>
+  <span class="hole">
+    <span class="display" data-slot="score" aria-hidden="true">{rendered}</span>
+  </span>
+</p>
+
+<style>
+  .arc {
+    --arc-size: calc(var(--space-8) * 2);
+    width: var(--arc-size);
+    height: var(--arc-size);
+    flex: none;
+    border-radius: var(--radius-full);
+    display: grid;
+    place-items: center;
+    background: conic-gradient(
+      var(--cobalto) calc(var(--pct, 0) * 1%),
+      var(--pozo) 0
+    );
+    transition: background var(--motion-carta-duration) var(--motion-carta-ease);
+  }
+
+  /* Punches the ring out of the disc: a real element, so no mask support needed. */
+  .hole {
+    width: calc(100% - var(--space-4));
+    height: calc(100% - var(--space-4));
+    border-radius: var(--radius-full);
+    background-color: var(--carta);
+    display: grid;
+    place-items: center;
+  }
+
+  .display {
+    color: var(--tinta);
+  }
+</style>

@@ -1,0 +1,243 @@
+---
+/**
+ * "Quién": the person picker, filtering the trail by who signed the record.
+ *
+ * The same picker grammar as the owner control on a project
+ * (`components/projects/OwnerMenu.astro`): the trigger reports the current
+ * choice as an avatar disk plus a name, the panel is built on every open from
+ * the roster the API serves (`lib/team/roster.ts`, one read shared by every
+ * picker on the page), and the open/close/keyboard behaviour is the shared
+ * `lib/ui/menu.ts`. A person hired this morning appears here with no frontend
+ * change.
+ *
+ * One entry is deliberately not a person: the engine writes records too, and it
+ * is offered as a system entry with a glyph instead of initials. Dressing
+ * `system` as a colleague would be the interface claiming somebody did
+ * something nobody did.
+ *
+ * The options are built at open rather than server-rendered because they come
+ * from a read; the trigger, which must be right on first paint, is filled from
+ * props the page already resolved.
+ */
+import { avatarHue, initials } from "../../lib/auth/session";
+import { SYSTEM_ACTOR } from "../../lib/activity/vocabulary";
+import Icon from "../ui/Icon.astro";
+import { FILTER_COPY } from "./copy";
+
+export interface Props {
+  /** `accounts.User.code`, `"system"`, or `null` for "everyone". */
+  value: string | null;
+  /**
+   * Display name of {@link value}, resolved by the page from the roster it
+   * already read. An actor absent from the roster keeps its raw alias here, so
+   * a saved link shows what it is filtering by instead of a blank trigger.
+   */
+  valueLabel: string;
+}
+
+const { value, valueLabel } = Astro.props;
+
+const isSystem = value === SYSTEM_ACTOR;
+const isPerson = value !== null && !isSystem;
+const shown = value === null ? FILTER_COPY.any : valueLabel;
+---
+
+<div
+  class="actor-select"
+  data-actor-select
+  data-facet="actor"
+  data-value={value ?? ""}
+  data-kind={value === null ? "any" : isSystem ? "system" : "person"}
+>
+  <span class="label" id="actor-select-label">{FILTER_COPY.actor}</span>
+
+  <button
+    class="btn btn-secondary trigger"
+    type="button"
+    id="actor-select-trigger"
+    data-menu-trigger
+    aria-haspopup="menu"
+    aria-expanded="false"
+    aria-labelledby="actor-select-label actor-select-trigger"
+  >
+    <span
+      class="avatar"
+      data-actor-avatar
+      style={isPerson && value !== null
+        ? `--avatar-h: ${avatarHue(value)}`
+        : undefined}
+      aria-hidden="true">{isPerson ? initials(valueLabel) : ""}</span
+    >
+    <span class="glyph" data-actor-glyph aria-hidden="true">
+      <Icon name="pulse" size={16} />
+    </span>
+    <span class="who" data-field="actor-label">{shown}</span>
+    <Icon name="chevron-down" size={16} />
+  </button>
+
+  <div
+    class="panel card"
+    role="menu"
+    data-menu-panel
+    aria-labelledby="actor-select-label"
+    hidden
+  >
+  </div>
+
+  {/* One home for an option's markup; the panel is built on every open. */}
+  <template data-template="actor-option">
+    <button class="item" type="button" role="menuitemradio" data-menu-item>
+      <span class="avatar" data-actor-avatar aria-hidden="true"></span>
+      <span class="glyph" data-actor-glyph aria-hidden="true">
+        <Icon name="pulse" size={16} />
+      </span>
+      <span class="text">
+        <span class="title" data-field="option-label"></span>
+        <span class="small meta" data-field="option-meta"></span>
+      </span>
+      <span class="tick" data-option-tick hidden>
+        <Icon name="check" size={16} />
+      </span>
+    </button>
+  </template>
+
+  {/* The loading, empty and error arms of the roster read, one line each. */}
+  <template data-template="actor-note">
+    <p class="note small" data-field="note-text"></p>
+  </template>
+</div>
+
+<style>
+  .actor-select {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .trigger {
+    justify-content: flex-start;
+    gap: var(--space-2);
+    height: 40px;
+    padding: 0 var(--space-2) 0 var(--space-2);
+    font-size: var(--text-small-size);
+    font-weight: 400;
+  }
+
+  .trigger .avatar,
+  .item .avatar {
+    width: var(--space-5);
+    height: var(--space-5);
+    flex: none;
+  }
+
+  .item .avatar {
+    width: var(--space-6);
+    height: var(--space-6);
+  }
+
+  .glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--space-5);
+    height: var(--space-5);
+    flex: none;
+    border-radius: var(--radius-full);
+    background-color: var(--pozo);
+    color: var(--tinta-media);
+  }
+
+  /* Exactly one of the two identity marks is shown, and neither when the filter
+     is off — a disk with no initials would read as a person with no name. */
+  .actor-select[data-kind="person"] .trigger .glyph,
+  .actor-select[data-kind="system"] .trigger .avatar,
+  .actor-select[data-kind="any"] .trigger .avatar,
+  .actor-select[data-kind="any"] .trigger .glyph {
+    display: none;
+  }
+
+  .item[data-kind="person"] .glyph,
+  .item[data-kind="system"] .avatar,
+  .item[data-kind="any"] .avatar,
+  .item[data-kind="any"] .glyph {
+    display: none;
+  }
+
+  .who {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-right: auto;
+  }
+
+  .trigger[aria-expanded="true"] {
+    border-color: var(--cobalto);
+    color: var(--cobalto);
+  }
+
+  /* Anchored in viewport coordinates by `lib/ui/menu.ts`. */
+  .panel {
+    position: fixed;
+    z-index: var(--z-drawer);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    width: max-content;
+    min-width: 240px;
+    max-width: min(320px, calc(100vw - var(--space-6)));
+    padding: var(--space-2);
+    box-shadow: var(--shadow-lifted);
+  }
+
+  .panel[hidden] {
+    display: none;
+  }
+
+  .item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: 40px;
+    padding: var(--space-2);
+    border-radius: var(--radius-chip);
+    text-align: left;
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .item:hover,
+  .item:focus-visible {
+    background-color: var(--pozo);
+  }
+
+  .item[aria-checked="true"] {
+    background-color: var(--cobalto-papel);
+  }
+
+  .item .text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .item .meta {
+    color: var(--tinta-media);
+  }
+
+  .tick {
+    margin-left: auto;
+    color: var(--cobalto);
+    line-height: 0;
+  }
+
+  .tick[hidden] {
+    display: none;
+  }
+
+  .note {
+    padding: var(--space-2);
+    color: var(--tinta-media);
+  }
+</style>

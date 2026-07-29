@@ -5,7 +5,7 @@ Attached from the admin to every edge whose target category is `BLOCKED`, by typ
 most consequential label in this system — it drives the `BLOCKED` risk flag, the `blockage`
 priority signal and the blockers panel — and a board where "blocked" sometimes means "nobody
 wrote down why" stops being usable for running the operation. Requiring the `Blocker` row first
-makes the impediment a first-class fact with an owner and an age (ARCHITECTURE §3.3) instead of a
+makes the impediment a first-class fact with an owner and an age (ARCHITECTURE §4.4) instead of a
 sentence in a notes field.
 """
 

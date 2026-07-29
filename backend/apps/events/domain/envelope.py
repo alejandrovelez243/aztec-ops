@@ -32,6 +32,13 @@ TOPIC_BLOCKER_RAISED: Final[str] = "blocker.raised"
 TOPIC_BLOCKER_RESOLVED: Final[str] = "blocker.resolved"
 TOPIC_NOTE_ADDED: Final[str] = "note.added"
 TOPIC_CLOCK_TICKED: Final[str] = "clock.ticked"
+TOPIC_MEMBER_CREATED: Final[str] = "member.created"
+TOPIC_MEMBER_UPDATED: Final[str] = "member.updated"
+# Deactivation and reactivation share one topic carrying ``is_active``, rather than being two.
+# A consumer's question is "may this person still take work?", and the answer is a field; two
+# topics would make every subscriber list both and treat them identically, which is the shape of
+# a bug the first time somebody adds only one of them to a subscription.
+TOPIC_MEMBER_ACTIVATION_CHANGED: Final[str] = "member.activation_changed"
 
 #: Every registered topic. A topic absent from here does not exist (EVENTS.md §7.1).
 ALL_TOPICS: Final[frozenset[str]] = frozenset(
@@ -47,6 +54,9 @@ ALL_TOPICS: Final[frozenset[str]] = frozenset(
         TOPIC_BLOCKER_RESOLVED,
         TOPIC_NOTE_ADDED,
         TOPIC_CLOCK_TICKED,
+        TOPIC_MEMBER_CREATED,
+        TOPIC_MEMBER_UPDATED,
+        TOPIC_MEMBER_ACTIVATION_CHANGED,
     }
 )
 
@@ -63,6 +73,9 @@ ENTITY_TASK: Final[str] = "task"
 ENTITY_BLOCKER: Final[str] = "blocker"
 ENTITY_NOTE: Final[str] = "note"
 ENTITY_CLOCK: Final[str] = "clock"
+#: A person on the roster, addressed by ``accounts.User.code`` — never by primary key, so a
+#: consumer acts on the same identifier every other payload already names an owner or assignee by.
+ENTITY_MEMBER: Final[str] = "member"
 
 #: ``actor`` when the prioritization or risk engine, the relay or the ticker caused the change.
 #: Never null and never empty: an unattributed change is a bug (EVENTS.md §1).

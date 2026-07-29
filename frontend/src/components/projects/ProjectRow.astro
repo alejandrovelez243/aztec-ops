@@ -1,0 +1,150 @@
+---
+/**
+ * One project as a table row — the same data as the card, in columns, for the
+ * operator who is comparing twenty of them rather than reading one.
+ *
+ * The name is the link; the row is clickable as a convenience (wired by the
+ * list island), never as the only way in, so the surface stays keyboard-
+ * reachable in DOM order.
+ *
+ * The score cell carries its own argument, in the same two forms the card uses
+ * — the engine's sentences in `title`, the one-line summary as what the cell
+ * announces — so a column of figures is never a column of unexplained numbers
+ * (PRODUCT principle 1). A comparison table is exactly where the reasons must
+ * stay folded away: twenty-two of them drawn out would bury the comparison
+ * they exist to support.
+ */
+import DueChip from "./DueChip.astro";
+import OwnerBadge from "./OwnerBadge.astro";
+import StateChip from "./StateChip.astro";
+import { formatScore } from "./format";
+import { healthTone } from "./tone";
+import { scoreArgument, scoreSummary } from "./presentation";
+import type { ProjectPresentation } from "./presentation";
+
+export interface Props {
+  /** The row's presentation model; the row renders all of it. */
+  project: ProjectPresentation;
+}
+
+const { project } = Astro.props;
+const rail = healthTone(project.healthCode);
+const argument = scoreArgument(project.score, project.scoreReasons);
+const summary = scoreSummary(project.score, project.scoreReasons);
+---
+
+<tr
+  class:list={["proj-row", rail]}
+  data-project
+  data-code={project.code}
+  data-search={project.searchKey}
+  data-category={project.stateCategory}
+  data-engagement={project.engagementCode}
+  data-health={project.healthCode}
+  data-updated-at={project.updatedAt}
+  data-sort-name={project.name.toLocaleLowerCase("es")}
+  data-sort-score={project.score}
+  data-sort-due={project.targetDate ?? ""}
+  data-href={`/projects/${project.code}`}
+>
+  <td class="col-code rail">
+    <span class="chip chip-code">{project.code}</span>
+  </td>
+  <td class="col-name">
+    <a
+      class="name title"
+      href={`/projects/${project.code}`}
+      transition:name={`proj-${project.code}`}
+    >
+      {project.name}
+    </a>
+  </td>
+  <td class="col-client small">{project.clientAlias}</td>
+  <td class="col-state">
+    <StateChip
+      label={project.stateLabel}
+      category={project.stateCategory}
+      color={project.stateColor}
+    />
+  </td>
+  <td class="col-owner">
+    <OwnerBadge alias={project.ownerAlias} label={project.ownerLabel} />
+  </td>
+  <td class="col-due">
+    <DueChip date={project.targetDate} />
+  </td>
+  <td class="col-risk">
+    <span
+      class:list={[
+        "chip",
+        "figure",
+        project.riskCount > 0 ? "tone-rojo" : "tone-verde",
+      ]}
+      data-field="risk-count"
+      data-risk-format="number"
+    >
+      {project.riskCount}
+    </span>
+  </td>
+  <td class="col-score" title={argument} data-score-slot>
+    <span class="figure" data-field="score" aria-hidden="true"
+      >{formatScore(project.score)}</span
+    >
+    <span class="visually-hidden" data-field="score-note">{summary}</span>
+    {project.hasOverride && <span class="chip tone-cielo">Ajuste</span>}
+  </td>
+</tr>
+
+<style>
+  .proj-row {
+    border-bottom: var(--border-width) solid var(--hairline);
+    background-color: var(--carta);
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .proj-row:hover {
+    background-color: var(--pozo);
+    cursor: pointer;
+  }
+
+  .proj-row td {
+    padding: var(--space-3) var(--space-3);
+    vertical-align: middle;
+  }
+
+  .col-code {
+    padding-left: calc(var(--space-3) + var(--rail-width));
+  }
+
+  .name {
+    text-decoration: none;
+    overflow-wrap: anywhere;
+  }
+
+  .name:hover {
+    color: var(--cobalto);
+  }
+
+  .col-risk,
+  .col-score {
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .col-score .chip {
+    margin-left: var(--space-1);
+  }
+
+  @media (max-width: 1199px) {
+    .col-client {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1023px) {
+    .col-owner {
+      display: none;
+    }
+  }
+</style>

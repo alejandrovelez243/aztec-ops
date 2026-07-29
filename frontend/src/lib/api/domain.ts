@@ -70,6 +70,19 @@ export type Transition = Schemas["TransitionOption"];
 /** One task; `is_overdue` is derived server-side, never a stored flag. */
 export type TaskItem = Schemas["TaskView"];
 
+/**
+ * One task in full, as its own screen reads it: the project it belongs to, its
+ * legal `transitions` and its comments, in one response.
+ *
+ * Wider than {@link TaskItem} in the two ways that matter to a detail. Only this
+ * shape publishes `transitions`, which is the sole source of the state buttons
+ * (`docs/API.md` §2.2) — a list row cannot offer them because it does not carry
+ * them. And `notes` travels inside rather than behind a second route, so the
+ * comments can never be rendered beside a version of the task they do not
+ * describe.
+ */
+export type TaskDetail = Schemas["TaskDetailView"];
+
 /** One page of a project's tasks. */
 export type TaskPage = Schemas["Page_TaskView_"];
 
@@ -89,11 +102,37 @@ export type NoteView = Schemas["NoteView"];
 
 // --- Team load ---------------------------------------------------------------
 
-/** One person's current load, computed from task rows at read time. */
+/**
+ * One roster row: a person's identity plus what they are carrying right now.
+ *
+ * `role` is the label to render and `role_code` the slug to send back — never derive one from
+ * the other, the label is operator-editable Spanish. `has_password` false is a real assignee
+ * who cannot sign in yet, not an error.
+ */
 export type TeamLoadEntry = Schemas["TeamLoadView"];
 
 /** The whole roster's load; not paginated and deliberately without a `count`. */
 export type TeamLoad = Schemas["TeamLoadPage"];
+
+/**
+ * One person as the roster write routes answer. Narrower than {@link TeamLoadEntry}: it carries
+ * no load, because load is a portfolio aggregate and these routes belong to identity.
+ */
+export type Member = Schemas["MemberView"];
+
+// --- Catalog -----------------------------------------------------------------
+
+/** Every active taxonomy list a form draws its pickers from, in one document. */
+export type Catalog = Schemas["CatalogView"];
+
+/**
+ * The editor's view of the vocabulary — retired roles included, which `Catalog.roles`
+ * deliberately excludes because that list feeds the pickers.
+ */
+export type RoleListQuery = QueryOf<"apps_catalog_api_routers_get_roles">;
+
+export type RoleCreateIn = Schemas["RoleCreateIn"];
+export type RoleUpdateIn = Schemas["RoleUpdateIn"];
 
 // --- Activity ----------------------------------------------------------------
 
@@ -112,6 +151,17 @@ export type BlockerCreateIn = Schemas["BlockerCreateIn"];
 export type BlockerResolveIn = Schemas["BlockerResolveIn"];
 export type NoteIn = Schemas["NoteIn"];
 export type TaskCreateIn = Schemas["TaskCreateIn"];
+/**
+ * Body of `PATCH /api/v1/tasks/{code}`, with the same absent-vs-`null` contract
+ * the project update carries: an omitted key leaves the column alone, an
+ * explicit `null` clears a nullable one, which is how a task is unassigned or
+ * loses its due date. `workflow_state` is not a field of it under any name — a
+ * state moves through the transition route (CLAUDE.md rule 2).
+ */
+export type TaskUpdateIn = Schemas["TaskUpdateIn"];
+export type MemberCreateIn = Schemas["MemberCreateIn"];
+export type MemberUpdateIn = Schemas["MemberUpdateIn"];
+export type MemberPasswordIn = Schemas["MemberPasswordIn"];
 
 // --- Query parameters --------------------------------------------------------
 
@@ -125,6 +175,29 @@ export type TaskQuery = QueryOf<"apps_work_api_routers_get_project_tasks">;
 export type TeamLoadQuery = QueryOf<"apps_portfolio_api_routers_get_team_load">;
 export type TimelineQuery =
   QueryOf<"apps_activity_api_routers_get_project_activity">;
+
+/**
+ * Facets of the portfolio-wide feed. Every one is optional and none is
+ * validated against its vocabulary on the server: a saved URL naming a retired
+ * verb or a departed colleague answers with an empty page, never a 422.
+ */
+export type PortfolioActivityQuery =
+  QueryOf<"apps_activity_api_routers_get_portfolio_activity">;
+
+// --- Workflows ---------------------------------------------------------------
+
+/** Every configured workflow, with its ordered states and the edges between them. */
+export type WorkflowCatalog = Schemas["WorkflowCatalogView"];
+
+/**
+ * One workflow graph: which states exist, in the order an operator arranged
+ * them, and which moves join them.
+ *
+ * `transitions` here is the *configuration* — a sibling of `states`, naming both
+ * endpoints of every arrow. It is not the per-record `transitions` of a project
+ * or a task, which names only a target and means "legal right now".
+ */
+export type WorkflowShape = Schemas["WorkflowShapeView"];
 
 // --- Authentication ----------------------------------------------------------
 

@@ -1,0 +1,292 @@
+---
+/**
+ * `/workflows` — "Flujos de trabajo": how the operation is currently configured.
+ *
+ * **Why this surface exists.** States and the moves between them are data an
+ * operator edits in the admin (`CLAUDE.md` rule 1), which means no screen can
+ * hardcode them and no reader can be expected to know them. When a move is
+ * refused, the refusal is correct and unexplained — this is where the
+ * explanation lives: the arrow the operator never drew is visibly absent.
+ *
+ * Read-only, and deliberately so. Nothing here writes, nothing here is legal
+ * advice about a *record*: the graph says which arrows exist, while whether the
+ * project on your screen may take one is computed per record against its own
+ * state, the transition's guard and its `requires_fields`, and stays on the
+ * detail's `transitions` (`docs/API.md` §2.2). Acting on an edge published here
+ * without asking earns a typed 409, which is the same failure mode as a stale
+ * button.
+ *
+ * A container and nothing else (`PATTERNS_FRONTEND.md` §5): one read, one view
+ * model, then composition. There is no island beyond the retry, because there is
+ * nothing to patch — configuration does not arrive over the stream, so this
+ * surface has four view states and not five, and `disconnected` would be a
+ * staleness marker on data no envelope can make stale.
+ */
+import EmptyState from "../components/ui/EmptyState.astro";
+import Icon from "../components/ui/Icon.astro";
+import WorkflowSection from "../components/workflows/WorkflowSection.astro";
+import { buildWorkflowViews } from "../components/workflows/graph";
+import Shell from "../layouts/Shell.astro";
+import { getWorkflows } from "../lib/api/client";
+import { errorCopyByCode } from "../lib/api/error-copy";
+import { toViewState } from "../lib/view-state";
+
+const result = await getWorkflows();
+
+/**
+ * `"connecting"` because the stream has no bearing on this answer: there is no
+ * `EventSource` on the server, and this document is authoritative the moment it
+ * is read whether or not the browser's connection has opened.
+ */
+const state = toViewState(result, "connecting", {
+  isEmpty: (data) => data.workflows.length === 0,
+  emptyMessage:
+    "Nadie ha configurado todavía un flujo de trabajo, así que ningún proyecto ni ninguna tarea puede cambiar de estado.",
+  lastEventAt: null,
+});
+
+const workflows =
+  state.kind === "ready" || state.kind === "disconnected"
+    ? buildWorkflowViews(state.data)
+    : [];
+
+/** Filled even while its arm is hidden, so the card is never blank when it appears. */
+const failure = errorCopyByCode(
+  state.kind === "error" ? state.code : "unknown_error",
+);
+
+/**
+ * Always a real sentence, never an absent prop: `exactOptionalPropertyTypes`
+ * makes `description={undefined}` a type error, and it is the right rule — the
+ * empty state's second line is what turns an apology into an instruction.
+ */
+const emptyDescription =
+  state.kind === "empty"
+    ? state.message
+    : "Los estados y sus transiciones se crean en el panel de administración.";
+
+const CRUMBS = [
+  { label: "Resumen", href: "/" },
+  { label: "Flujos de trabajo" },
+];
+
+/**
+ * Where the graph is actually edited.
+ *
+ * Creating a workflow is deliberately not a product surface: states and
+ * transitions are configuration an operator changes rarely and carefully, and
+ * CLAUDE.md rule 1 keeps that vocabulary in the database, edited from the
+ * admin, so the operation can change without a deploy. This screen is the
+ * read-only view of that configuration — naming where to go is what keeps it
+ * from being a dead end.
+ */
+const adminUrl = `${import.meta.env.PUBLIC_API_URL ?? "http://localhost:8000"}/admin/workflow/workflow/`;
+
+/** Skeleton rows shown while a retry is in flight. */
+const SKELETON_ROWS = [0, 1, 2, 3, 4];
+---
+
+<Shell title="Flujos de trabajo" active="workflows" crumbs={CRUMBS}>
+  <section class="workflows" data-workflows-region data-view={state.kind}>
+    <header class="head">
+      <h1 class="h1">Flujos de trabajo</h1>
+      <p class="body-text lead">
+        Los estados y los movimientos entre ellos son datos que se editan en el
+        panel de administración: esto es cómo están configurados ahora mismo. Si
+        un movimiento fue rechazado, la razón se ve aquí — entre dos estados sin
+        flecha no hay paso posible.
+      </p>
+      <p class="small edit-note">
+        Para crear un flujo, añadir un estado o abrir un movimiento nuevo, ve al
+        <a class="edit-link" href={adminUrl} target="_blank" rel="noreferrer"
+          >panel de administración</a
+        >. Los cambios aparecen aquí en cuanto se guardan, sin desplegar nada.
+      </p>
+    </header>
+
+    <div class="graphs" data-graphs-arm>
+      {workflows.map((workflow) => <WorkflowSection workflow={workflow} />)}
+    </div>
+
+    <div class="skeletons" data-skeletons-arm aria-hidden="true">
+      <p class="skeleton skeleton-title"></p>
+      <div class="skeleton skeleton-graph"></div>
+      <div class="card skeleton-table">
+        {SKELETON_ROWS.map(() => <p class="skeleton skeleton-row" />)}
+      </div>
+    </div>
+
+    <div class="card" data-empty-arm>
+      <EmptyState
+        scene="quiet"
+        title="No hay ningún flujo configurado"
+        description={emptyDescription}
+      />
+    </div>
+
+    <div class="card state" data-error-arm>
+      <span class="state-icon tone-rojo" aria-hidden="true">
+        <Icon name="alert" />
+      </span>
+      <h2 class="h2">{failure.title}</h2>
+      <p class="body-text">{failure.detail}</p>
+      <p>
+        <button class="btn btn-secondary" type="button" data-workflows-retry>
+          <Icon name="refresh" />
+          Reintentar
+        </button>
+      </p>
+    </div>
+  </section>
+
+  <script>
+    import { onPage } from "../components/projects/island";
+
+    /**
+     * The only interaction on this surface: re-read the document.
+     *
+     * A reload rather than a refetch, because every arm of this page is
+     * server-rendered — re-rendering the graph in the browser would mean a
+     * second copy of the layout, in TypeScript, free to disagree with the one
+     * that drew the page. Flipping the region to `loading` first is what makes
+     * that arm real: the skeleton paints in the geometry of the answer while
+     * the document is fetched again.
+     */
+    onPage("[data-workflows-region]", (root) => {
+      const retry = root.querySelector<HTMLButtonElement>(
+        "[data-workflows-retry]",
+      );
+
+      const reload = (): void => {
+        root.dataset.view = "loading";
+        window.requestAnimationFrame(() => {
+          window.location.reload();
+        });
+      };
+
+      retry?.addEventListener("click", reload);
+      return () => retry?.removeEventListener("click", reload);
+    });
+  </script>
+</Shell>
+
+<style>
+  /*
+   * Every grid on this page states `minmax(0, 1fr)` rather than letting the
+   * single implicit track default to `auto`, and every child of one carries
+   * `min-width: 0`.
+   *
+   * The diagram is ~1500px of fixed geometry inside its own scroller, and a
+   * scroller only scrolls if something upstream is allowed to be narrower than
+   * it: an `auto` track is floored by its item's min-content, and a grid item's
+   * `min-width: auto` is floored by its own, so without both the whole column
+   * grew to the drawing's width and the page — not the figure — scrolled
+   * sideways at every viewport.
+   */
+  .workflows {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-6);
+  }
+
+  .workflows > * {
+    min-width: 0;
+  }
+
+  .head {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .edit-note {
+    color: var(--tinta-media);
+    max-width: var(--text-body-max);
+  }
+
+  .edit-link {
+    color: var(--cobalto);
+    font-weight: var(--text-title-weight);
+  }
+
+  .lead {
+    color: var(--tinta-media);
+  }
+
+  .graphs {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-8);
+  }
+
+  .state {
+    justify-items: start;
+    gap: var(--space-3);
+    padding: var(--space-6);
+  }
+
+  .state-icon {
+    display: grid;
+    place-items: center;
+    width: var(--space-7);
+    height: var(--space-7);
+    border-radius: var(--radius-full);
+    background-color: var(--tone-wash);
+    color: var(--tone-ink);
+  }
+
+  /* --- Skeletons: the exact geometry of the loaded state --- */
+
+  .skeletons {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .skeleton-title {
+    width: 22ch;
+    height: var(--space-5);
+  }
+
+  .skeleton-graph {
+    height: 320px;
+    border-radius: var(--radius-card);
+  }
+
+  .skeleton-table {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+  }
+
+  .skeleton-row {
+    height: var(--space-5);
+  }
+
+  /* --- View-state arms: one at a time, selected by `data-view` on the region --- */
+
+  [data-graphs-arm],
+  [data-skeletons-arm],
+  [data-empty-arm],
+  [data-error-arm] {
+    display: none;
+  }
+
+  /* `disconnected` is unreachable here and shares the ready arm rather than
+     inventing a staleness marker: nothing on this surface is patched by an
+     envelope, so there is no such thing as stale configuration on screen. */
+  [data-view="ready"] [data-graphs-arm],
+  [data-view="disconnected"] [data-graphs-arm],
+  [data-view="loading"] [data-skeletons-arm] {
+    display: grid;
+  }
+
+  [data-view="empty"] [data-empty-arm],
+  [data-view="error"] [data-error-arm] {
+    display: grid;
+  }
+
+  @media (max-width: 640px) {
+    .state {
+      padding: var(--space-5);
+    }
+  }
+</style>

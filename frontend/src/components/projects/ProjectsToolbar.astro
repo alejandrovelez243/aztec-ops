@@ -1,0 +1,427 @@
+---
+/**
+ * The projects toolbar: search, the filter pills, and the grid ↔ table switch.
+ *
+ * Every pill is built from a value **present in the fetched rows** — a state
+ * category nobody is in offers no filter, and an engagement type added in the
+ * admin appears here with no frontend change. The counts beside them are what
+ * makes the bar a summary as well as a control.
+ *
+ * The controls are markup only; the list island owns the filtering, so the same
+ * bar can be server-rendered and still work the moment JavaScript arrives.
+ */
+import Icon from "../ui/Icon.astro";
+import type { Facets } from "./presentation";
+import { SORT_OPTIONS, sortLabel } from "./sort";
+
+export interface Props {
+  /** Facet values present in the fetched rows, with their counts. */
+  facets: Facets;
+  /** How many projects were fetched; the denominator of the count line. */
+  total: number;
+}
+
+const { facets, total } = Astro.props;
+---
+
+<div class="toolbar" data-toolbar>
+  <div class="row">
+    <div class="search">
+      <Icon name="search" size={18} />
+      <input
+        class="input"
+        type="search"
+        placeholder="Buscar proyecto o código"
+        aria-label="Buscar proyecto o código"
+        data-search-input
+        autocomplete="off"
+      />
+    </div>
+
+    <div class="sort" data-sort>
+      <span class="small sort-label" id="projects-sort-label">Ordenar por</span>
+      <button
+        class="btn btn-secondary sort-trigger"
+        type="button"
+        id="projects-sort-trigger"
+        aria-haspopup="true"
+        aria-expanded="false"
+        aria-labelledby="projects-sort-label projects-sort-trigger"
+        data-sort-trigger
+      >
+        <span data-field="sort-current">{sortLabel("name")}</span>
+        <Icon name="chevron-down" size={16} />
+      </button>
+      <ul
+        class="sort-menu card"
+        role="menu"
+        aria-labelledby="projects-sort-label"
+        data-sort-menu
+        hidden
+      >
+        {
+          SORT_OPTIONS.map((option, index) => (
+            <li>
+              <button
+                class="sort-option"
+                type="button"
+                role="menuitemradio"
+                aria-checked={index === 0}
+                data-sort-value={option.value}
+              >
+                <span class="tick" aria-hidden="true">
+                  <Icon name="check" size={14} />
+                </span>
+                <span>{option.label}</span>
+              </button>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+
+    <div
+      class="view-toggle"
+      role="group"
+      aria-label="Forma de ver la lista"
+      data-view-toggle
+    >
+      <button
+        class="btn btn-ghost"
+        type="button"
+        data-view-button="grid"
+        aria-pressed="true"
+      >
+        <Icon name="board" size={18} />
+        Tarjetas
+      </button>
+      <button
+        class="btn btn-ghost"
+        type="button"
+        data-view-button="table"
+        aria-pressed="false"
+      >
+        <Icon name="menu" size={18} />
+        Tabla
+      </button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="pills" role="group" aria-label="Filtros">
+      {
+        facets.categories.map((facet) => (
+          <button
+            class="chip pill filter"
+            type="button"
+            data-filter="category"
+            data-value={facet.value}
+            aria-pressed="false"
+          >
+            {facet.label}
+            <span class="figure count">{facet.count}</span>
+          </button>
+        ))
+      }
+      {
+        facets.engagements.map((facet) => (
+          <button
+            class="chip pill filter"
+            type="button"
+            data-filter="engagement"
+            data-value={facet.value}
+            aria-pressed="false"
+          >
+            {facet.label}
+            <span class="figure count">{facet.count}</span>
+          </button>
+        ))
+      }
+      {
+        facets.atRisk > 0 && (
+          <button
+            class="chip pill filter tone-rojo"
+            type="button"
+            data-filter="risk"
+            data-value="at-risk"
+            aria-pressed="false"
+          >
+            En riesgo
+            <span class="figure count">{facets.atRisk}</span>
+          </button>
+        )
+      }
+    </div>
+
+    <div class="count-line">
+      {
+        /* Only the counter is live: an announcement per keystroke is useful,
+          the same button being re-read every time is not. */
+      }
+      {
+        /* The spaces are explicit: the compiler drops whitespace-only lines
+          between expressions, which is how "22 de22 proyectos" happens. */
+      }
+      <p class="small" aria-live="polite">
+        <span class="figure" data-field="visible-count">{total}</span>
+        {" de "}
+        <span class="figure">{total}</span>
+        {" proyectos"}
+      </p>
+      <button
+        class="btn btn-ghost clear"
+        type="button"
+        data-action="clear-filters"
+        hidden
+      >
+        <Icon name="close" size={16} />
+        Limpiar filtros
+      </button>
+    </div>
+  </div>
+</div>
+
+<style>
+  .toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin-bottom: var(--space-5);
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .search {
+    position: relative;
+    flex: 1 1 280px;
+    max-width: 420px;
+    color: var(--tinta-suave);
+  }
+
+  .search :global(svg) {
+    position: absolute;
+    left: var(--space-3);
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+  }
+
+  .search .input {
+    padding-left: var(--space-6);
+  }
+
+  /* The order menu is built rather than a `<select>`: the native popup is drawn
+     by the OS, so it lands as a grey system list in the middle of a surface
+     that is otherwise all paper and ink. */
+  .sort {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+    color: var(--tinta-media);
+    white-space: nowrap;
+  }
+
+  .sort-label {
+    color: var(--tinta-suave);
+  }
+
+  .sort-trigger {
+    height: 36px;
+    padding: 0 var(--space-2) 0 var(--space-3);
+    gap: var(--space-2);
+    font-size: var(--text-small-size);
+  }
+
+  .sort-trigger :global(svg) {
+    transition: transform var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .sort-trigger[aria-expanded="true"] {
+    border-color: var(--cobalto);
+    color: var(--cobalto);
+  }
+
+  .sort-trigger[aria-expanded="true"] :global(svg) {
+    transform: rotate(180deg);
+  }
+
+  .sort-menu {
+    position: absolute;
+    top: calc(100% + var(--space-1));
+    right: 0;
+    z-index: 20;
+    min-width: 240px;
+    margin: 0;
+    padding: var(--space-1);
+    list-style: none;
+    box-shadow: var(--shadow-lifted);
+    animation: sort-menu-in var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .sort-menu[hidden] {
+    display: none;
+  }
+
+  @keyframes sort-menu-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sort-menu {
+      animation: none;
+    }
+
+    .sort-trigger :global(svg) {
+      transition: none;
+    }
+  }
+
+  .sort-option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-2) var(--space-2);
+    border: 0;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--tinta);
+    font: inherit;
+    font-size: var(--text-small-size);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .sort-option:hover,
+  .sort-option:focus-visible {
+    background-color: var(--pozo);
+  }
+
+  .sort-option[aria-checked="true"] {
+    color: var(--cobalto);
+  }
+
+  /* The tick keeps its box when unchecked, so choosing one does not shunt the
+     labels sideways. */
+  .tick {
+    display: inline-flex;
+    width: 14px;
+    visibility: hidden;
+  }
+
+  .sort-option[aria-checked="true"] .tick {
+    visibility: visible;
+  }
+
+  .view-toggle {
+    display: flex;
+    gap: var(--space-1);
+    padding: var(--space-1);
+    background-color: var(--pozo);
+    border-radius: var(--radius-control);
+  }
+
+  .view-toggle .btn {
+    height: 32px;
+    padding: 0 var(--space-3);
+    font-size: var(--text-small-size);
+  }
+
+  .view-toggle .btn[aria-pressed="true"] {
+    background-color: var(--carta);
+    color: var(--tinta);
+    box-shadow: var(--shadow-resting);
+  }
+
+  .pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .filter {
+    min-height: 32px;
+    padding: var(--space-1) var(--space-3);
+    border: var(--border-width) solid transparent;
+    transition:
+      background-color var(--motion-micro-duration) var(--motion-micro-ease),
+      border-color var(--motion-micro-duration) var(--motion-micro-ease),
+      color var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .filter:hover {
+    border-color: var(--tinta-suave);
+  }
+
+  .filter[aria-pressed="true"] {
+    background-color: var(--cobalto-papel);
+    border-color: var(--cobalto);
+    color: var(--cobalto);
+  }
+
+  .filter .count {
+    color: var(--tinta-suave);
+  }
+
+  .filter[aria-pressed="true"] .count {
+    color: var(--cobalto);
+  }
+
+  .count-line {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  .clear {
+    height: 32px;
+    padding: 0 var(--space-2);
+    font-size: var(--text-small-size);
+  }
+
+  .clear[hidden] {
+    display: none;
+  }
+
+  @media (pointer: coarse) {
+    .filter {
+      min-height: 40px;
+    }
+
+    .view-toggle .btn {
+      height: 40px;
+    }
+  }
+
+  @media (max-width: 767px) {
+    /*
+     * The phone renders the card form whichever view is remembered
+     * (`pages/projects/index.astro`), so the switch has nothing to switch.
+     *
+     * This is the state before the island runs; `list-island.ts` then takes the
+     * group out of the document entirely. Hiding alone left two buttons at 0×0
+     * — no size, no meaning, and still two nodes in the tree — and detaching
+     * alone would flash the control on a phone until the script arrived.
+     */
+    .view-toggle {
+      display: none;
+    }
+
+    .count-line {
+      margin-left: 0;
+    }
+  }
+</style>

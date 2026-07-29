@@ -302,8 +302,9 @@ class Blockage(SignalStrategy):
 ```
 
 The evaluator iterates the registry and never learns a signal's name. Same shape for risk:
-one `Specification` subclass, a `flag_code`, a severity, one `@register_risk` line. If a change
-requires editing an existing `if`, the design is wrong (`CLAUDE.md` rule 8).
+one `Specification` subclass carrying its own Spanish `label`, a `flag_code`, a severity, one
+`@register_risk` line. If a change requires editing an existing `if` — or adding a code-to-label
+dictionary on either side of the wire — the design is wrong (`CLAUDE.md` rule 8).
 
 ### LSP — every specification honours one contract
 

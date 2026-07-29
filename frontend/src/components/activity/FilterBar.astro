@@ -1,0 +1,214 @@
+---
+/**
+ * The feed's facets, in this interface's own controls.
+ *
+ * Nothing here is a native form control: the dropdowns are the shared
+ * `MenuSelect`, "quién" is the person picker, "qué cambió" is a row of pressed
+ * chips, and the range is one `DateRangeField`. A `<select>` popup and a
+ * `<input type="date">` calendar are both drawn by the operating system: they
+ * land as grey system panels in the middle of a surface that is otherwise all
+ * paper and ink, they differ per browser, and no token reaches inside them.
+ *
+ * There is no "apply": filtering is live. Every control announces its change
+ * through the DOM and the island refetches, rewriting the query string in the
+ * same beat — so the URL is still the single source of filter state and a
+ * narrowed feed is still a link somebody can paste into a thread.
+ *
+ * Presentational: props in, DOM out. It knows what a facet is called, not what
+ * choosing one does.
+ */
+import {
+  entityTypeOptions,
+  originOptions,
+  verbOptions,
+} from "../../lib/activity/vocabulary";
+import type { ActivityFilters } from "../../lib/activity/filters";
+import DateRangeField from "../ui/DateRangeField.astro";
+import Icon from "../ui/Icon.astro";
+import MenuSelect from "../ui/MenuSelect.astro";
+import ActorSelect from "./ActorSelect.astro";
+import { FILTER_COPY, filterSummaryText } from "./copy";
+
+export interface Props {
+  /** The reading currently on screen; every control renders its own value. */
+  filters: ActivityFilters;
+  /**
+   * Display name of `filters.actor`, resolved by the page from the roster it
+   * already read; the raw alias when the roster does not know them.
+   */
+  actorLabel: string;
+  /** Facets currently narrowing the feed; drives the summary and "Limpiar". */
+  activeCount: number;
+}
+
+const { filters, actorLabel, activeCount } = Astro.props;
+
+const any = { value: "", label: FILTER_COPY.any };
+const entityTypes = [any, ...entityTypeOptions()];
+const origins = [any, ...originOptions()];
+const verbs = verbOptions();
+const summary = filterSummaryText(activeCount);
+---
+
+<div class="filters card" data-activity-filters>
+  <div class="row">
+    <MenuSelect
+      facet="entity_type"
+      label={FILTER_COPY.entityType}
+      options={entityTypes}
+      value={filters.entityType ?? ""}
+    />
+
+    <MenuSelect
+      facet="origin"
+      label={FILTER_COPY.origin}
+      options={origins}
+      value={filters.origin ?? ""}
+    />
+
+    <ActorSelect value={filters.actor} valueLabel={actorLabel} />
+
+    <label class="field">
+      <span class="label">{FILTER_COPY.entityId}</span>
+      <input
+        class="input"
+        type="text"
+        data-facet="entity_id"
+        value={filters.entityId ?? ""}
+        placeholder={FILTER_COPY.entityIdPlaceholder}
+        autocomplete="off"
+        spellcheck="false"
+      />
+    </label>
+
+    <DateRangeField
+      facet="range"
+      label={FILTER_COPY.range}
+      since={filters.since}
+      until={filters.until}
+    />
+  </div>
+
+  <div class="row verbs-row">
+    <span class="label" id="activity-verbs-label">{FILTER_COPY.verb}</span>
+    <div class="pills" role="group" aria-labelledby="activity-verbs-label">
+      {
+        verbs.map((option) => (
+          <button
+            class="chip pill filter"
+            type="button"
+            data-facet="verb"
+            data-value={option.value}
+            aria-pressed={filters.verbs.includes(option.value)}
+          >
+            {option.label}
+          </button>
+        ))
+      }
+    </div>
+
+    <p
+      class="small summary"
+      data-field="filter-summary"
+      hidden={summary === ""}
+    >
+      {summary}
+    </p>
+    <button
+      class="btn btn-ghost clear"
+      type="button"
+      data-action="clear-filters"
+      hidden={activeCount === 0}
+    >
+      <Icon name="close" size={16} />
+      {FILTER_COPY.clear}
+    </button>
+  </div>
+</div>
+
+<style>
+  .filters {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    padding: var(--space-4);
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--space-3);
+    align-items: end;
+  }
+
+  .verbs-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .filter {
+    min-height: 32px;
+    padding: var(--space-1) var(--space-3);
+    border: var(--border-width) solid transparent;
+    transition:
+      background-color var(--motion-micro-duration) var(--motion-micro-ease),
+      border-color var(--motion-micro-duration) var(--motion-micro-ease),
+      color var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .filter:hover {
+    border-color: var(--tinta-suave);
+  }
+
+  .filter[aria-pressed="true"] {
+    background-color: var(--cobalto-papel);
+    border-color: var(--cobalto);
+    color: var(--cobalto);
+  }
+
+  .summary {
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  .summary[hidden] {
+    display: none;
+  }
+
+  .clear {
+    height: 32px;
+    padding: 0 var(--space-2);
+    font-size: var(--text-small-size);
+  }
+
+  .clear[hidden] {
+    display: none;
+  }
+
+  @media (pointer: coarse) {
+    .filter {
+      min-height: 40px;
+    }
+  }
+
+  @media (max-width: 767px) {
+    .summary {
+      margin-left: 0;
+    }
+  }
+</style>

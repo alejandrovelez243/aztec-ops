@@ -1,0 +1,101 @@
+---
+/**
+ * The inline "Ajustar prioridad" form — an expansion in place, not a modal.
+ *
+ * DESIGN.md reserves modals for confirmation and destructive intent; forcing a rank
+ * is neither, and a wall of dialog over the queue would hide the very ordering the
+ * operator is arguing with. The form is rendered server-side and stays `hidden`
+ * until the island reveals it, and the island only reveals the ops-lead controls
+ * when `getOperator()?.isOpsLead` is true — the API's 403 is still the answer of
+ * record, and it is surfaced as a toast naming the missing capability.
+ *
+ * `reason` is required here because it is required by the database, the service and
+ * the schema: a forced position with no recorded justification is indistinguishable
+ * from a bug three weeks later (`docs/API.md` §2.6).
+ */
+export interface Props {
+  /** Project code the override is posted against. */
+  code: string;
+  /** Highest position the queue can accept — the number of rows on this page. */
+  queueSize: number;
+  /** The position currently forced, or `null` when the ranking is the engine's. */
+  currentPosition: number | null;
+}
+
+const { code, queueSize, currentPosition } = Astro.props;
+---
+
+<form class="override" data-override-form data-code={code} hidden>
+  <p class="label">Forzar la posición de este proyecto</p>
+
+  <label class="field">
+    <span class="small">Puesto en la cola</span>
+    <input
+      class="input figure"
+      type="number"
+      name="position"
+      inputmode="numeric"
+      min="1"
+      max={queueSize}
+      step="1"
+      required
+      value={currentPosition ?? ""}
+    />
+  </label>
+
+  <label class="field">
+    <span class="small">Motivo (queda registrado)</span>
+    <textarea
+      class="input"
+      name="reason"
+      required
+      rows="3"
+      placeholder="Por qué este proyecto va antes que los demás"></textarea>
+  </label>
+
+  <p class="small error" data-override-error role="alert" hidden></p>
+
+  <p class="actions">
+    <button class="btn btn-primary" type="submit" data-override-submit>
+      Guardar ajuste
+    </button>
+    <button class="btn btn-ghost" type="button" data-action="cancel-override">
+      Cancelar
+    </button>
+  </p>
+</form>
+
+<style>
+  .override {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border-radius: var(--radius-card);
+    background-color: var(--pozo);
+  }
+
+  .override[hidden] {
+    display: none;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .error {
+    color: var(--rojo-ink);
+  }
+
+  .error[hidden] {
+    display: none;
+  }
+
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+</style>

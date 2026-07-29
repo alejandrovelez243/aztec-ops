@@ -22,7 +22,7 @@ Apps in dependency order: `catalog` → `accounts` → `workflow` → `portfolio
 
 ## 1. `backend/apps/catalog` — taxonomies
 
-Six tables the operation edits from the admin without a deploy (`ARCHITECTURE` §3.1). They share
+Six tables the operation edits from the admin without a deploy (`ARCHITECTURE` §4.2). They share
 an abstract base, so the first five columns are identical everywhere.
 
 ### `TaxonomyBase` (abstract, no table)
@@ -171,7 +171,7 @@ inherited. Added on top:
 | `weekly_capacity_points` | `smallint` | no | `20` | — | Denominator of owner load, constrained `> 0`. The numerator is computed from `work_task`, never stored here. |
 
 There is no `portfolio_teammember`. Whoever is assigned a task is whoever signs in to move it, so
-they are one row (`ARCHITECTURE` §3.3b). `is_active` comes from `AbstractUser` rather than being
+they are one row (`ARCHITECTURE` §4.1). `is_active` comes from `AbstractUser` rather than being
 duplicated. Seed users are created with `set_unusable_password()`: they are real assignees who
 simply have no password yet.
 
@@ -355,9 +355,9 @@ advanced past the seeded values.
 
 | Column | Type | Null | Default | Index | Meaning |
 |---|---|---|---|---|---|
-| `entity_type` | `varchar(16)` | no | — | `(entity_type, entity_id, -occurred_at)` | `project` \| `task` \| `blocker`. |
+| `entity_type` | `varchar(16)` | no | — | `(entity_type, entity_id, -occurred_at)` | `project` \| `task` \| `blocker` \| `member` \| `role`. The last two are the roster and the role vocabulary, which are editable from the product and therefore auditable like everything else. |
 | `entity_id` | `varchar(32)` | no | — | same composite | The **business code** (`PRJ-01`), matching `entity.id` in the event envelope, not a numeric primary key. |
-| `verb` | `varchar(24)` | no | — | `(verb, -occurred_at)` | `CREATED`, `STATE_CHANGED`, `PRIORITY_CHANGED`, `BLOCKER_RAISED`, `BLOCKER_RESOLVED`, `OWNER_CHANGED`, `NEXT_STEP_SET`, `TASK_ADDED`, `NOTE_ADDED`, `SEEDED`. |
+| `verb` | `varchar(24)` | no | — | `(verb, -occurred_at)` | `CREATED`, `STATE_CHANGED`, `PRIORITY_CHANGED`, `BLOCKER_RAISED`, `BLOCKER_RESOLVED`, `OWNER_CHANGED`, `NEXT_STEP_SET`, `TASK_ADDED`, `NOTE_ADDED`, `SEEDED`, `RENAMED`, `ROLE_CHANGED`, `CAPACITY_CHANGED`, `DEACTIVATED`, `REACTIVATED`, `PASSWORD_RESET`. There is deliberately no generic `UPDATED`: each verb names *which* fact moved, so filtering on `CAPACITY_CHANGED` returns exactly the decisions that changed what "overloaded" means. |
 | `origin` | `varchar(8)` | no | `'SYSTEM'` | — | `MANUAL` (a human forced it; `reason` mandatory) \| `POLICY` (the engine recomputed; `metadata` names the signal that moved) \| `SYSTEM`. |
 | `actor` | `varchar(32)` | no | — | `(actor, -occurred_at)` | `accounts.User.code`, or `system` when the engine caused the change. |
 | `from_value` | `varchar(255)` | no | `''` | — | Point-in-time copy of the previous value, as text. |
@@ -439,52 +439,58 @@ covers the policy exactly.
   "signals": [
     {
       "code": "deadline_pressure",
+      "label": "Presión de fecha",
       "raw": 1.0,
       "weight": 0.25,
       "contribution": 25.0,
-      "reason": "Target date 2026-07-22 is 6 day(s) in the past."
+      "reason": "La fecha objetivo 2026-07-22 pasó hace 6 día(s)."
     },
     {
       "code": "blockage",
+      "label": "Bloqueo",
       "raw": 0.9,
       "weight": 0.15,
       "contribution": 13.5,
-      "reason": "1 open blocker(s); the oldest has been open for 19 day(s) and needs intervention."
+      "reason": "1 bloqueo(s) abierto(s); el más antiguo lleva 19 día(s) sin resolverse y necesita intervención."
     },
     {
       "code": "overdue_work",
+      "label": "Trabajo vencido",
       "raw": 0.57,
       "weight": 0.20,
       "contribution": 11.4,
-      "reason": "4 of 7 open tasks are past their due date."
+      "reason": "4 de 7 tareas abiertas pasaron su fecha."
     },
     {
       "code": "criticality",
+      "label": "Criticidad",
       "raw": 0.6,
       "weight": 0.15,
       "contribution": 9.0,
-      "reason": "3 open task(s) at Critica or Alta."
+      "reason": "3 tarea(s) abierta(s) de prioridad urgente."
     },
     {
       "code": "business_value",
+      "label": "Valor de negocio",
       "raw": 0.72,
       "weight": 0.15,
       "contribution": 10.8,
-      "reason": "Contract value 28000 USD, log-normalized against the portfolio range."
+      "reason": "Valor de contrato 28.000,00 USD, normalizado logarítmicamente contra el máximo del portafolio (50.000,00)."
     },
     {
       "code": "staleness",
+      "label": "Inactividad",
       "raw": 0.67,
       "weight": 0.10,
       "contribution": 6.7,
-      "reason": "No recorded activity for 10 day(s); next step is set."
+      "reason": "Sin actividad registrada durante 10 día(s) frente a un umbral de 14 día(s); hay próximo paso definido."
     }
   ],
   "modifiers": [
     {
       "code": "engagement_type",
       "factor": 1.1,
-      "reason": "Engagement type proyecto carries weight 1.10."
+      "reason": "El tipo de engagement proyecto pesa 1.10."
     }
   ],
   "flags": ["OWNER_OVERLOADED"],
@@ -495,7 +501,19 @@ covers the policy exactly.
 Invariants the recalculator asserts before writing: `contribution == round(raw * weight * 100, 2)`,
 `base == sum(contribution)`, `value == round(base * modifier_total, 2)` clamped to `[0, 100]`, and
 `sum(weight) == 1.0`. `reason` must name the fact — the days, the counts, the dates — never restate
-the number. `flags` is a denormalized copy of the risk flag codes at computation time so the UI can
+the number.
+
+`label` and `reason` are written in the interface's language and **stored with the line**, not
+resolved from the signal registry when the document is read. That freezes the wording of the day
+into history on purpose: `reason` states facts that were only true at `computed_at`, so a caption
+re-resolved today would head those sentences with whatever the signal is called now — or with
+nothing at all, once a signal is retired and its code no longer resolves. A row written before
+`label` existed is the one exception and is captioned from the registry on read, falling back to the
+bare `code`; it is never dropped, because a missing line is a contribution silently removed from the
+argument. Note that neither wording is part of `input_hash`, so a change to a sentence alone does
+not make a recompute rewrite the row — see [RUNBOOK](RUNBOOK.md) for forcing one.
+
+`flags` is a denormalized copy of the risk flag codes at computation time so the UI can
 render "the score is real, the owner is the constraint" without a second query. It is a snapshot of
 what the specifications said at `computed_at`, not a source of truth: flags are computed on read
 ([ADR 0011](adr/0011-risk-flags-computed-on-read.md)), so a client that needs the current set reads

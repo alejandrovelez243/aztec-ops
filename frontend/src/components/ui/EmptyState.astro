@@ -1,0 +1,125 @@
+---
+/**
+ * The shared empty / not-found state: a spot illustration, a sentence naming
+ * what is absent, and the action that fills it.
+ *
+ * The product's rule is that absence is a signal, so an empty region is
+ * authored here rather than left blank. `title` states the absence in the
+ * operator's words; `description` says why it might be so or what to do; the
+ * default slot takes the action, which is what turns an apology into a route
+ * forward.
+ *
+ * Motion: on first paint the illustration's pieces settle in sequence with the
+ * `carta` spring — the invisible hand placing the cards. It runs once per
+ * mount, respects `prefers-reduced-motion`, and is decorative: the copy is
+ * fully present before a single frame plays, so a stalled animation can never
+ * hide the message.
+ */
+import Illustration from "./Illustration.astro";
+import type { Scene } from "./Illustration.astro";
+
+export interface Props {
+  /** Which spot illustration frames the message. */
+  scene: Scene;
+  /** One line naming what is absent, in Spanish. */
+  title: string;
+  /** Optional second line: why, or what to do about it. */
+  description?: string;
+  /** Narrower rendering for panels and cards. */
+  compact?: boolean;
+}
+
+const { scene, title, description, compact = false } = Astro.props;
+---
+
+<div class="empty" data-empty-state data-compact={compact ? "" : undefined}>
+  <Illustration scene={scene} width={compact ? 160 : 220} />
+  <p class="h2 empty-title">{title}</p>
+  {description && <p class="small empty-description">{description}</p>}
+  <div class="empty-action"><slot /></div>
+</div>
+
+<script>
+  import { prefersReducedMotion, sampleSpring } from "../../lib/motion/spring";
+
+  /** Milliseconds between one piece landing and the next one starting. */
+  const STAGGER_MS = 70;
+
+  function settle(root: HTMLElement): void {
+    if (root.dataset.settled === "") return;
+    root.dataset.settled = "";
+    if (prefersReducedMotion()) return;
+
+    const { duration, easing } = sampleSpring("carta");
+    const pieces = root.querySelectorAll<SVGElement>("[data-piece]");
+    for (const piece of pieces) {
+      const order = Number(piece.dataset.piece ?? "1");
+      piece.animate(
+        [
+          { opacity: 0, transform: "translateY(10px) scale(0.96)" },
+          { opacity: 1, transform: "none" },
+        ],
+        {
+          duration,
+          easing,
+          delay: (order - 1) * STAGGER_MS,
+          fill: "backwards",
+          // The SVG children transform around their own box, not the page's.
+          composite: "replace",
+        },
+      );
+    }
+  }
+
+  function settleVisible(): void {
+    for (const root of document.querySelectorAll<HTMLElement>(
+      "[data-empty-state]",
+    )) {
+      settle(root);
+    }
+  }
+
+  document.addEventListener("astro:page-load", settleVisible);
+</script>
+
+<style>
+  .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-7) var(--space-5);
+    text-align: center;
+  }
+
+  .empty[data-compact] {
+    padding: var(--space-5) var(--space-4);
+    gap: var(--space-2);
+  }
+
+  .empty :global(.illustration) {
+    margin-bottom: var(--space-2);
+    transform-box: fill-box;
+  }
+
+  .empty :global([data-piece]) {
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  .empty-title {
+    color: var(--tinta);
+  }
+
+  .empty-description {
+    max-width: 46ch;
+  }
+
+  .empty-action:empty {
+    display: none;
+  }
+
+  .empty-action {
+    margin-top: var(--space-2);
+  }
+</style>

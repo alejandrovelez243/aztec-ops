@@ -22,6 +22,11 @@ export type ApiErrorCode =
   | "conflicting_state"
   | "validation_error"
   | "not_found"
+  | "authentication_required"
+  | "invalid_token"
+  | "invalid_credentials"
+  | "permission_denied"
+  | "domain_error"
   | "network_error"
   | "unknown_error";
 
@@ -60,6 +65,39 @@ export interface NotFoundError {
   kind: "not_found";
   code: "not_found";
   message: string;
+  details: Record<string, unknown>;
+}
+
+/**
+ * The three ways a request can be refused for who the caller is (HTTP 401).
+ *
+ * They are separate codes rather than one `unauthorized`, and the difference is
+ * the recovery: `authentication_required` means nothing was presented, so sign
+ * in; `invalid_token` means one was and it did not survive validation, so
+ * refresh and retry once; `invalid_credentials` answers the sign-in form itself
+ * — one code for unknown user, wrong password and inactive account, so the form
+ * cannot be used to enumerate accounts.
+ */
+export interface AuthError {
+  kind: "auth";
+  code: "authentication_required" | "invalid_token" | "invalid_credentials";
+  message: string;
+  details: Record<string, unknown>;
+}
+
+/**
+ * A capability the caller does not have (HTTP 403 `permission_denied`).
+ *
+ * `required` is a capability name — `"ops_lead"` — never a role taxonomy code,
+ * and the UI branches on the `is_ops_lead` flag the token endpoints already
+ * return rather than on this. Reaching this error means a control was rendered
+ * that should have been hidden, so it is worth surfacing rather than swallowing.
+ */
+export interface PermissionDeniedError {
+  kind: "permission_denied";
+  code: "permission_denied";
+  message: string;
+  required: string;
   details: Record<string, unknown>;
 }
 
@@ -103,6 +141,8 @@ export type ApiError =
   | TransitionNotAllowedError
   | ValidationError
   | NotFoundError
+  | AuthError
+  | PermissionDeniedError
   | NetworkError
   | UnknownError;
 
@@ -186,7 +226,21 @@ export function errorFromResponse(status: number, body: unknown): ApiError {
       };
     case "not_found":
       return { kind: "not_found", code, message, details };
+    case "authentication_required":
+    case "invalid_token":
+    case "invalid_credentials":
+      return { kind: "auth", code, message, details };
+    case "permission_denied":
+      return {
+        kind: "permission_denied",
+        code,
+        message,
+        required:
+          typeof details["required"] === "string" ? details["required"] : "",
+        details,
+      };
     case "conflicting_state":
+    case "domain_error":
       return { kind: "unknown", code, backendCode: code, message, details };
     default:
       return {

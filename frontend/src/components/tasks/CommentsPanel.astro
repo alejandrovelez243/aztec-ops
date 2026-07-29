@@ -1,0 +1,195 @@
+---
+/**
+ * The task's conversation: what somebody wanted the next reader to know about
+ * this piece of work.
+ *
+ * Unlike the project's notes panel, this list starts *full*: the task detail
+ * carries its comments in the same response as the task, so the first paint is
+ * the whole history rather than "whatever arrives while you watch". Comments
+ * added afterwards — this operator's and, over the stream, their colleagues' —
+ * are prepended to it.
+ *
+ * A comment is not a substitute for a blocker: nothing parses this text, and the
+ * moment something greps it for "bloqueado" the typed row stops being written
+ * (`docs/API.md` §2.12). The form says so in as many words.
+ *
+ * Every timestamp is relative with the absolute one in its `title`, because
+ * "hace 2 días" is what an operator reasons with and "24 jul 2026, 09:05" is
+ * what they quote in a meeting.
+ */
+import EmptyState from "../ui/EmptyState.astro";
+import Icon from "../ui/Icon.astro";
+import { formatInstant, relativeTime } from "../projects/format";
+import type { NoteView } from "../../lib/api/domain";
+
+export interface Props {
+  /** The task these comments belong to; sent as `task_code` on every write. */
+  taskCode: string;
+  /** The project that owns the write route (`POST /projects/{code}/notes`). */
+  projectCode: string;
+  /** The task's comments, newest first, exactly as the API ordered them. */
+  comments: readonly NoteView[];
+}
+
+const { taskCode, projectCode, comments } = Astro.props;
+
+/**
+ * One reference instant for the whole render, so two comments written seconds
+ * apart cannot straddle a minute boundary and disagree about "hace un minuto".
+ */
+const now = new Date();
+
+const rows = comments.map((comment) => ({
+  code: comment.code,
+  author: comment.author,
+  body: comment.body,
+  when: relativeTime(comment.created_at, now) ?? "",
+  absolute: formatInstant(comment.created_at) ?? undefined,
+}));
+---
+
+<section
+  class="comments"
+  data-comments
+  data-task-code={taskCode}
+  data-project-code={projectCode}
+>
+  <h2 class="h2">Comentarios</h2>
+
+  <form class="add card" data-comment-form>
+    <label class="field">
+      <span class="label">Nuevo comentario</span>
+      <textarea
+        class="input"
+        name="body"
+        rows="3"
+        required
+        placeholder="Contexto, acuerdos, lo que el próximo lector necesita saber"
+      ></textarea>
+    </label>
+    <p class="small hint">
+      Para lo que está detenido, usa <strong>Bloqueos</strong> en el proyecto: eso
+      sí pesa en la prioridad.
+    </p>
+    <p class="small error" data-field="comment-error" hidden></p>
+    <div class="actions">
+      <button class="btn btn-primary" type="submit" data-action="add-comment">
+        <Icon name="plus" size={18} />
+        Publicar comentario
+      </button>
+    </div>
+  </form>
+
+  <div class="card empty" data-comments-empty hidden={rows.length > 0}>
+    <EmptyState
+      scene="quiet"
+      compact
+      title="Esta tarea todavía no tiene comentarios"
+      description="Escribe el primero: en qué quedaron, qué falta y quién sigue. Es lo que va a leer la próxima persona que la abra."
+    />
+  </div>
+
+  <ul class="list" data-comment-list>
+    {
+      rows.map((row) => (
+        <li class="comment card" data-comment data-code={row.code}>
+          <p class="title">
+            <span data-field="comment-author">{row.author}</span>
+            <span
+              class="small when"
+              data-field="comment-when"
+              title={row.absolute}
+            >
+              {row.when}
+            </span>
+          </p>
+          <p class="body-text" data-field="comment-body">
+            {row.body}
+          </p>
+        </li>
+      ))
+    }
+  </ul>
+
+  {
+    /* One home for the row markup: a comment written here and a comment that
+      arrives over the stream are the same object and must look it. */
+  }
+  <template data-template="comment">
+    <li class="comment card" data-comment>
+      <p class="title">
+        <span data-field="comment-author"></span>
+        <span class="small when" data-field="comment-when"></span>
+      </p>
+      <p class="body-text" data-field="comment-body"></p>
+    </li>
+  </template>
+</section>
+
+<script>
+  import { onPage } from "../projects/island";
+  import { mountComments } from "./comments";
+
+  onPage("[data-comments]", mountComments);
+</script>
+
+<style>
+  .comments {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .add {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4);
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .hint {
+    color: var(--tinta-media);
+  }
+
+  .error {
+    color: var(--rojo-ink);
+  }
+
+  .error[hidden] {
+    display: none;
+  }
+
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .empty[hidden] {
+    display: none;
+  }
+
+  .list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .comment {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4);
+  }
+
+  .when {
+    margin-left: var(--space-2);
+    font-weight: 400;
+    color: var(--tinta-media);
+  }
+</style>

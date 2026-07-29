@@ -1,0 +1,870 @@
+/**
+ * The Resumen surface ("El Muro", comp C — Zonas del día).
+ *
+ * Global rather than scoped on purpose: the cards are produced by
+ * `./markup.ts`, one renderer shared by the page's first paint and the live
+ * island, and a string renderer cannot carry Astro's scoping attribute. Every
+ * selector is therefore prefixed `ov-`.
+ *
+ * Only `var(--token)` values appear here (tokens.css is the single source of
+ * colour, spacing, radius, shadow and motion). The two media-query breakpoints
+ * are the ones DESIGN.md §Layout already fixes: 1024 and 768.
+ *
+ * THE DENSITY RULE OF THIS SURFACE. Every card in every zone renders the same
+ * DOM; the zone decides how much of it is visible — three breakdown bars in
+ * "Atender hoy", two in "Esta semana", one in "Radar". That is what lets a card
+ * promoted by a colleague's recompute *travel* between zones with `flip()`
+ * instead of being destroyed in one list and rebuilt in another.
+ */
+
+/* --- Page frame --------------------------------------------------------- */
+
+.ov-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.ov-lead {
+  color: var(--tinta-media);
+  margin-top: var(--space-1);
+}
+
+.ov-live {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.ov-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-6);
+  align-items: start;
+}
+
+@media (min-width: 1024px) {
+  .ov-columns {
+    grid-template-columns: minmax(0, 2.4fr) minmax(0, 1fr);
+  }
+}
+
+.ov-queue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
+.ov-aside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+/* --- Zones: the coloured tape bands of the wall -------------------------- */
+
+.ov-zone {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.ov-zone[hidden] {
+  display: none;
+}
+
+.ov-zone-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: var(--border-width) solid var(--hairline);
+}
+
+.ov-zone-label {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--tinta);
+}
+
+.ov-zone-sep {
+  color: var(--tinta-suave);
+}
+
+.ov-zone-count {
+  color: var(--tinta-media);
+}
+
+.ov-zone-hint {
+  margin-left: auto;
+  text-align: right;
+}
+
+.ov-zone-list {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.ov-zone--today .ov-zone-list {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.ov-zone--week .ov-zone-list {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: var(--space-3);
+}
+
+.ov-zone--radar .ov-zone-list {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+/* --- The card: one DOM, three densities ---------------------------------- */
+
+.ov-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-bottom: var(--space-4);
+  min-width: 0;
+}
+
+.ov-band {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2) var(--space-4);
+  background-color: var(--tone-wash);
+  border-radius: calc(var(--radius-card) - var(--border-width))
+    calc(var(--radius-card) - var(--border-width)) 0 0;
+}
+
+.ov-rank {
+  color: var(--tone-ink);
+  font-size: var(--text-title-size);
+  font-weight: 700;
+}
+
+.ov-state {
+  background-color: var(--carta);
+  color: var(--tone-ink);
+}
+
+.ov-attribution {
+  margin-left: auto;
+  background-color: var(--cobalto-papel);
+  color: var(--cobalto);
+}
+
+.ov-attribution[hidden] {
+  display: none;
+}
+
+.ov-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-inline: var(--space-4);
+  min-width: 0;
+}
+
+.ov-ident {
+  min-width: 0;
+}
+
+.ov-name {
+  color: var(--tinta);
+  overflow-wrap: anywhere;
+}
+
+.ov-sub {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  min-width: 0;
+}
+
+.ov-client {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-score {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex: none;
+}
+
+.ov-score-value {
+  color: var(--tinta);
+}
+
+.ov-score-caption {
+  color: var(--tinta-suave);
+}
+
+/* --- Breakdown bars: the argument, at the depth the zone allows ---------- */
+
+.ov-bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-inline: var(--space-4);
+}
+
+/*
+ * One signal reads "name … points" on a line, with its bar under both.
+ *
+ * Every cell is placed explicitly, because auto-placement cannot build this
+ * shape from the DOM order the markup needs. The track sits between the label
+ * and the value in the source — a full-width item that cannot fit beside the
+ * label, so it opens row 2 and pushes the value onto row 3, and the card then
+ * renders as a name, a bar, and a number orphaned under both. Naming the row
+ * and column of each part makes the layout independent of source order, which
+ * is also what keeps it correct when a zone hides one of the three.
+ */
+.ov-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+
+.ov-bar-label {
+  grid-row: 1;
+  grid-column: 1;
+  color: var(--tinta-media);
+  text-transform: none;
+  letter-spacing: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-bar-value {
+  grid-row: 1;
+  grid-column: 2;
+  color: var(--tinta-media);
+  text-align: right;
+}
+
+.ov-bar-track {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  height: var(--space-1);
+  border-radius: var(--radius-full);
+  background-color: var(--pozo);
+  overflow: hidden;
+}
+
+.ov-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background-color: var(--tone-solid, var(--piedra));
+}
+
+.ov-bars-absent {
+  display: flex;
+}
+
+/* --- Foot: owner, absences, and the way in ------------------------------- */
+
+.ov-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-inline: var(--space-4);
+  margin-top: auto;
+}
+
+.ov-owner-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ov-owner-badge .avatar {
+  width: var(--space-5);
+  height: var(--space-5);
+}
+
+.ov-owner-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-override-reason {
+  flex-basis: 100%;
+  color: var(--tinta-media);
+  font-style: italic;
+}
+
+.ov-open {
+  margin-left: auto;
+  flex: none;
+}
+
+/* --- Density: "Esta semana" --------------------------------------------- */
+
+.ov-zone--week .ov-card {
+  gap: var(--space-2);
+  padding-bottom: var(--space-3);
+}
+
+.ov-zone--week .ov-band {
+  padding-block: var(--space-1);
+}
+
+.ov-zone--week .ov-score-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-h1-size);
+  font-weight: var(--text-h1-weight);
+  letter-spacing: 0;
+}
+
+.ov-zone--week .ov-score-caption,
+.ov-zone--week .ov-override-reason {
+  display: none;
+}
+
+.ov-zone--week .ov-bar:nth-child(n + 3) {
+  display: none;
+}
+
+/* --- Density: "Radar" ---------------------------------------------------- */
+
+.ov-zone--radar .ov-card {
+  flex-direction: row;
+  /* The row is allowed to break: with `nowrap`, the name is the only part that
+     can shrink, and it collapses to a column of single letters long before the
+     chips give up a pixel. Wrapping drops the foot onto its own line instead. */
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-control);
+  box-shadow: none;
+}
+
+.ov-zone--radar .ov-card:hover {
+  box-shadow: var(--shadow-resting);
+  transform: none;
+}
+
+.ov-zone--radar .ov-band {
+  padding: 0;
+  background-color: transparent;
+  border-radius: 0;
+  flex: none;
+  flex-wrap: nowrap;
+}
+
+.ov-zone--radar .ov-state {
+  background-color: var(--tone-wash);
+}
+
+/* The name is the widest thing on the row and the reason anyone reads it, so it
+   is what claims the free space — 260px is the width below which the row breaks
+   rather than the width the name is squeezed to. */
+.ov-zone--radar .ov-main {
+  flex: 1 1 260px;
+  align-items: center;
+  padding-inline: 0;
+}
+
+.ov-zone--radar .ov-ident {
+  flex: 1 1 auto;
+}
+
+/* One line, cut with an ellipsis: at this density a wrapped name would change
+   the row's height and break the scan down the rank column. */
+.ov-zone--radar .ov-name {
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-zone--radar .ov-sub {
+  margin-top: 0;
+}
+
+.ov-zone--radar .ov-score {
+  align-items: flex-end;
+}
+
+.ov-zone--radar .ov-score-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-title-size);
+  font-weight: var(--text-title-weight);
+  letter-spacing: 0;
+}
+
+.ov-zone--radar .ov-score-caption,
+.ov-zone--radar .ov-override-reason,
+.ov-zone--radar .ov-owner-name,
+.ov-zone--radar .ov-bar-value {
+  display: none;
+}
+
+.ov-zone--radar .ov-bars {
+  flex: none;
+  width: calc(var(--space-8) * 2);
+  padding-inline: 0;
+}
+
+.ov-zone--radar .ov-bar:nth-child(n + 2) {
+  display: none;
+}
+
+.ov-zone--radar .ov-foot {
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  margin-left: auto;
+  padding-inline: 0;
+  margin-top: 0;
+}
+
+.ov-zone--radar .ov-open {
+  height: var(--space-6);
+  padding-inline: var(--space-3);
+  font-size: var(--text-small-size);
+}
+
+/*
+ * Radar is a list to *scan*, and scanning needs columns: with the flex row each
+ * card sized its own parts, so the score, the signal and the chips landed at a
+ * different x on every line and the eye had to re-find them twelve times.
+ *
+ * The tracks are fixed rather than `auto` for exactly that reason — an `auto`
+ * track is content-sized, which is the flex behaviour again under a different
+ * name. Every card carries the same template, so the columns line up across
+ * cards even though each card is its own box (`display: contents` would align
+ * them too, and would throw away the card's border, hover and flash — the
+ * frame that makes a remote move visible).
+ *
+ * Below 1200px there is no room for four columns and the row falls back to the
+ * wrapping flex layout above.
+ */
+@media (min-width: 1200px) {
+  .ov-zone--radar .ov-card {
+    display: grid;
+    grid-template-columns:
+      minmax(0, 168px)
+      minmax(0, 1fr)
+      minmax(0, 176px)
+      minmax(0, 520px);
+    align-items: center;
+  }
+
+  .ov-zone--radar .ov-bars {
+    width: 100%;
+  }
+
+  .ov-zone--radar .ov-foot {
+    min-width: 0;
+  }
+}
+
+/*
+ * The wall is also touched: no target under 40px (DESIGN.md §Layout).
+ *
+ * The condition is the *drawer band or a coarse pointer*, not the pointer
+ * alone: a 390 or 768 viewport is a phone or a tablet whatever the pointer
+ * media feature reports through an emulator or a hybrid laptop, and a rule that
+ * only fires on `pointer: coarse` is a rule that cannot be verified by
+ * measuring the page at those widths.
+ *
+ * Every target grows by padding — `min-height` on a control whose text keeps
+ * its own size. Growing the font instead would trade one defect for a louder
+ * one: the type scale is DESIGN.md's, not a hit-target dial.
+ */
+@media (pointer: coarse), (max-width: 1023px) {
+  .ov-zone--radar .ov-open {
+    height: 40px;
+  }
+
+  /* "Ver equipo" / "Ver toda": 19px of link in a panel header. */
+  .ov-panel-link {
+    min-height: 40px;
+  }
+
+  /* The project on a latest-activity line: inline text until it needs to be a
+     target, then a box with the same text in it. */
+  .ov-latest-project {
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
+  }
+}
+
+/* --- The signature moment: a colleague's move, made visible -------------- */
+
+.ov-card.is-flashing {
+  animation: ov-ring var(--motion-carta-duration) var(--motion-carta-ease);
+}
+
+.ov-card.is-flashing .ov-band {
+  animation: ov-wash var(--motion-panel-duration) var(--motion-panel-ease);
+}
+
+@keyframes ov-ring {
+  0% {
+    box-shadow:
+      var(--shadow-resting),
+      0 0 0 0 var(--cobalto-papel);
+  }
+
+  45% {
+    box-shadow:
+      var(--shadow-lifted),
+      0 0 0 4px var(--cobalto-papel);
+  }
+
+  100% {
+    box-shadow:
+      var(--shadow-resting),
+      0 0 0 0 var(--cobalto-papel);
+  }
+}
+
+@keyframes ov-wash {
+  0%,
+  100% {
+    background-color: var(--tone-wash);
+  }
+
+  35% {
+    background-color: color-mix(in srgb, var(--tone-solid) 26%, var(--carta));
+  }
+}
+
+/* --- Aside: owner load and the pending activity region ------------------- */
+
+.ov-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.ov-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.ov-panel-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--cobalto);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.ov-panel-link:hover {
+  color: var(--cobalto-profundo);
+}
+
+.ov-owners {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ov-owner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2);
+  border-radius: var(--radius-control);
+}
+
+.ov-owner.is-overloaded {
+  background-color: var(--tone-wash);
+}
+
+.ov-owner-ident {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/*
+ * The name wraps; the line under it is the one allowed to run out of room.
+ *
+ * They shared a rule, and it cut "Andrea Molina" five pixels short of its last
+ * letter — a truncation that reads as a typo, on the one field in the row that
+ * names a person. A name is short and finite, so the honest failure is a second
+ * line, not a lost character; the meta line beneath is a summary of counts,
+ * which is what an ellipsis is for.
+ */
+.ov-owner-label {
+  overflow-wrap: break-word;
+}
+
+.ov-owner-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-owner-load {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+}
+
+.ov-util {
+  display: block;
+  width: var(--space-8);
+  height: var(--space-1);
+  border-radius: var(--radius-full);
+  background-color: var(--pozo);
+  overflow: hidden;
+}
+
+.ov-util-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  background-color: var(--tone-solid);
+}
+
+.ov-owner-percent {
+  color: var(--tinta-media);
+  min-width: var(--space-6);
+  text-align: right;
+}
+
+.ov-owner-flag {
+  grid-column: 2 / -1;
+}
+
+/* --- Última actividad: the last movements in the whole portfolio ---------- */
+
+.ov-latest {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.ov-latest-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2);
+  border-radius: var(--radius-control);
+}
+
+/* A human's decision is the one row that must not read like bookkeeping. */
+.ov-latest-row[data-origin="MANUAL"] {
+  background-color: var(--tone-wash);
+}
+
+.ov-latest-row .dot {
+  /* Centred on the first line of the title, derived from the type tokens. */
+  margin-top: calc(
+    (var(--text-title-size) * var(--text-title-line) - var(--space-2)) / 2
+  );
+}
+
+.ov-latest-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.ov-latest-head,
+.ov-latest-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ov-latest-origin {
+  background-color: var(--tone-wash);
+  color: var(--tone-ink);
+}
+
+.ov-latest-project {
+  font-weight: 600;
+  text-decoration: none;
+  border-radius: var(--radius-chip);
+}
+
+.ov-latest-project:hover {
+  color: var(--cobalto);
+}
+
+.ov-latest-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-2);
+}
+
+.ov-latest-skeleton {
+  height: var(--space-8);
+}
+
+/* --- Notes: the empty and error arms ------------------------------------- */
+
+.ov-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-5);
+}
+
+.ov-note-dot {
+  margin-top: var(--space-2);
+}
+
+.ov-note-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ov-note-action {
+  margin-left: auto;
+  flex: none;
+}
+
+/* --- Stale banner: stream down, data still on screen --------------------- */
+
+.ov-stale {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background-color: var(--tone-wash);
+}
+
+.ov-stale[hidden] {
+  display: none;
+}
+
+.ov-stale-text {
+  color: var(--tone-ink);
+}
+
+.ov-stale-action {
+  margin-left: auto;
+  flex: none;
+}
+
+/* --- Skeletons: the geometry of the loaded state ------------------------- */
+
+.ov-card--skeleton {
+  pointer-events: none;
+}
+
+.ov-sk-rank {
+  width: var(--space-5);
+  height: var(--space-4);
+}
+
+.ov-sk-chip {
+  width: var(--space-8);
+  height: var(--space-4);
+}
+
+.ov-sk-name {
+  display: block;
+  width: 70%;
+  height: var(--space-4);
+}
+
+.ov-sk-sub {
+  display: block;
+  width: 45%;
+  height: var(--space-3);
+  margin-top: var(--space-1);
+}
+
+.ov-sk-score {
+  display: block;
+  width: var(--space-7);
+  height: var(--space-6);
+}
+
+.ov-sk-bar {
+  display: block;
+  width: 100%;
+  height: var(--space-2);
+}
+
+.ov-sk-avatar {
+  width: var(--space-6);
+  height: var(--space-6);
+  border-radius: var(--radius-full);
+}
+
+.ov-owner--skeleton {
+  grid-template-columns: auto minmax(0, 1fr) var(--space-8);
+}
+
+/* --- Narrow: the wall stacks, nothing is dropped ------------------------- */
+
+@media (max-width: 768px) {
+  .ov-zone-hint {
+    display: none;
+  }
+
+  .ov-zone--radar .ov-card {
+    flex-wrap: wrap;
+  }
+
+  /* The row wraps rather than shedding its bar: a score whose leading signal is
+     hidden is a number with no argument, which this surface never renders. */
+  .ov-zone--radar .ov-bars {
+    width: 100%;
+  }
+
+  /*
+   * The foot takes a line of its own and is allowed to break inside it.
+   *
+   * Radar's foot is `nowrap` and `flex: 0 1 auto` because at desk widths it is
+   * the right-hand end of a single-line row. Here the owner's name comes back
+   * (below), so that same line is a name plus its absence chips plus the
+   * button — none of them shrinkable, all of them on one unbreakable line. The
+   * card wrapped around it and *the page* took the overflow: 246px of sideways
+   * body scroll at 390. Only this zone had it, because only this zone re-lays
+   * the card as a row.
+   */
+  .ov-zone--radar .ov-foot {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    min-width: 0;
+    margin-left: 0;
+  }
+
+  .ov-zone--radar .ov-owner-name {
+    display: inline;
+  }
+}

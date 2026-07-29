@@ -349,18 +349,25 @@ appears.
 
 ```css
 :root {
-  --color-panel: #2e3532;
-  --color-plate: #141917;
-  --color-go: #63a17a;
-  --color-caution: #d9a441;
-  --color-nogo: #c4483c;
-  --color-legend: #e8e4d9;
-  --color-legend-dim: #8a928d;
-  --color-rule: #414a46;
+  --papel: #f4f3ef;
+  --carta: #ffffff;
+  --hairline: #e4e2db;
+  --tinta: #1b1d22;
+  --tinta-media: #565b64;
+  --cobalto: #2545de;
+  --rojo: #d8433b;
+  --ambar: #de8f13;
+  --verde: #2e9e5b;
   --space-1: 4px;
-  --radius: 0;
+  --radius-card: 16px;
 }
 ```
+
+> The names above are the shipped ones. An earlier draft of this section listed a dark
+> control-room set (`--color-panel: #2e3532`, `--radius: 0`); that grammar was abandoned and
+> `DESIGN.md` forbids bringing it back, so anyone following the old block would rebuild the look
+> the product rejected. `frontend/src/styles/tokens.css` is the authority — read it, do not
+> transcribe from memory.
 
 Every view implements the four mandatory states — loading, empty, error, SSE-disconnected — as
 real markup, styled, not as an unstyled fallback string. A view with only a happy path is
@@ -454,3 +461,90 @@ Enforced by review — no tool sees these:
   surfaces the retry.
 - Whether the JSDoc states an invariant and a failure mode, or restates the type.
 - Whether server-rendered content and the live patch can disagree.
+- Whether every control in a new form is one of §10's, and whether a control with no value renders
+  the named absence rather than a blank.
+
+## 10. Controls, forms and surfaces
+
+Every rule below already holds in the shipped components; it is written down because it was not,
+and a form shipped with a native `<select>` and an `<input type="date">` that looked like another
+application had been pasted into the page.
+
+### Asking the operator for something
+
+| To ask for | Use | Where it lives |
+|---|---|---|
+| One choice from a list | `MenuSelect` | `frontend/src/components/ui/MenuSelect.astro` |
+| One date | `DateField` | `frontend/src/components/ui/DateField.astro` (+ `date-field.ts`) |
+| A date range | `DateRangeField` | `frontend/src/components/ui/DateRangeField.astro` |
+| Free text, one line or many | `<label class="field">` wrapping `<span class="label">` and `<input class="input">` / `<textarea class="input">` | `.label` and `.input` in `frontend/src/styles/base.css`; `.field` is the wrapper convention — a column with a `--space-1` gap — styled in the component, as in `ReasonDialog.astro` |
+| An owner | `OwnerMenu` | `frontend/src/components/projects/OwnerMenu.astro` |
+| A confirmation, or a short self-contained act | `<dialog>` opened with `showModal()` | `frontend/src/components/projects/ReasonDialog.astro` |
+
+`MenuSelect`, `DateField`, `DateRangeField`, `OwnerMenu` and the task move menu are all the same
+grammar, and it is written once in `frontend/src/lib/ui/menu.ts`: a real `<button>` trigger, a
+`[data-menu-panel]`, one open panel app-wide, `Escape` closing and returning focus, arrow keys
+walking the items, and a listener delegated to the container so a row arriving over the stream is
+operable the moment it is appended. The panel is `position: fixed` and anchored in viewport
+coordinates because the task table is a horizontal scroller — an absolutely positioned panel is
+clipped by it and the last row's menu opens into a cut-off strip. A new popup control mounts
+through `mountMenus()`; it does not grow its own open/close code, because that is how one of them
+silently stops answering `Escape`.
+
+`CreateTaskDialog.astro` is the worked example: a modal built entirely from `MenuSelect` and
+`DateField`, with its options server-rendered so the dialog has no loading arm.
+
+### The prohibition
+
+No `<select>`, no `<input type="date">`, no `<input type="color">`, no `<input type="time">`, no
+`<input type="file">` styled as if it were ours. The operating system draws those widgets. They
+cannot carry a design token, so they land as a grey system list on a surface that is otherwise all
+paper and ink; they render differently in every browser; and their internal text is the OS locale,
+not the Spanish copy this interface owes the operator. `<input type="date">` is the extreme case:
+only `::-webkit-calendar-picker-indicator` is styleable at all, the panel itself is browser chrome.
+
+Reach for the control in the table instead. If the thing being asked for has no control yet, the
+change is a new component in `frontend/src/components/ui/` built on `lib/ui/menu.ts` — not a native
+element with a class on it.
+
+Native `<input type="text">`, `<textarea>` and `<button>` are not in this prohibition: they draw
+nothing the page cannot restyle.
+
+### Modal or in place
+
+`DESIGN.md` (Don't): *"Don't build modal walls: expansions happen in place; modals are for
+confirmation and destructive intent only."* A modal is allowed for a confirmation the operator must
+not miss (`ReasonDialog` — a transition whose `requires_reason` is true), for destructive intent,
+and for a short self-contained act started deliberately from a button on a surface with no room to
+carry the form permanently (`CreateTaskDialog`). Everything else expands in place: a score and its
+breakdown are one gesture apart, never a page away.
+
+When it is a modal, it is a real `<dialog>` opened with `showModal()`. Modality, `Escape`, the focus
+trap and the backdrop are the platform's; a `<div>` with a `z-index` reimplements four things and
+gets at least one of them wrong.
+
+### `.card` carries no padding
+
+`.card` in `frontend/src/styles/base.css` sets background, border, radius and resting shadow, and
+nothing else. **The component inside owns its inset** — see the comment on `.rich` in
+`frontend/src/components/ui/RichText.astro`. A component that relied on each caller remembering to
+add padding renders flush against the border on the first caller that forgets, which has already
+happened once. Every `class="panel card"` in `MenuSelect`, `DateField` and `OwnerMenu` sets its own
+`padding` for the same reason.
+
+### Present-Absence, and controls that cannot write
+
+A control with no value renders the named absence, never an empty box. `DateField` with `date:
+null` renders an ámbar "Sin fecha" chip that is itself the trigger; `OwnerMenu` with `alias: null`
+renders "Sin responsable" the same way. This is `DESIGN.md`'s Present-Absence Rule, and it is
+load-bearing rather than decorative: an undated task is exactly the one that slips, so the absence
+has to be a thing the operator can see and click, not a gap they have to notice.
+
+That is also why the badge *is* the trigger. The thing that reports a fact is the thing that edits
+it, so there is no second affordance to discover and no blank cell that turns out to have been
+editable all along.
+
+A control with no write behind it yet takes a `disabledReason` — Spanish, rendered as the trigger's
+`title` and, through `aria-describedby`, as its description — and renders visibly dead. It is never
+hidden, for the same reason §8 gives for an illegal transition: a control that disappears teaches
+the operator that the capability does not exist.

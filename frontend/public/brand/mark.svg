@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Aztec Ops">
+  <!-- Three cards climbing the wall: the portfolio, ordered, with the top one
+       decided. Composition art-directed with a generated study, then authored by
+       hand — the generated file traced these three rectangles as 2048px bezier
+       blobs with a baked background, which no favicon should carry.
+
+       Fills are flat, not translucent overlaps: at 16px, compositing three
+       transparencies muddies into one grey shape. These three values ARE the
+       composite, so the mark stays crisp at every size. Colours are the cobalto
+       ramp of DESIGN.md; they are literal here because a static asset cannot
+       read CSS custom properties. -->
+  <rect x="1.5" y="11" width="19" height="19" rx="5" fill="#EAEDFC"/>
+  <rect x="6.5" y="6.5" width="19" height="19" rx="5" fill="#8FA2EE"/>
+  <rect x="11.5" y="2" width="19" height="19" rx="5" fill="#2545DE"/>
+</svg>

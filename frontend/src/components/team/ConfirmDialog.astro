@@ -1,0 +1,106 @@
+---
+/**
+ * The one confirmation this surface asks: retiring somebody from the operation.
+ *
+ * A `<dialog>` and not `window.confirm`, which the browser renders in its own chrome with its
+ * own English buttons, no typography of ours and a title reading `localhost:4321 says`. A
+ * destructive-looking step is exactly where the product must look like the product; a native
+ * alert reads as something that happened *to* the page rather than something it asked.
+ *
+ * Copy is written by the island, because the person's name is in it. What lives here is the
+ * shape, the tone and the fact that the confirming button is the one that carries weight.
+ */
+import Icon from "../ui/Icon.astro";
+---
+
+<dialog class="dialog" data-confirm-dialog aria-labelledby="confirm-title">
+  <form method="dialog" data-confirm-form>
+    <div class="head">
+      <span class="state-icon tone-ambar" aria-hidden="true">
+        <Icon name="alert" size={18} />
+      </span>
+      <h2 class="h2" id="confirm-title" data-field="confirm-title"></h2>
+    </div>
+    <p class="body-text" data-field="confirm-body"></p>
+
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" type="button" data-action="close-confirm">
+        Cancelar
+      </button>
+      {
+        /*
+         * `value` is what `<form method="dialog">` writes into `dialog.returnValue`, which is
+         * how the island learns which button closed it without wiring a listener per button.
+         */
+      }
+      <button
+        class="btn btn-danger"
+        type="submit"
+        value="confirm"
+        data-action="submit-confirm"
+      >
+        <span data-field="confirm-cta">Confirmar</span>
+      </button>
+    </div>
+  </form>
+</dialog>
+
+<style>
+  .dialog {
+    width: min(440px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+  }
+
+  .dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .state-icon {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: var(--space-6);
+    height: var(--space-6);
+    border-radius: var(--radius-full);
+    background-color: var(--tone-wash);
+    color: var(--tone-ink);
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  /*
+   * Not a token of its own if `base.css` already has one: this rule only fills in when
+   * `.btn-danger` is absent there, so the destructive action never renders as a default button.
+   */
+  .btn-danger {
+    border-color: var(--rojo);
+    background-color: var(--rojo);
+    color: var(--carta);
+  }
+
+  .btn-danger:hover {
+    filter: brightness(0.94);
+  }
+</style>

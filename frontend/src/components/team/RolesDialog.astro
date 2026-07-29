@@ -1,0 +1,244 @@
+---
+/**
+ * The vocabulary of jobs this operation recognises, editable without leaving the roster.
+ *
+ * The one taxonomy the product edits. The reason is narrow and worth stating: a role is the
+ * thing an operator needs *while doing something else* — registering somebody who does a job
+ * nobody has typed yet — and sending them to `/admin/` mid-form is how a person ends up filed
+ * under the wrong role permanently. An engagement type or a workflow stage is a decision about
+ * how the business works, and it is still made deliberately, in the admin.
+ *
+ * Retiring is not deleting, and the copy says so: the role leaves the pickers and everybody
+ * already classified under it stays exactly as they are.
+ *
+ * The list is rendered by the island from the catalog it already holds, so this file owns the
+ * shape and the copy and never a second copy of the roles.
+ */
+import Icon from "../ui/Icon.astro";
+---
+
+<dialog class="dialog" data-roles-dialog aria-labelledby="roles-dialog-title">
+  <div class="head">
+    <h2 class="h2" id="roles-dialog-title">Roles del equipo</h2>
+    <button
+      class="btn btn-ghost btn-icon"
+      type="button"
+      data-action="close-roles"
+      title="Cerrar"
+      aria-label="Cerrar"
+    >
+      <Icon name="close" size={16} />
+    </button>
+  </div>
+  <p class="small lead">
+    El nombre se puede corregir cuando quieras. Retirar un rol sólo lo saca de
+    los selectores: quien ya lo tenga lo conserva, y su ficha lo sigue
+    mostrando.
+  </p>
+
+  <ul class="roles" data-roles-list></ul>
+
+  <form class="add" data-role-form novalidate>
+    <label class="field">
+      <span class="label">Código</span>
+      <input
+        class="input"
+        name="code"
+        maxlength="32"
+        required
+        autocomplete="off"
+        placeholder="design"
+      />
+    </label>
+    <label class="field">
+      <span class="label">Nombre</span>
+      <input
+        class="input"
+        name="label"
+        maxlength="64"
+        required
+        autocomplete="off"
+        placeholder="Diseño"
+      />
+    </label>
+    <button class="btn btn-primary" type="submit" data-action="submit-role">
+      <Icon name="plus" size={16} />
+      Añadir
+    </button>
+  </form>
+  <p class="small error" data-field="roles-error" hidden></p>
+
+  {
+    /*
+     * Cloned per role by the island. A `<template>` rather than markup built in JavaScript, so
+     * the row's shape and its classes live here with the rest of the component.
+     */
+  }
+  <template data-role-template>
+    <li class="role" data-role-code>
+      <input
+        class="input role-name"
+        data-field="role-label"
+        maxlength="64"
+        aria-label="Nombre del rol"
+      />
+      <code class="small role-code" data-field="role-slug"></code>
+      <span class="role-actions">
+        {
+          /*
+           * Appears only once the name has actually been edited. A save control that is always
+           * on screen is a control nobody can interpret — the reader has to guess whether it
+           * saves, confirms or selects; one that shows up the moment they type says exactly
+           * what it is for, and its absence says the row is already saved.
+           */
+        }
+        <button
+          class="btn btn-secondary btn-save"
+          type="button"
+          data-role-action="rename"
+          data-field="role-save"
+          hidden
+        >
+          Guardar
+        </button>
+        <button
+          class="btn btn-ghost btn-icon"
+          type="button"
+          data-role-action="toggle"
+          data-field="role-retire"
+          title="Retirar de los selectores"
+          aria-label="Retirar de los selectores"
+        >
+          <Icon name="trash" size={16} />
+        </button>
+        <button
+          class="btn btn-ghost btn-icon"
+          type="button"
+          data-role-action="toggle"
+          data-field="role-restore"
+          title="Devolver a los selectores"
+          aria-label="Devolver a los selectores"
+          hidden
+        >
+          <Icon name="refresh" size={16} />
+        </button>
+      </span>
+    </li>
+  </template>
+</dialog>
+
+<style>
+  .dialog {
+    width: min(600px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+  }
+
+  .dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .lead {
+    margin-top: var(--space-2);
+    color: var(--tinta-media);
+  }
+
+  .roles {
+    display: grid;
+    gap: var(--space-2);
+    margin: var(--space-4) 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .role {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-chip);
+  }
+
+  /* A retired role stays readable and stops looking pickable. */
+  .role.is-retired .role-name,
+  .role.is-retired .role-code {
+    opacity: 0.6;
+  }
+
+  .role-name {
+    flex: 1;
+    min-width: 6rem;
+  }
+
+  .role-code {
+    color: var(--tinta-media);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .btn-save {
+    /* Sized to sit on the same line as the icon buttons rather than growing the row when it
+       appears: a list that reflows as you type is a list that loses your place. */
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-small-size);
+  }
+
+  .role-actions {
+    display: inline-flex;
+    gap: var(--space-1);
+    margin-left: auto;
+  }
+
+  .btn-icon {
+    padding: var(--space-2);
+    line-height: 0;
+  }
+
+  /* `.btn` sets `display: inline-flex`, and an author rule beats the user agent's
+     `[hidden] { display: none }` — without this, retire and restore render side by side and the
+     save button never hides. */
+  .role-actions [hidden] {
+    display: none;
+  }
+
+  .add {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-3);
+    padding-top: var(--space-4);
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    flex: 1;
+  }
+
+  .error {
+    margin-top: var(--space-2);
+    color: var(--rojo);
+  }
+
+  @media (max-width: 560px) {
+    .add {
+      flex-wrap: wrap;
+    }
+
+    .add .btn {
+      width: 100%;
+    }
+  }
+</style>

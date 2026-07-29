@@ -1,0 +1,221 @@
+---
+/**
+ * The trail as a table: one line per record, for comparing rather than reading.
+ *
+ * Same grammar as the Equipo roster and the same stylesheet
+ * (`src/styles/table.css`): a card that is its own scroll container, a sticky
+ * header on paper, hairline rules, one padding rhythm. The columns are what the
+ * old stacked cards were already saying, laid out instead of piled up — what
+ * changed, what it happened to, the change itself, who and when, and the way
+ * into the whole decision.
+ *
+ * **Correlated records survive the table as a group of rows, not as a card.** A
+ * run sharing a `correlation_id` is introduced by a header row spanning every
+ * column and its members carry a rail down their first cell, so "A bajó para que
+ * B subiera" still reads as one movement. A lone record gets neither: framing
+ * every change as a decision would make the frame mean nothing where it matters.
+ *
+ * The `<template>`s live outside the table — the same place `RosterTable` keeps
+ * its row template — because the island rebuilds these rows when the stream says
+ * something moved, and the markup must have exactly one home.
+ */
+import { hrefForCorrelation } from "../../lib/activity/filters";
+import type {
+  ActivityRow as RowModel,
+  DecisionGroup,
+} from "../../lib/activity/model";
+import ActivityRow from "./ActivityRow.astro";
+import { recordsText, ROW_COPY, TABLE_COPY } from "./copy";
+import "../../styles/table.css";
+
+export interface Props {
+  /** Runs of records, in the server's order; never re-sorted here. */
+  groups: readonly DecisionGroup[];
+  /** Total records matching the current facets, across every page. */
+  count: number;
+}
+
+const { groups, count } = Astro.props;
+
+/**
+ * The blank the island fills. Every field is empty on purpose: the template is
+ * markup, not data, and a placeholder value could survive a missing patch and
+ * reach a reader as if it were a fact.
+ */
+const TEMPLATE_ROW: RowModel = {
+  id: 0,
+  verb: "",
+  verbLabel: "",
+  actor: "",
+  origin: "",
+  originLabel: "",
+  originTone: "tone-piedra",
+  isManual: false,
+  change: "",
+  reason: "",
+  explanation: "",
+  entityType: "",
+  entityTypeLabel: "",
+  entityId: "",
+  subject: { kind: "plain" },
+  subjectLabel: "",
+  subjectHref: null,
+  occurredAt: "",
+  occurredLabel: "",
+  occurredTitle: "",
+  correlationId: "",
+};
+
+const COLUMNS = [
+  { label: TABLE_COPY.colChange, className: "col-what" },
+  { label: TABLE_COPY.colSubject, className: "col-subject" },
+  { label: TABLE_COPY.colDelta, className: "col-delta" },
+  { label: TABLE_COPY.colWho, className: "col-who" },
+] as const;
+---
+
+<div class="feed">
+  <p class="small feed-count">
+    <span class="figure" data-field="feed-count">{recordsText(count)}</span>
+  </p>
+
+  <div class="table-wrap card">
+    <table class="data-table" data-activity-list>
+      <caption class="visually-hidden">{TABLE_COPY.caption}</caption>
+      <thead>
+        <tr>
+          {
+            COLUMNS.map((column) => (
+              <th class:list={["label", column.className]} scope="col">
+                {column.label}
+              </th>
+            ))
+          }
+          <th class="label col-decision right" scope="col">
+            <span class="visually-hidden">{TABLE_COPY.colDecision}</span>
+          </th>
+        </tr>
+      </thead>
+
+      {
+        /* One `aria-live` on the body: rows arrive here over the stream, and
+          announcing the whole table on every event is worse than silence. */
+      }
+      <tbody data-activity-rows aria-live="polite">
+        {
+          groups.map((group) => (
+            <Fragment>
+              {group.isDecision && (
+                <tr class="decision-head" data-decision-head>
+                  <td colspan="5">
+                    <span class="label">{ROW_COPY.decision}</span>
+                    <span class="small" data-field="group-count">
+                      {recordsText(group.rows.length)}
+                    </span>
+                    <a
+                      class="small group-link"
+                      data-link="group"
+                      href={hrefForCorrelation(group.correlationId)}
+                    >
+                      {ROW_COPY.seeDecision}
+                    </a>
+                  </td>
+                </tr>
+              )}
+              {group.rows.map((row) => (
+                <ActivityRow row={row} inDecision={group.isDecision} />
+              ))}
+            </Fragment>
+          ))
+        }
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{/* Cloned by the island for records that were not in the previous answer. */}
+<template data-template="activity-decision">
+  <tr class="decision-head" data-decision-head>
+    <td colspan="5">
+      <span class="label">{ROW_COPY.decision}</span>
+      <span class="small" data-field="group-count"></span>
+      <a class="small group-link" data-link="group" href="/activity">
+        {ROW_COPY.seeDecision}
+      </a>
+    </td>
+  </tr>
+</template>
+
+<template data-template="activity-row">
+  <ActivityRow row={TEMPLATE_ROW} inDecision={false} />
+</template>
+
+<style>
+  .feed {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .feed-count {
+    color: var(--tinta-media);
+  }
+
+  table {
+    min-width: 900px;
+  }
+
+  /* The introduction to a decision. It is not a data row: no hover, quieter
+     ground, and it spans every column because the sentence is about all of
+     them. */
+  .decision-head {
+    background-color: var(--pozo);
+  }
+
+  .decision-head:hover {
+    background-color: var(--pozo);
+  }
+
+  .decision-head td {
+    display: table-cell;
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .decision-head .label {
+    color: var(--cobalto);
+  }
+
+  .decision-head .small,
+  .decision-head .group-link {
+    margin-left: var(--space-3);
+  }
+
+  .group-link {
+    text-decoration: none;
+    color: var(--tinta-media);
+    border-radius: var(--radius-chip);
+  }
+
+  .group-link:hover {
+    color: var(--cobalto);
+  }
+
+  .col-delta,
+  .col-who {
+    white-space: nowrap;
+  }
+
+  /* Columns drop from the least load-bearing inward: what changed and what it
+     happened to survive every width, because they are what the screen is for. */
+  @media (max-width: 1119px) {
+    .col-decision {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1023px) {
+    .col-delta {
+      display: none;
+    }
+  }
+</style>

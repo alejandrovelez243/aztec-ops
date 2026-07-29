@@ -121,13 +121,21 @@ object-level "only your own" rules, and there should not be: a colleague must be
 project while its owner is on holiday. "My tickets" is a **filter** — `?assignee=camila.torres` on
 the task list, `?owner=` on the queue — exactly as it is in Jira. A filter, never a restriction.
 
-**Level 2 — ops lead.** Two capabilities, both of which overrule the engine rather than feed it:
+**Level 2 — ops lead.** Two capabilities. The first overrules the engine rather than feeding it;
+the second decides who is in the operation at all, which is upstream of everything the engine
+ranks:
 
 | Route | Why it is gated |
 |---|---|
 | `POST /projects/{code}/priority-override` | Forces the ranking against the computed score. |
 | `DELETE /projects/{code}/priority-override` | The other half of the same capability: a rank one person may force and anybody may lift is a suggestion, not a decision. |
 | `POST /recompute` | Portfolio-wide and expensive. `POST /projects/{code}/recompute` is *not* gated — its blast radius is one project. |
+| `POST` / `PATCH` / `DELETE /team/members{,/…}` | Who is on the roster, and what capacity they are judged against — the divisor of every `OWNER_OVERLOADED` flag. |
+| `POST /team/members/{code}/password` | Replacing somebody else's credential. |
+| `POST /catalog/roles`, `PATCH /catalog/roles/{code}` | The one taxonomy writable outside `/admin/` (§2.16). |
+
+The 403 names which of the two was refused in `details.action`, so an operator who pressed
+"Añadir persona" is not told they lack permission to override a ranking.
 
 An ops lead is `accounts.User.is_staff`. **Why that and not the `role` foreign key:** `catalog.Role`
 is operator-editable taxonomy — rows are renamed, reordered and retired from the admin like every
@@ -259,9 +267,9 @@ TaxonomyRef   { code: str, label: str, color: str | null }
 CurrencyRef   { code: str, label: str, color: str | null, minor_units: int }
 StateRef      { code: str, label: str, category: str, color: str | null }
 ActorRef      { alias: str, label: str, role: str | null }
-RiskFlag      { code: str, severity: "LOW"|"MEDIUM"|"HIGH"|"CRITICAL", reason: str }
+RiskFlag      { code: str, severity: "LOW"|"MEDIUM"|"HIGH"|"CRITICAL", label: str, reason: str }
 HealthRef     { code: "HEALTHY"|"AT_RISK"|"BLOCKED", label: str }
-ScoreSignal   { code: str, raw: float, weight: float, contribution: float, reason: str }
+ScoreSignal   { code: str, label: str, raw: float, weight: float, contribution: float, reason: str }
 Score         { value: float, policy_version: int, computed_at: datetime,
                 breakdown: ScoreSignal[], modifiers: {code: float}, flags: str[] }
 Override      { position: int | null, boost: float | null, reason: str,
@@ -277,6 +285,12 @@ not any event was emitted, and there is no `project.risk.changed` frame on the s
 is no stored set for anything to change *from*. `health` is derived from the flags —
 `BLOCKED` when any `CRITICAL` flag is raised, `AT_RISK` when any flag is raised, else `HEALTHY` — so
 the two can never disagree.
+
+`RiskFlag.label` and `RiskFlag.reason` are the Spanish the client renders (`PRODUCT.md`); `code` and
+`severity` are the identifiers it branches on. The words travel on the wire because the frontend may
+not hold an object literal keyed by a flag code (`docs/standards/FRONTEND.md` §7) — a seventh
+specification would ship a code that map does not have, and the flag would render as `NO_TARGET_DATE`
+or vanish. The same holds for `HealthRef.label`.
 
 `Score.value` is the computed 0–100 number and is **never** rewritten by an override. When
 `override` is non-null the frontend labels the row as a manual override and still shows
@@ -329,7 +343,7 @@ QueueItemOut {
       "project_type": {"code": "automatizacion", "label": "Automatizacion", "color": null},
       "stage": {"code": "ejecucion", "label": "Ejecucion", "color": null},
       "state": {"code": "ejecucion", "label": "En ejecucion", "category": "IN_PROGRESS", "color": "#3E63DD"},
-      "health": {"code": "BLOCKED", "label": "Blocked"},
+      "health": {"code": "BLOCKED", "label": "Bloqueado"},
       "target_date": null,
       "business_value": 28000,
       "currency": "USD",
@@ -342,32 +356,32 @@ QueueItemOut {
         "policy_version": 1,
         "computed_at": "2026-07-28T06:00:00Z",
         "breakdown": [
-          {"code": "blockage", "raw": 1.0, "weight": 0.15, "contribution": 15.0,
-           "reason": "2 open blocker(s); the oldest has been open for 24 day(s) and needs intervention."},
-          {"code": "business_value", "raw": 0.86, "weight": 0.15, "contribution": 12.9,
-           "reason": "28000 USD, log-normalized against the portfolio range 4000-40000."},
-          {"code": "deadline_pressure", "raw": 0.5, "weight": 0.25, "contribution": 12.5,
-           "reason": "No target date recorded; neutral 0.5 applied and NO_TARGET_DATE raised."},
-          {"code": "overdue_work", "raw": 0.5, "weight": 0.2, "contribution": 10.0,
-           "reason": "2 of 4 open tasks are past due."},
-          {"code": "criticality", "raw": 0.5, "weight": 0.15, "contribution": 7.5,
-           "reason": "2 of 4 open tasks are Critica or Alta."},
-          {"code": "staleness", "raw": 0.6, "weight": 0.1, "contribution": 6.0,
-           "reason": "9 day(s) without recorded activity and no next step set."}
+          {"code": "blockage", "label": "Bloqueo", "raw": 1.0, "weight": 0.15, "contribution": 15.0,
+           "reason": "2 bloqueo(s) abierto(s); el más antiguo lleva 24 día(s) sin resolverse y necesita intervención."},
+          {"code": "business_value", "label": "Valor de negocio", "raw": 0.86, "weight": 0.15, "contribution": 12.9,
+           "reason": "Valor de contrato 28.000,00 USD, normalizado logarítmicamente contra el máximo del portafolio (40.000,00)."},
+          {"code": "deadline_pressure", "label": "Presión de fecha", "raw": 0.5, "weight": 0.25, "contribution": 12.5,
+           "reason": "Sin fecha comprometida, la presión de fecha no se puede evaluar."},
+          {"code": "overdue_work", "label": "Trabajo vencido", "raw": 0.5, "weight": 0.2, "contribution": 10.0,
+           "reason": "2 de 4 tareas abiertas pasaron su fecha."},
+          {"code": "criticality", "label": "Criticidad", "raw": 0.5, "weight": 0.15, "contribution": 7.5,
+           "reason": "2 tarea(s) abierta(s) de prioridad urgente."},
+          {"code": "staleness", "label": "Inactividad", "raw": 0.6, "weight": 0.1, "contribution": 6.0,
+           "reason": "Sin actividad registrada durante 9 día(s) frente a un umbral de 14 día(s); no hay próximo paso registrado."}
         ],
         "modifiers": {"engagement_type": 1.1},
         "flags": ["NO_TARGET_DATE"]
       },
       "override": null,
       "risk_flags": [
-        {"code": "BLOCKED", "severity": "HIGH",
-         "reason": "2 open blockers and 1 task in a BLOCKED state."},
-        {"code": "OVERDUE", "severity": "HIGH",
-         "reason": "2 tasks past due; the oldest by 18 day(s)."},
-        {"code": "NO_TARGET_DATE", "severity": "MEDIUM",
-         "reason": "Active project with no target date."},
-        {"code": "NO_NEXT_STEP", "severity": "MEDIUM",
-         "reason": "No next step recorded and no task in progress."}
+        {"code": "BLOCKED", "severity": "CRITICAL", "label": "Bloqueado",
+         "reason": "2 bloqueos abiertos; el más antiguo lleva 24 días."},
+        {"code": "OVERDUE", "severity": "HIGH", "label": "Vencido",
+         "reason": "2 tareas pasaron su fecha de vencimiento."},
+        {"code": "NO_TARGET_DATE", "severity": "MEDIUM", "label": "Sin fecha objetivo",
+         "reason": "No hay fecha objetivo comprometida."},
+        {"code": "NO_NEXT_STEP", "severity": "MEDIUM", "label": "Sin próximo paso",
+         "reason": "No hay próximo paso registrado ni ninguna tarea en curso."}
       ],
       "updated_at": "2026-07-28T06:00:00Z"
     }
@@ -376,7 +390,9 @@ QueueItemOut {
 ```
 
 `breakdown` is returned sorted by `contribution` descending, which is the order the UI reads it
-in. `sum(contribution) * product(modifiers)` equals `value` to one decimal.
+in. `sum(contribution) * product(modifiers)` equals `value` to one decimal. Each line names itself:
+`label` is what the signal measures and `reason` the sentence that defends the number, both already
+in the interface's language, so the client never maps a signal `code` to text of its own.
 
 ### 2.2 `GET /api/v1/projects/{code}` — project detail
 
@@ -750,19 +766,68 @@ ActivityOut {
 sharing a `correlation_id` are one decision ("deprioritize A to prioritize B") and the UI groups
 them. The timeline is append-only: there is no `PATCH` or `DELETE` on it.
 
-### 2.14 `GET /api/v1/team/load` — load per person
+#### 2.13.1 `GET /api/v1/activity` — portfolio-wide feed
 
-Computed from `Task` rows at read time. The `Team` sheet counters in the source dataset are a
-stale projection and are not imported.
+The same table read across every project, task and blocker: "what moved today", which the
+per-project timeline cannot answer. Items are the **identical** `ActivityOut`, so one client type
+and one component render both surfaces; `entity` is what identifies a row's subject here.
 
-Query: `owner` (repeatable), `include_inactive` (bool, default `false`). Not paginated: five rows.
+Query: §1.3 pagination, plus
+
+| Param | Type | Meaning |
+| --- | --- | --- |
+| `entity_type` | `project`\|`task`\|`blocker` | Only facts about that kind of thing. |
+| `entity_id` | str | Business code (`PRJ-22`), meant to be paired with `entity_type`. |
+| `verb` | str, repeatable | ORs its values. |
+| `actor` | str | The alias stored on the record (`camila`, `system`). |
+| `origin` | `MANUAL`\|`POLICY`\|`SYSTEM` | Who caused it: a person, the engine, the system. |
+| `since` / `until` | datetime | Inclusive bounds on `occurred_at`. |
+| `correlation_id` | uuid | Expands one decision, exactly as in 2.13. |
+
+Ordered `-occurred_at, -id` only; there is no `order_by`, because a feed sorted by anything else is
+not a narrative. Response `200: Paginated[ActivityOut]`, `count` being the total match, not the
+page length.
+
+**No facet is rejected for naming an unknown value.** An unrecognised `verb`, `entity_type`,
+`origin` or `actor` returns an empty page, never `422`: those vocabularies move by migration and by
+the accounts table, and a filter saved in someone's URL must not be able to break a read-only
+screen. The only `422` on this endpoint is a malformed `correlation_id` or datetime.
+
+`origin=POLICY` is how the engine's own behaviour is audited — every score the ranking moved on its
+own, portfolio-wide, in one read.
+
+### 2.14 `GET /api/v1/team/load` — the roster
+
+Load is computed from `Task` rows at read time. The `Team` sheet counters in the source dataset
+are a stale projection and are not imported.
+
+Query — every parameter optional, and the filters that are columns of a person are applied by the
+database while `overloaded` and `order_by` are applied to the derived rows:
+
+| Parameter | Values | Default | Notes |
+|---|---|---|---|
+| `owner` | repeatable `User.code` | — | Restrict to these people |
+| `role` | repeatable `Role.code` | — | ORs its values, like every multi-select |
+| `q` | free text | — | Case-insensitive substring over `code` and the display name |
+| `status` | `active` \| `inactive` \| `all` | `active` | Replaced the earlier `include_inactive` boolean, which could not express "only the people we have retired" |
+| `overloaded` | `true` \| `false` | absent | Absent is everybody; `false` is **who has room**, which is the question somebody about to assign work is asking |
+| `order_by` | see below, `-` prefix descends | `-utilization` | Outside the allowlist is `422` carrying `details.allowed` |
+
+`order_by` allowlist: `label`, `role`, `utilization`, `load_points`, `capacity`, `open_tasks`,
+`overdue_tasks`, `blocked_tasks`, `urgent_tasks`, `projects_owned`. Ties always break on `label`,
+so two people on identical load keep a stable order between two reads of unchanged data.
+
+Not paginated: the result set is bounded by how many people the company employs.
 
 Response `200: { items: TeamLoadOut[] }`:
 
 ```
 TeamLoadOut {
   alias, label: str
-  role: str | null
+  role: str | null              # the label, to render
+  role_code: str | null         # the slug, to send back to PATCH /team/members/{code}
+  is_active: bool               # false = retired from new assignment; their work is untouched
+  has_password: bool            # false = a real assignee who cannot sign in yet
   weekly_capacity_points: int
   load_points: int              # sum of Priority.weight over open assigned tasks
   utilization: float            # load_points / weekly_capacity_points
@@ -774,16 +839,91 @@ TeamLoadOut {
 
 ```json
 {"items": [
-  {"alias": "camila", "label": "Camila Torres", "role": "Delivery",
+  {"alias": "camila", "label": "Camila Torres", "role": "Delivery", "role_code": "delivery",
+   "is_active": true, "has_password": true,
    "weekly_capacity_points": 40, "load_points": 62, "utilization": 1.55, "is_overloaded": true,
    "open_tasks": 28, "blocked_tasks": 7, "high_or_critical_open": 20, "overdue_tasks": 12,
    "projects_owned": 7},
   {"alias": "daniel", "label": "Daniel Rojas", "role": "Commercial / Delivery",
+   "role_code": "commercial_delivery", "is_active": true, "has_password": true,
    "weekly_capacity_points": 40, "load_points": 24, "utilization": 0.6, "is_overloaded": false,
    "open_tasks": 11, "blocked_tasks": 2, "high_or_critical_open": 6, "overdue_tasks": 5,
    "projects_owned": 3}
 ]}
 ```
+
+### 2.15 Roster writes — `/api/v1/team/members`
+
+Reading the roster is everybody's business; changing it is an ops lead's. All four routes are
+`auth=ops_lead` and answer `403 permission_denied` with `details.required = "ops_lead"` otherwise.
+They live under `/team/` although the aggregate is `accounts.User`, because the URL space names
+the product's surface and not the app that owns the row.
+
+`MemberOut` is the identity half only — no load, because load is a portfolio aggregate and these
+routes belong to identity:
+
+```
+MemberOut { alias, label: str, role: TaxonomyRef | null,
+            weekly_capacity_points: int, is_active, is_ops_lead, has_password: bool }
+```
+
+| Route | Body | Success | Errors |
+|---|---|---|---|
+| `POST /team/members` | `{label, role?, weekly_capacity_points, password?}` | `201 MemberOut` | `422 validation_error` (unknown `role`, capacity out of 1–200, a password the validators refuse) |
+| `PATCH /team/members/{code}` | `{label?, role?, weekly_capacity_points?, is_active?}` | `200 MemberOut` | `404 not_found`, `422 validation_error`, `403` |
+| `DELETE /team/members/{code}` | — | `204` | `404 not_found`, `403` |
+| `POST /team/members/{code}/password` | `{password}` | `200 MemberOut` | `404`, `422 validation_error`, `403` |
+
+Four things are load-bearing:
+
+* **`code` is derived, not typed, and it is permanent.** `POST` does not accept one — exactly as
+  `POST /projects` does not — and the service mints it from `label` inside the creating
+  transaction: `"Alejandro Vélez"` → `alejandro.velez`, accents stripped, first and last token,
+  and `alejandro.velez2` for the second person of that name. It is the person's username, the
+  `actor` of every activity record they cause and the `entity.id` of every event about them, so a
+  typo typed once would be a typo the audit trail carries forever with no rename to fix it. The
+  response carries the code that was assigned. A person whose name changed gets a new `label`,
+  never a new code.
+* **`DELETE` deletes nothing.** The effect is `is_active = false`: the tasks and projects that
+  name them are untouched, and a row removed underneath those would either cascade the history
+  away or break the foreign keys holding it. `PATCH` with `is_active: true` restores them.
+  Idempotent — retiring somebody already retired is the same `204` and writes no second record.
+* **Absent ≠ `null` on `PATCH`.** An absent `role` is left alone; an explicit `null` unclassifies
+  the person.
+* **Nobody may retire their own account.** `403 permission_denied` — it would end the caller's own
+  session, and if they were the last ops lead it would lock the product for everybody.
+
+`password` omitted on creation is normal: the person is assignable immediately and cannot sign in
+until one is set. A refused password answers with **every** rule it broke in
+`details.fields.password`, not the first — a form that fixes one rule per round trip is a form
+people work around by choosing something worse. The password is never echoed, never logged and
+never published: this route emits no event at all.
+
+### 2.16 `POST /api/v1/catalog/roles`, `PATCH /api/v1/catalog/roles/{code}`
+
+The one taxonomy writable from the product; the other five are decisions about how the business
+works and are still made in `/admin/`. A role is what an operator needs *while doing something
+else* — registering somebody who does a job nobody has typed yet — and a trip to the admin
+mid-form is how a person gets filed under the wrong role permanently. Both routes are ops lead.
+
+| Route | Body / query | Success | Errors |
+|---|---|---|---|
+| `GET /catalog/roles` | `status` ∈ `active \| inactive \| all` (default `all`) | `200 TaxonomyRef[]` | `403` |
+| `POST /catalog/roles` | `{code, label}` | `201 TaxonomyRef` | `409 conflicting_state`, `422`, `403` |
+| `PATCH /catalog/roles/{code}` | `{label?, is_active?}` | `200 TaxonomyRef` | `404 not_found`, `422`, `403` |
+
+`GET /catalog/roles` is the **editor's** list and is deliberately not a flag on `GET /catalog`.
+That one feeds the pickers, where a retired value must never appear; this one has to show the
+retired rows, because a screen that offers "retire" and cannot show what was retired offers a
+delete with better manners. It is ops lead for the same reason the writes are: which roles were
+retired is not something a reader needs in order to read the roster.
+
+A new role is active and goes last in the picker. `is_active: false` takes it out of the pickers
+and leaves everybody already classified under it exactly as they are — nothing is deleted, so
+nobody is silently unclassified. A taken code is a conflict **including a retired role's**: the row
+still exists, so restore it rather than create a second one that would resolve ambiguously ever
+after. Every change writes an `ActivityRecord` under `entity_type: "role"`; none emits an event,
+because a role is picker vocabulary that nothing recomputes from.
 
 Overload never lowers a project's score. It raises `OWNER_OVERLOADED` on that owner's projects,
 which is a staffing decision, not a ranking one.
@@ -926,7 +1066,99 @@ hardcoded 2 is wrong by two orders of magnitude for every zero-decimal currency.
 **Workflow states are deliberately absent.** A state code is unique only inside its workflow, and
 the legal moves out of the state a project is actually in are `transitions` on the project detail
 (§2.2). A global list of states would invite the client to guess legality, which is exactly what
-that field exists to prevent.
+that field exists to prevent. The *configured shape* of a workflow — which columns a board has and
+which arrows an operator drew between them — is a different question and is served by §2.18.
+
+### 2.18 `GET /api/v1/workflows` — every state graph as an operator configured it
+
+Authenticated like every other read; the opt-out list in §1.2 is five routes long and closed.
+
+Response `200: WorkflowCatalogOut`:
+
+```
+WorkflowCatalogOut {
+  workflows: WorkflowShape[]
+}
+WorkflowShape {
+  code: str                      # stable slug of the graph
+  name: str                      # operator-editable display name
+  applies_to: "PROJECT"|"TASK"   # kind of aggregate the graph governs
+  is_default: bool               # the fallback graph for its applies_to
+  is_active: bool                # false = retired; still served, see below
+  engagement_types: TaxonomyRef[]
+  states: StateRef[]             # every node, in the operator's `order`
+  transitions: WorkflowEdge[]    # every ACTIVE edge, grouped by source column
+}
+WorkflowEdge {
+  from_state: str                # WorkflowState.code of the source, inside this graph
+  to_state: str                  # WorkflowState.code of the target, inside this graph
+  label: str                     # the operator's wording — "Aprobar", "Pedir cambios"
+  requires_reason: bool          # the move was configured to demand written text
+  requires_fields: str[]         # aggregate attributes the move was configured to demand
+}
+```
+
+```json
+{"workflows": [{"code": "project_default", "name": "Ciclo de vida de proyecto",
+                "applies_to": "PROJECT", "is_default": true, "is_active": true,
+                "engagement_types": [],
+                "states": [{"code": "descubrimiento", "label": "Descubrimiento",
+                            "category": "BACKLOG", "color": "#f59e0b"},
+                           {"code": "bloqueado", "label": "Bloqueado",
+                            "category": "BLOCKED", "color": "#ef4444"}],
+                "transitions": [{"from_state": "descubrimiento", "to_state": "ejecucion",
+                                 "label": "Iniciar ejecucion", "requires_reason": false,
+                                 "requires_fields": ["next_step"]},
+                                {"from_state": "ejecucion", "to_state": "bloqueado",
+                                 "label": "Marcar como bloqueado", "requires_reason": true,
+                                 "requires_fields": []}]}]}
+```
+
+One document rather than a route per engagement type, for the same reason §2.17 is one document: a
+board draws all of its columns at once. Asking per engagement type would also force the client to
+know *which* type to ask about before its first request, which means reimplementing the binding
+precedence `Workflow.objects.resolve` owns (`DATA_MODEL.md` §2).
+
+**`transitions` here is configuration; `transitions` on a project or a task is permission.** This
+route shipped without edges so that no client could compute legality locally and skip the
+per-project and per-task list, and that rule is unchanged. What makes edges safe on *this* document
+is the distinction between the two questions. This document answers "what did an operator
+configure": it is a picture of the graph as it stands in the admin. A record's own `transitions`
+(§2.2) answers "what may **this** record do **right now**", and the two legitimately disagree — a
+configured edge is refused when the record is not sitting on its `from_state`, when its guard
+rejects the move (`409 guard_rejected`, §1.5, exists precisely because a declared edge can be
+denied), and when a field named in `requires_fields` is empty *on that row*. **An edge existing is
+not a move being legal.** A client that draws an arrow and then acts on it without asking the record
+meets the same `409 transition_not_allowed` carrying `details.allowed` it met before. Nothing in the
+enforcement path reads this document: `validate_transition` re-reads the rows every time it decides.
+
+**Nor is it the global state list §2.17 refuses.** States arrive grouped under the graph that owns
+them — never flat, so the collision that makes a global list unsafe (`bloqueada` in two graphs)
+cannot happen — and every edge names its endpoints by code *inside that same graph*. A board needs
+the column set and cannot derive it: columns inferred from the states projects happen to occupy
+cannot represent an empty one, so a workflow whose `Bloqueado` state is unoccupied has no such
+column, cannot say "nothing is blocked", and cannot accept a card dropped into it. A lifecycle
+diagram needs the arrows and cannot derive those either, since an edge no record has taken is
+invisible in the data.
+
+`transitions` carries **active edges only**. `is_active = false` is how an operator withdraws a
+move; the transition service refuses it, so publishing it as a drawable arrow would advertise a move
+nothing can take. An empty list is legitimate and means no move has been declared yet. The `guard`
+name is deliberately **not** published, for the same reason it is absent from §2.2: whether a guard
+passes depends on facts no row in the graph holds, so naming it would invite the client to predict
+an answer it cannot compute. Endpoints are codes rather than `StateRef` objects because the same
+document publishes every node in full under `states`; duplicating labels onto both ends of every
+arrow is how one response ends up disagreeing with itself after a rename.
+
+Unlike §2.17, **retired graphs are served too**, flagged `is_active: false`. The catalog filters
+because it feeds pickers, where offering a retired value would let somebody choose it and quietly
+un-retire it. Nothing here is chooseable, and aggregates keep sitting on the states of a retired
+graph — they are `PROTECT`ed exactly so — so a board that could not draw their columns would lose
+those projects from the screen entirely.
+
+`engagement_types` lists the types whose active binding names this graph; empty is the common case
+and means the graph is reached as the per-kind default rather than by name. `states` is empty for a
+graph nobody has configured states for, which is an answer and not an error.
 
 ## 3. `GET /api/stream` — server-sent events
 
@@ -1081,11 +1313,12 @@ multi-line body would need one `data:` line per fragment and the client would ha
 - Numeric primary keys (`Blocker.id`, `ActivityRecord.id`) beyond passing them straight back to
   the route that issued them. They are not stable across a reseed.
 - The signal codes and weights inside `breakdown`, and `policy_version`. They change when a new
-  `PriorityPolicy` version is activated; the UI renders whatever entries arrive and must not
-  hardcode the six current ones.
+  `PriorityPolicy` version is activated; the UI renders whatever entries arrive — from each line's
+  own `label` and `reason` — and must not hardcode the six current ones or map their codes to text.
 - `RiskFlag.code` values as a closed set. New specifications add codes (`CLAUDE.md` rule 8); the
-  UI renders unknown codes with their `reason` rather than dropping them.
-- The wording of `reason` strings and of `message`. They are generated text, not identifiers.
+  UI renders unknown codes with their `label` and `reason` rather than dropping them.
+- The wording of `label` and of `reason` strings and of `message`. They are generated text, not
+  identifiers — render them, never branch on them.
 - `metadata` on `ActivityRecord` — free-form JSONB, per-verb, and it evolves.
 - `ProjectSnapshot`, the outbox table, the Celery queues and the handler registry. None of them are
   addressable over HTTP; the SSE endpoint is the only live window onto the bus, and

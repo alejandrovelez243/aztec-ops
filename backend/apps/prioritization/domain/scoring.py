@@ -66,11 +66,13 @@ def compute_breakdown(
     """
     contributions: list[SignalContribution] = []
     for signal_code, weight in policy.weights.items():
-        result = get_signal(signal_code).evaluate(data)
+        strategy = get_signal(signal_code)
+        result = strategy.evaluate(data)
         contribution = _quantize(Decimal(str(result.score)) * weight * MAX_SCORE)
         contributions.append(
             SignalContribution(
                 code=signal_code,
+                label=strategy.label,
                 raw=result.score,
                 weight=weight,
                 contribution=contribution,
@@ -114,7 +116,8 @@ def _applied_modifiers(data: SignalInput, policy: PolicyView) -> tuple[ModifierA
         ModifierApplied(
             code="engagement_type",
             factor=factor,
-            reason=f"Engagement type {data.engagement_type_code} carries weight {factor}.",
+            # Spanish on purpose: the reason is read by the operation (CLAUDE.md §Language).
+            reason=f"El tipo de engagement {data.engagement_type_code} pesa {factor}.",
         ),
     )
 

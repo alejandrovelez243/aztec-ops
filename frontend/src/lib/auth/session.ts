@@ -11,12 +11,13 @@
  * the backend documents as acceptable.
  */
 
-import { postLogout, postToken } from "../api/client";
+import { ensureFreshAccess, postLogout, postToken } from "../api/client";
 import type { ApiError } from "../api/errors";
 import {
   clearSession,
   loadSession,
   saveSession,
+  SESSION_COOKIE_NAME,
   type SessionActor,
   type StoredSession,
 } from "./tokens";
@@ -72,6 +73,38 @@ export async function signOut(): Promise<void> {
   }
 }
 
+/**
+ * Tries to bring a session back from the refresh token alone.
+ *
+ * The access token — and with it the mirror cookie the server guard reads —
+ * lives for minutes, while the refresh token lives for days. Without this, an
+ * operator who leaves the tab open over lunch comes back to a login screen
+ * despite holding a perfectly good credential: the guard sees no cookie and
+ * redirects before any script can renew. Being signed out on a schedule is the
+ * fastest way to make a daily tool feel hostile.
+ *
+ * Called by the login screen before it renders its form, so an expiry becomes a
+ * blink rather than a logout.
+ *
+ * @returns `true` when the session is live again and the cookie is set; `false`
+ *   when there was nothing to restore or the refresh token itself was refused —
+ *   in which case the stale local session has been cleared.
+ */
+export async function restoreSession(): Promise<boolean> {
+  const stored = loadSession();
+  if (stored === null) return false;
+  const access = await ensureFreshAccess();
+  if (access === null) {
+    clearSession();
+    return false;
+  }
+  // Re-persist even when the stored token was still fresh: this is reached
+  // precisely when the cookie is missing, and saving is what writes it.
+  const current = loadSession();
+  if (current !== null) saveSession(current);
+  return true;
+}
+
 /** The signed-in operator, or `null`. */
 export function getOperator(): Operator | null {
   const session = loadSession();
@@ -79,15 +112,28 @@ export function getOperator(): Operator | null {
   return { ...session.actor, isOpsLead: session.isOpsLead };
 }
 
-/** Whether a session exists at all (fresh or refreshable). */
+/**
+ * Whether a session exists that the *server* would also honour.
+ *
+ * Both halves are checked, and the conjunction is the point: the stored
+ * session is what the client fetches with, and the mirror cookie is what the
+ * middleware reads. If they disagree, the two guards send the visitor in
+ * opposite directions and the tab ping-pongs between `/` and `/login` — a
+ * redirect loop that presents itself as a page that never loads. A session
+ * without its cookie is therefore reported as absent, and the login screen
+ * clears it (`lib/auth/guard-inline.ts`).
+ */
 export function hasSession(): boolean {
-  return loadSession() !== null;
+  if (loadSession() === null) return false;
+  return document.cookie.includes(`${SESSION_COOKIE_NAME}=`);
 }
 
 /**
- * Client-side route guard for app pages: without a session, replaces the
- * location with the login screen carrying a `next` back-reference. Returns
- * whether the visitor may stay.
+ * Client-side route guard for app pages, re-run after every view transition:
+ * without a session the location is replaced with the login screen carrying a
+ * `next` back-reference. The authoritative guard is the middleware; this one
+ * catches an expiry that happens while the tab is open, with no navigation to
+ * the server in between.
  */
 export function guardAppPage(): boolean {
   if (hasSession()) return true;

@@ -1,0 +1,91 @@
+---
+/**
+ * The table half of the projects surface: the same rows as the grid, in
+ * columns, for comparing rather than reading.
+ *
+ * A real `<table>` with `<th scope="col">`, not a grid of divs: the column a
+ * figure belongs to is information, and a screen reader that cannot announce it
+ * is reading a list of unlabelled numbers.
+ *
+ * Tertiary columns are dropped on narrow viewports and nothing is lost — the
+ * grid form carries every field, and below 768px the surface falls back to it.
+ */
+import ProjectRow from "./ProjectRow.astro";
+import type { ProjectPresentation } from "./presentation";
+
+export interface Props {
+  projects: readonly ProjectPresentation[];
+}
+
+const { projects } = Astro.props;
+---
+
+<div class="table-wrap card" data-projects-table>
+  <table>
+    <caption class="visually-hidden">Proyectos de la cartera</caption>
+    <thead>
+      <tr>
+        <th class="label col-code" scope="col">Código</th>
+        <th class="label" scope="col">Proyecto</th>
+        <th class="label col-client" scope="col">Cliente</th>
+        <th class="label" scope="col">Estado</th>
+        <th class="label col-owner" scope="col">Responsable</th>
+        <th class="label" scope="col">Fecha objetivo</th>
+        <th class="label right" scope="col">Riesgos</th>
+        <th class="label right" scope="col">Prioridad</th>
+      </tr>
+    </thead>
+    <tbody>
+      {projects.map((project) => <ProjectRow project={project} />)}
+    </tbody>
+  </table>
+</div>
+
+<style>
+  .table-wrap {
+    overflow-x: auto;
+    padding: 0;
+  }
+
+  table {
+    width: 100%;
+    min-width: 720px;
+  }
+
+  thead th {
+    /* Sticky against `.table-wrap`, not the page: `overflow-x: auto` makes this
+       wrapper the scroll container, so any `top` other than 0 parks the header
+       that far *down* inside the card, on top of the first row. */
+    position: sticky;
+    top: 0;
+    background-color: var(--carta);
+    text-align: left;
+    padding: var(--space-3);
+    border-bottom: var(--border-width) solid var(--hairline);
+    z-index: 1;
+  }
+
+  .col-code {
+    padding-left: calc(var(--space-3) + var(--rail-width));
+  }
+
+  .right {
+    text-align: right;
+  }
+
+  tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  @media (max-width: 1199px) {
+    .col-client {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1023px) {
+    .col-owner {
+      display: none;
+    }
+  }
+</style>

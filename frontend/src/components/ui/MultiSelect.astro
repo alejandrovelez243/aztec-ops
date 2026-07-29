@@ -1,0 +1,275 @@
+---
+/**
+ * Several choices from a list, as chips plus an "add" panel.
+ *
+ * `MenuSelect` answers one question with one answer, so it cannot serve a field
+ * that accepts many; this is its plural twin and shares its grammar rather than
+ * inventing a second one. The trigger is a real `<button>`, the panel is a
+ * `[data-menu-panel]`, and open/close, `Escape`, the arrow keys and the
+ * one-panel-at-a-time rule all come from `lib/ui/menu.ts` — a control that grew
+ * its own popup code is how one of them silently stops answering `Escape`
+ * (`docs/standards/FRONTEND.md` §10).
+ *
+ * What is chosen is *visible*, not implied by ticks inside a panel nobody has
+ * open: every choice becomes a chip with its own remove button, so the answer
+ * can be read and unmade without opening anything. The remove control is a
+ * button rather than a click target on the chip, which is what makes the field
+ * operable from the keyboard alone.
+ *
+ * Presentational, like `MenuSelect`: it renders options and reports the chosen
+ * set through the DOM (`[data-multi-chip][data-value]`). It does not know what a
+ * choice means, and it never fetches. `components/ui/multi-select.ts` is the
+ * behaviour; the options may be re-set from there when the surface only learns
+ * them at runtime (the board, which knows its project only after a selection).
+ */
+import Icon from "./Icon.astro";
+
+/** One choosable value. `value` is what is sent, `label` what is read. */
+export interface MultiOption {
+  /** Business code, sent to the API and shown on the chip. */
+  readonly value: string;
+  /** Human name of that value, in the operator's language. */
+  readonly label: string;
+}
+
+export interface Props {
+  /** Stable key of what this control edits; the island reads it off the DOM. */
+  facet: string;
+  /** Visible name of the control, in Spanish. */
+  label: string;
+  /** Options in the order they are offered; may be empty. */
+  options: readonly MultiOption[];
+  /** Text of the add button, in Spanish. */
+  addLabel: string;
+  /** What "nothing chosen" reads as, in Spanish. */
+  emptyLabel: string;
+  /** Why the add button is dead when nothing is left to offer, in Spanish. */
+  exhaustedNote: string;
+}
+
+const { facet, label, options, addLabel, emptyLabel, exhaustedNote } =
+  Astro.props;
+
+const labelId = `multi-${facet}-label`;
+const chipsId = `multi-${facet}-chips`;
+const exhaustedId = `multi-${facet}-exhausted`;
+
+/**
+ * With nothing to offer the button opens onto an empty panel, so it renders
+ * dead with the reason named instead — never hidden (`FRONTEND.md` §10).
+ */
+const isExhausted = options.length === 0;
+---
+
+<div class="multi-select" data-multi-select data-facet={facet}>
+  <span class="label" id={labelId}>{label}</span>
+
+  <p class="small empty" data-multi-empty>{emptyLabel}</p>
+
+  <ul class="chips" data-multi-chips id={chipsId} aria-labelledby={labelId} hidden>
+  </ul>
+
+  <button
+    class="btn btn-secondary trigger"
+    type="button"
+    data-menu-trigger
+    aria-haspopup="menu"
+    aria-labelledby={labelId}
+    aria-expanded="false"
+    aria-describedby={isExhausted ? exhaustedId : undefined}
+    disabled={isExhausted}
+  >
+    <Icon name="plus" size={16} />
+    {addLabel}
+  </button>
+
+  <p
+    class="small exhausted"
+    data-multi-exhausted
+    id={exhaustedId}
+    hidden={!isExhausted}
+  >
+    {exhaustedNote}
+  </p>
+
+  <div
+    class="panel card"
+    role="menu"
+    data-menu-panel
+    aria-labelledby={labelId}
+    hidden
+  >
+    {
+      options.map((option) => (
+        <button
+          class="item"
+          type="button"
+          role="menuitem"
+          data-menu-item
+          data-value={option.value}
+        >
+          <span class="chip chip-code" data-field="option-code">
+            {option.value}
+          </span>
+          <span class="small option-label" data-field="option-label">
+            {option.label}
+          </span>
+        </button>
+      ))
+    }
+  </div>
+
+  {
+    /* The runtime twin of the two shapes above — a chip, and an option for the
+      surfaces that only learn their list when the control opens. Cloned rather
+      than built in TypeScript, so the live nodes keep this component's scope
+      attribute and its styles; the pair is the same server-row/`<template>`
+      arrangement the task table uses. */
+  }
+  <template data-template="multi-chip">
+    <li class="chip chip-code chosen" data-multi-chip>
+      <span data-field="chip-code"></span>
+      <button class="remove" type="button" data-multi-remove>
+        <span class="visually-hidden">Quitar</span>
+        <span class="visually-hidden" data-field="chip-remove-code"></span>
+        <Icon name="close" size={14} />
+      </button>
+    </li>
+  </template>
+
+  <template data-template="multi-option">
+    <button class="item" type="button" role="menuitem" data-menu-item>
+      <span class="chip chip-code" data-field="option-code"></span>
+      <span class="small option-label" data-field="option-label"></span>
+    </button>
+  </template>
+</div>
+
+<style>
+  .multi-select {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .empty,
+  .exhausted {
+    color: var(--tinta-media);
+  }
+
+  .empty[hidden],
+  .exhausted[hidden] {
+    display: none;
+  }
+
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    max-width: 100%;
+  }
+
+  .chips[hidden] {
+    display: none;
+  }
+
+  .multi-select :global(.chosen) {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    max-width: 100%;
+    padding-right: var(--space-1);
+  }
+
+  /* The remove control is a real button, so a chip is unmade with the keyboard
+     as easily as with the pointer. */
+  .multi-select :global(.remove) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    flex: none;
+    border: 0;
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--tinta-media);
+    cursor: pointer;
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .multi-select :global(.remove:hover),
+  .multi-select :global(.remove:focus-visible) {
+    background-color: var(--carta);
+    color: var(--rojo-ink);
+  }
+
+  .trigger {
+    gap: var(--space-2);
+    height: 40px;
+    padding: 0 var(--space-3);
+    font-size: var(--text-small-size);
+    font-weight: 400;
+  }
+
+  .trigger[aria-expanded="true"] {
+    border-color: var(--cobalto);
+    color: var(--cobalto);
+  }
+
+  /* Anchored in viewport coordinates by `lib/ui/menu.ts`; everything but
+     `top`/`left` is decided here. */
+  .panel {
+    position: fixed;
+    z-index: var(--z-drawer);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    width: max-content;
+    min-width: 240px;
+    max-width: min(360px, calc(100vw - var(--space-6)));
+    max-height: min(320px, 60vh);
+    overflow-y: auto;
+    padding: var(--space-2);
+    box-shadow: var(--shadow-lifted);
+  }
+
+  .panel[hidden] {
+    display: none;
+  }
+
+  .multi-select :global(.item) {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: 36px;
+    padding: var(--space-2);
+    border-radius: var(--radius-chip);
+    text-align: left;
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .multi-select :global(.item:hover),
+  .multi-select :global(.item:focus-visible) {
+    background-color: var(--pozo);
+  }
+
+  .multi-select :global(.item[hidden]) {
+    display: none;
+  }
+
+  .multi-select :global(.option-label) {
+    color: var(--tinta-media);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+</style>

@@ -95,6 +95,112 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/team/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Member
+         * @description Register a person on the roster.
+         *
+         *     ``code`` is **not** accepted: it is derived from ``label`` — ``"Alejandro Vélez"`` becomes
+         *     ``alejandro.velez``, a second person of that name ``alejandro.velez2`` — and allocated inside
+         *     the creating transaction, so a rollback frees it. The slug is permanent and there is no rename,
+         *     which is precisely why an operator does not get to typo one into a form. The response carries
+         *     the code that was assigned.
+         *
+         *     Omitting ``password`` is normal — the person is immediately assignable and cannot sign in until
+         *     a credential is set through ``POST /team/members/{code}/password``.
+         *
+         *     Errors: ``422 validation_error`` (unknown ``role``, a capacity outside the accepted range, a
+         *     password the configured validators refuse), ``403 permission_denied``.
+         */
+        post: operations["apps_accounts_api_routers_post_member"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/team/members/{member_code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Member
+         * @description Retire a person from the operation, deleting nothing.
+         *
+         *     ``DELETE`` because that is the verb an operator reaches for and the one a CRUD client offers,
+         *     but the effect is ``is_active = false``: the tasks they are assigned and the projects they own
+         *     still name them, and a row removed underneath those would either cascade the history away or
+         *     break the foreign keys holding it. ``PATCH`` with ``is_active: true`` restores them.
+         *
+         *     Idempotent — retiring somebody already retired is the same 204, so a retry after a dropped
+         *     response is safe — and it writes no second activity record, because nothing changed.
+         *
+         *     Errors: ``404 not_found``, ``403 permission_denied`` (not an ops lead, or the caller is the
+         *     subject: retiring yourself ends your own session and, if you were the last ops lead, locks the
+         *     product for everybody).
+         */
+        delete: operations["apps_accounts_api_routers_delete_member"];
+        options?: never;
+        head?: never;
+        /**
+         * Patch Member
+         * @description Edit a person's mutable attributes. Absent means untouched; explicit ``null`` clears.
+         *
+         *     Also the restore half of the retire/restore pair: ``is_active: true`` puts somebody back on the
+         *     assignable roster. Retiring can go through here too, and ``DELETE`` is the same operation under
+         *     the verb an operator expects.
+         *
+         *     Errors: ``404 not_found``, ``422 validation_error`` (unknown ``role``, capacity out of range),
+         *     ``403 permission_denied`` — including the refusal to deactivate your own account, which no
+         *     ops lead may do to themselves.
+         */
+        patch: operations["apps_accounts_api_routers_patch_member"];
+        trace?: never;
+    };
+    "/api/v1/team/members/{member_code}/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Member Password
+         * @description Replace a person's password on their behalf.
+         *
+         *     An administrative reset, so no current password is asked for — the caller is not the person.
+         *     It is also how a seeded account, which starts with an unusable hash, becomes able to sign in at
+         *     all; the returned ``has_password`` is the confirmation.
+         *
+         *     The password is never echoed, logged, or published: no event is emitted for this route, and the
+         *     activity record states that the credential was replaced and by whom, never with what.
+         *
+         *     Errors: ``404 not_found``, ``422 validation_error`` naming ``password`` with every rule the
+         *     proposed value broke, ``403 permission_denied``.
+         */
+        post: operations["apps_accounts_api_routers_post_member_password"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/catalog": {
         parameters: {
             query?: never;
@@ -122,6 +228,135 @@ export interface paths {
          *     invite the client to guess legality, which is exactly what that field exists to prevent.
          */
         get: operations["apps_catalog_api_routers_get_catalog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Roles
+         * @description Every role, including the retired ones, in the operator's own order.
+         *
+         *     Separate from ``GET /catalog`` rather than a flag on it, and the split is the point: the
+         *     catalog is the **pickers**, and a retired value must never appear in one. This route is the
+         *     *editor's* view, which has to show the retired rows or restoring one would be impossible —
+         *     a retire button with no way back is a delete with better manners.
+         *
+         *     Ops lead, like the writes it accompanies: knowing which roles were retired is not something a
+         *     reader needs in order to read the roster.
+         */
+        get: operations["apps_catalog_api_routers_get_roles"];
+        put?: never;
+        /**
+         * Post Role
+         * @description Add a role to the vocabulary, active and last in the picker.
+         *
+         *     The one taxonomy writable from the product, because it is the one an operator needs while
+         *     doing something else: registering somebody who does a job nobody has typed yet. Every change
+         *     writes an ``ActivityRecord``, so the vocabulary has the same audit trail as the work.
+         *
+         *     A code already in use is ``409 conflicting_state`` — **including a retired role's**. The row
+         *     still exists and is merely out of the pickers, so the fix is to restore it rather than create
+         *     a second one that would resolve ambiguously ever after.
+         *
+         *     Errors: ``409 conflicting_state``, ``422 validation_error``, ``403 permission_denied``.
+         */
+        post: operations["apps_catalog_api_routers_post_role"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/roles/{role_code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Role
+         * @description Rename a role, retire it, or restore it. Absent means untouched.
+         *
+         *     Retiring is ``is_active = false`` and never a delete: the role leaves the pickers and keeps
+         *     resolving on the people already classified under it, so nobody is silently unclassified.
+         *
+         *     ``code`` is not writable. It is what those people carry, and what a payload or a filter
+         *     compares against; the label is what changes when the wording does.
+         *
+         *     Errors: ``404 not_found``, ``422 validation_error``, ``403 permission_denied``.
+         */
+        patch: operations["apps_catalog_api_routers_patch_role"];
+        trace?: never;
+    };
+    "/api/v1/workflows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workflows
+         * @description Return every configured state graph: its states and its edges, as an operator arranged them.
+         *
+         *     Each state carries ``code``, ``label``, ``category`` and ``color`` — the shared
+         *     :class:`~apps.shared.refs.StateRef` every read surface already renders — and each graph carries
+         *     the engagement types bound to it, the kind of aggregate it governs, whether it is the fallback
+         *     for that kind, and ``transitions``: every active edge as ``from_state`` / ``to_state`` codes plus
+         *     the operator's ``label``, ``requires_reason`` and ``requires_fields``.
+         *
+         *     Authenticated like every other read; the list of routes that opt out is five long and closed
+         *     (`docs/API.md` §1.2).
+         *
+         *     One document rather than a route per engagement type, for the same reason ``GET /catalog`` is
+         *     one document: a board draws all of its columns at once. Asking per engagement type would also
+         *     force the client to know which type to ask about before its first request, which means
+         *     reimplementing the binding precedence ``Workflow.objects.resolve`` owns.
+         *
+         *     **Why publishing edges here does not reopen the decision that kept them out.** This route
+         *     deliberately shipped without edges so that a client could not compute legality locally and skip
+         *     the per-project and per-task ``transitions`` list. That rule stands, unchanged and unweakened.
+         *     What makes edges safe on *this* document is a real distinction, not a rhetorical one: this
+         *     document describes the graph **as an operator configured it**, while a project's or a task's own
+         *     ``transitions`` says what **that record** may do **right now**. The two can legitimately
+         *     disagree, and the ways they disagree are the whole argument. A configured edge is refused when
+         *     the record is not sitting on its ``from_state``; when a guard rejects it — ``GuardRejected`` is
+         *     in the error mapping (§1.5) precisely because a declared edge can be denied; and when a field
+         *     named in ``requires_fields`` is empty *on that record*, which is a fact about a row, not about
+         *     the graph. **So an edge existing is not a move being legal.** A client that reads an arrow here
+         *     and acts on it without asking the record meets exactly the same typed 409 it met before, now
+         *     carrying ``details.allowed``. Every enforcement path stays where it is: nothing in this route is
+         *     read by ``validate_transition``, which re-reads the rows each time it decides.
+         *
+         *     **Nor does it become the global state list §2.17 refuses.** ``GET /catalog`` excludes states
+         *     because a state code is unique only inside its workflow, so a *flat* list invites the client to
+         *     guess. Nothing here is flat: states arrive grouped under the graph that owns them, and each edge
+         *     names its endpoints by code inside that same graph, so ``bloqueada`` in two workflows still
+         *     cannot be confused. A board needs the columns and cannot derive them — columns inferred from the
+         *     states projects happen to occupy cannot represent an empty one, so a workflow whose ``Bloqueado``
+         *     state is unoccupied has no such column, cannot say "nothing is blocked", and cannot accept a card
+         *     dropped into it — and a screen that draws the lifecycle needs the arrows and cannot derive those
+         *     either, since an unused edge is invisible to every record that never took it.
+         */
+        get: operations["apps_workflow_api_routers_get_workflows"];
         put?: never;
         post?: never;
         delete?: never;
@@ -240,10 +475,16 @@ export interface paths {
         };
         /**
          * Get Team Load
-         * @description Load per person, computed from task rows at read time.
+         * @description The roster: load per person, computed from task rows at read time.
          *
          *     The source ``Team`` sheet's counters are a stale projection of the same rows and are
          *     deliberately not imported: a stored count and the tasks it summarises drift apart in silence.
+         *
+         *     Reading who is on the team is everybody's business; changing it is not. The writes are
+         *     ``POST``/``PATCH``/``DELETE /team/members`` in the identity context, behind an ops-lead check —
+         *     the roster row is ``accounts.User``, and only its *load* belongs to the portfolio.
+         *
+         *     ``order_by`` outside the allowlist is ``422 validation_error`` carrying what may be sorted by.
          */
         get: operations["apps_portfolio_api_routers_get_team_load"];
         put?: never;
@@ -283,6 +524,50 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tasks/{task_code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Task
+         * @description One task with its project, state, owner, dependencies, **legal transitions** and comments.
+         *
+         *     Everything the task screen draws itself from is here, in one response. ``notes`` travels inside
+         *     rather than behind a second route because a detail that needs two requests to render is two
+         *     chances to render half a page — and because two reads can straddle a write, so a comment
+         *     fetched separately can end up beside a state it does not refer to.
+         *
+         *     ``transitions`` is the only source of the state buttons, and it is read from
+         *     ``WorkflowTransition`` — the same table ``POST /tasks/{code}/transition`` validates against, so
+         *     the two can never disagree. The frontend holds no list of task state codes.
+         */
+        get: operations["apps_work_api_routers_get_task"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Task
+         * @description Edit a task's mutable fields. Absent means untouched; explicit ``null`` clears.
+         *
+         *     This is the write behind "change the responsable": ``assignee`` names an
+         *     ``accounts.User.code``, and an explicit ``null`` unassigns the task. A code that resolves to
+         *     nobody is ``404 not_found`` rather than a silently dropped field.
+         *
+         *     ``workflow_state`` is not a field of this payload at all — a state moves through the transition
+         *     route (CLAUDE.md rule 2) — and neither is ``is_overdue``, which is derived.
+         *
+         *     The whole detail is returned rather than the changed fields, for the same reason
+         *     ``PATCH /projects/{code}`` returns it: the screen that issued the edit is the screen that has
+         *     to redraw, and a partial response would send it straight back for the rest.
+         */
+        patch: operations["apps_work_api_routers_patch_task"];
         trace?: never;
     };
     "/api/v1/tasks/{task_code}/transition": {
@@ -401,6 +686,36 @@ export interface paths {
          *     a project that no longer exists.
          */
         get: operations["apps_activity_api_routers_get_project_activity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Portfolio Activity
+         * @description The whole portfolio's trail, newest first, in the same item type as a project timeline.
+         *
+         *     This is the cross-project reading of the same table: what moved today, across every project,
+         *     task and blocker. Items are identical to
+         *     ``GET /api/v1/projects/{code}/activity`` — one component and one generated type render both,
+         *     and ``entity`` is what tells a row's subject apart here.
+         *
+         *     Every facet is optional and none is rejected for naming an unknown value. A verb, entity type,
+         *     origin or actor this deployment does not know returns an empty page rather than a 422: those
+         *     vocabularies move by migration and by the accounts table, and a saved filter must not be able
+         *     to break a read-only screen.
+         */
+        get: operations["apps_activity_api_routers_get_portfolio_activity"];
         put?: never;
         post?: never;
         delete?: never;
@@ -668,6 +983,128 @@ export interface components {
             refresh: string;
         };
         /**
+         * MemberView
+         * @description One person as the roster write routes hand them back.
+         *
+         *     ``alias`` is ``accounts.User.code`` and ``label`` is ``accounts.User.alias``, inverted with
+         *     respect to the columns for the reason `docs/API.md` §1.6 fixed on the wire and every other
+         *     person-shaped payload already follows.
+         *
+         *     ``has_password`` is a boolean, and the password itself has no representation here or anywhere
+         *     else on the wire. It exists so the roster can show who cannot sign in yet — a seeded person is
+         *     a real assignee with no credential — without the client inferring it from a failed login.
+         *
+         *     ``is_ops_lead`` is read-only on this surface. It is ``is_staff``, which also opens ``/admin/``,
+         *     so granting it is a Django admin action rather than a field on a roster form; a product screen
+         *     that could hand out database access would be a privilege-escalation path with a nice layout.
+         */
+        MemberView: {
+            /** Alias */
+            alias: string;
+            /** Label */
+            label: string;
+            role?: components["schemas"]["TaxonomyRef"] | null;
+            /** Weekly Capacity Points */
+            weekly_capacity_points: number;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+            /**
+             * Is Ops Lead
+             * @default false
+             */
+            is_ops_lead: boolean;
+            /**
+             * Has Password
+             * @default false
+             */
+            has_password: boolean;
+        };
+        /**
+         * TaxonomyRef
+         * @description One operator-editable catalog value, ready to render.
+         *
+         *     ``color`` is ``None`` rather than ``""`` when the operator set none: absence is a signal the
+         *     client must be able to see, so it can fall back to its own neutral token instead of painting a
+         *     swatch of transparent black.
+         */
+        TaxonomyRef: {
+            /** Code */
+            code: string;
+            /** Label */
+            label: string;
+            /** Color */
+            color?: string | null;
+        };
+        /**
+         * MemberCreateIn
+         * @description Body of ``POST /api/v1/team/members``.
+         *
+         *     ``code`` is absent by design, exactly as it is from ``ProjectCreateIn``: the service derives it
+         *     from ``label`` inside the creating transaction. The slug is permanent — it is the person's
+         *     username, the ``actor`` of every activity record they cause and the ``entity.id`` of every
+         *     event about them — so a typo typed once into a form is a typo the audit trail carries forever,
+         *     with nothing to correct it afterwards. A name is something an operator can be trusted to
+         *     spell; an identifier is not something they should have to invent.
+         *
+         *     ``weekly_capacity_points`` is required rather than defaulted here even though the column has a
+         *     default. A capacity is the divisor of owner load and therefore decides who shows as
+         *     overloaded; a form that could omit it would quietly staff everybody at the same number, and the
+         *     operator would never be shown the value they did not choose.
+         *
+         *     ``password`` is optional and omitting it is the normal case: the person exists as an assignee
+         *     immediately and cannot sign in until somebody sets one, which is the state every seeded person
+         *     is already in.
+         */
+        MemberCreateIn: {
+            /** Label */
+            label: string;
+            /** Role */
+            role?: string | null;
+            /** Weekly Capacity Points */
+            weekly_capacity_points: number;
+            /** Password */
+            password?: string | null;
+        };
+        /**
+         * MemberUpdateIn
+         * @description Body of ``PATCH /api/v1/team/members/{code}``.
+         *
+         *     Every field is optional, and "absent" and "``null``" mean different things: an absent ``role``
+         *     is left untouched, an explicitly ``null`` one unclassifies the person. The router reads which
+         *     fields were actually sent from ``model_fields_set`` and carries that set into the command, so
+         *     the distinction survives to the service — without it, "do not touch the role" and "clear the
+         *     role" are the same request.
+         *
+         *     ``code`` is absent because it is the address: renaming the slug would orphan every event and
+         *     activity record that already names it. A person whose name changed gets a new ``label``.
+         */
+        MemberUpdateIn: {
+            /** Label */
+            label?: string | null;
+            /** Role */
+            role?: string | null;
+            /** Weekly Capacity Points */
+            weekly_capacity_points?: number | null;
+            /** Is Active */
+            is_active?: boolean | null;
+        };
+        /**
+         * MemberPasswordIn
+         * @description Body of ``POST /api/v1/team/members/{code}/password``.
+         *
+         *     No current password: this is an ops lead resetting somebody else's credential, so there is
+         *     none to verify. Strength is not checked here — ``AUTH_PASSWORD_VALIDATORS`` is the policy and
+         *     the service applies it, so a rule configured for the deployment cannot be contradicted by a
+         *     ``min_length`` written into a schema.
+         */
+        MemberPasswordIn: {
+            /** Password */
+            password: string;
+        };
+        /**
          * CatalogView
          * @description Every taxonomy the frontend renders a picker for, in one response.
          *
@@ -736,20 +1173,216 @@ export interface components {
             minor_units: number;
         };
         /**
-         * TaxonomyRef
-         * @description One operator-editable catalog value, ready to render.
+         * RoleCreateIn
+         * @description Body of ``POST /api/v1/catalog/roles``.
          *
-         *     ``color`` is ``None`` rather than ``""`` when the operator set none: absence is a signal the
-         *     client must be able to see, so it can fall back to its own neutral token instead of painting a
-         *     swatch of transparent black.
+         *     Two fields and not one: ``code`` is the ASCII slug every payload and filter compares against
+         *     and it never changes, ``label`` is the Spanish an operator reads and may fix at any time.
+         *     Slugifying the label into a code instead would tie the identifier to the wording, and the
+         *     first typo fix would silently unclassify everybody (CLAUDE.md rule 1).
+         *
+         *     ``order`` is absent: a new role goes to the end of the picker, and rearranging the vocabulary
+         *     is a deliberate act done in the admin rather than a number typed into a form that was really
+         *     about registering a person.
          */
-        TaxonomyRef: {
+        RoleCreateIn: {
             /** Code */
             code: string;
             /** Label */
             label: string;
+        };
+        /**
+         * RoleUpdateIn
+         * @description Body of ``PATCH /api/v1/catalog/roles/{code}``.
+         *
+         *     Both fields optional, and absent means untouched. ``code`` is not among them: it is the
+         *     address, and the people already classified under this role carry it.
+         */
+        RoleUpdateIn: {
+            /** Label */
+            label?: string | null;
+            /** Is Active */
+            is_active?: boolean | null;
+        };
+        /**
+         * StateRef
+         * @description One workflow state, ready to render and safe to branch on.
+         *
+         *     ``category`` travels alongside ``code`` because ``code`` is unique only inside its workflow —
+         *     two workflows may both own ``bloqueada`` — so a client deciding "is this blocked" reads
+         *     ``category`` and never a list of codes it would have to keep in sync (DATA_MODEL §12).
+         */
+        StateRef: {
+            /** Code */
+            code: string;
+            /** Label */
+            label: string;
+            /** Category */
+            category: string;
             /** Color */
             color?: string | null;
+        };
+        /**
+         * WorkflowCatalogView
+         * @description Every configured graph, in one document.
+         *
+         *     One document rather than a route per engagement type, for the same reason
+         *     :class:`~apps.catalog.domain.value_objects.CatalogView` is one document: a board draws all of
+         *     its columns at once. A per-engagement-type route would also be the worse shape — the client
+         *     would have to know which engagement type to ask about *before* it could make the first
+         *     request, which means reimplementing the binding precedence that
+         *     ``Workflow.objects.resolve`` owns, and it would fan a single board render into one request per
+         *     engagement type on screen.
+         *
+         *     The tables hold single-digit row counts, so serving all of them costs three index scans and
+         *     the client caches one answer instead of N.
+         */
+        WorkflowCatalogView: {
+            /**
+             * Workflows
+             * @default []
+             */
+            workflows: components["schemas"]["WorkflowShapeView"][];
+        };
+        /**
+         * WorkflowEdgeView
+         * @description One edge an operator declared between two states of the same graph.
+         *
+         *     **This is configuration, not permission.** It says the operator drew this arrow; it does not say
+         *     the record you are looking at may follow it. Three things stand between the two claims, and none
+         *     of them is knowable from this shape: the record has to be sitting on ``from_state`` to begin
+         *     with, the fields named in ``requires_fields`` have to be non-empty *on that record*, and the
+         *     edge's guard — if it names one — has to accept it, which is a question about facts the record's
+         *     own context supplies. So a graph drawn from these edges is a picture of the workflow, and
+         *     ``transitions`` on the project or task detail (`docs/API.md` §2.2) remains the only answer to
+         *     "may this record move there now".
+         *
+         *     Attributes:
+         *         from_state: ``WorkflowState.code`` of the source node.
+         *         to_state: ``WorkflowState.code`` of the target node.
+         *         label: The operator's own wording for the move — ``Aprobar``, ``Pedir cambios``. Rendered as
+         *             the arrow's caption; never compared against.
+         *         requires_reason: The operator marked this move as needing a written reason. Descriptive
+         *             here — the transition service re-checks it and raises ``ReasonRequired`` — but it is
+         *             what lets a diagram mark which arrows will ask for text before they are taken.
+         *         requires_fields: Names of aggregate attributes (``next_step``) the operator declared must be
+         *             non-empty before this move. Whether they *are* empty is a fact about a record, so this
+         *             shape lists the requirement and never its outcome.
+         *
+         *     Notes:
+         *         The endpoints are codes rather than :class:`~apps.shared.refs.StateRef` values, unlike
+         *         :class:`TransitionOption`. An edge is a relation between two nodes the same document already
+         *         publishes in full under ``states``: repeating the label, category and color on both ends of
+         *         every arrow would let a client render an edge without ever resolving its nodes, and the day
+         *         an operator renames a state the two copies disagree inside one response. ``TransitionOption``
+         *         embeds the full reference for the opposite reason — its consumer holds no node list, only the
+         *         record.
+         *
+         *         The ``guard`` name is omitted, exactly as it is on :class:`TransitionOption`. Whether a guard
+         *         passes depends on facts no row in this graph holds, so naming it would invite a client to
+         *         predict the answer — which is the one thing this projection must not enable.
+         */
+        WorkflowEdgeView: {
+            /** From State */
+            from_state: string;
+            /** To State */
+            to_state: string;
+            /** Label */
+            label: string;
+            /**
+             * Requires Reason
+             * @default false
+             */
+            requires_reason: boolean;
+            /**
+             * Requires Fields
+             * @default []
+             */
+            requires_fields: string[];
+        };
+        /**
+         * WorkflowShapeView
+         * @description One state graph as a board sees it: its columns, in the operator's order.
+         *
+         *     Every state of the graph is here, occupied or not, which is the entire reason this shape
+         *     exists. Deriving the columns from the states projects happen to sit in cannot represent an
+         *     empty one, so a board built that way can neither say "nothing is blocked" nor accept a card
+         *     dropped into ``Bloqueado`` — the column is simply absent.
+         *
+         *     ``transitions`` carries the arrows between those columns, and it is a description of what an
+         *     operator configured — see :class:`WorkflowEdgeView`. What this shape still never says is which
+         *     move a given record may make: that is computed per project and per task against the state it is
+         *     actually in, against ``is_active`` and against the guard, and it stays on the detail's own
+         *     ``transitions`` (`docs/API.md` §2.2). A client that acts on an edge published here without
+         *     asking gets a typed 409 carrying the moves the record may actually take — the same failure mode
+         *     as a stale button — so the graph is drawable and the enforcement path is untouched.
+         *
+         *     Nodes and edges are siblings here rather than the edges hanging off the state they leave. A
+         *     graph is a pair of sets, and an arrow belongs to neither endpoint: nesting the moves under
+         *     ``from_state`` would make "what leads *into* ``bloqueada``" a scan of every node, and — the
+         *     deciding reason — it would put a key named ``transitions`` on a state object, one nesting level
+         *     away from the per-record ``transitions`` that means "legal right now". Two lists with the same
+         *     name and different authority is exactly the confusion this document must not create. As
+         *     siblings they are also structurally different — an edge names both of its endpoints, an option
+         *     names only a target — so no client can feed one where the other is expected.
+         *
+         *     Attributes:
+         *         applies_to: ``PROJECT`` | ``TASK`` — the kind of aggregate this graph governs. Load-bearing
+         *             for a board: without it a project board would draw the task graph's columns.
+         *         is_default: The fallback graph for its ``applies_to``, which is where
+         *             ``Workflow.objects.resolve`` ends when no binding matches. Descriptive, like
+         *             ``engagement_types``: it lets a board pick a column set, never a legal move.
+         *         is_active: A retired graph is still published, because aggregates keep sitting on its
+         *             states — states are ``PROTECT``ed exactly so — and a board that could not draw their
+         *             columns would lose those projects entirely. The flag is here so a client can stop
+         *             offering it for new work.
+         *         engagement_types: The engagement types whose active binding names this graph. Empty is the
+         *             common case and means no engagement type names it specifically: it is reached as the
+         *             per-kind default. Plural because the binding table permits many types per graph — a
+         *             single nullable field would silently drop rows.
+         *         states: Every node, ordered by the ``order`` an operator arranged in the admin, ``code``
+         *             breaking ties. Empty is a legitimate answer — a graph whose states nobody has
+         *             configured yet — and the board renders no columns rather than treating it as a failure.
+         *         transitions: Every **active** edge of the graph, grouped by the source node in the same
+         *             column order as ``states`` and then by the operator's own ``order`` within it. A
+         *             deactivated edge is absent rather than flagged: ``is_active = False`` is how an operator
+         *             withdraws a move, the transition service refuses it, and publishing it as a drawable
+         *             arrow would advertise a move nothing can take. Empty is legitimate and means the
+         *             operator has declared no move yet — a graph of isolated columns, which is a real
+         *             configuration and not a failure.
+         */
+        WorkflowShapeView: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+            /** Applies To */
+            applies_to: string;
+            /**
+             * Is Default
+             * @default false
+             */
+            is_default: boolean;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+            /**
+             * Engagement Types
+             * @default []
+             */
+            engagement_types: components["schemas"]["TaxonomyRef"][];
+            /**
+             * States
+             * @default []
+             */
+            states: components["schemas"]["StateRef"][];
+            /**
+             * Transitions
+             * @default []
+             */
+            transitions: components["schemas"]["WorkflowEdgeView"][];
         };
         /**
          * QueueQuery
@@ -924,14 +1557,23 @@ export interface components {
          * @description One raised risk, as the panels and the row indicators render it.
          *
          *     ``code`` is deliberately an open set (`docs/API.md` §4.2): adding a specification adds a code
-         *     (CLAUDE.md rule 8), so a client that does not recognise one renders it with its ``reason``
-         *     rather than dropping it — a dropped flag is a risk nobody sees.
+         *     (CLAUDE.md rule 8), so a client that does not recognise one renders it with its ``label`` and
+         *     ``reason`` rather than dropping it — a dropped flag is a risk nobody sees.
+         *
+         *     ``label`` is the Spanish chip text and ``reason`` the Spanish sentence naming the fact, both
+         *     written by the specification that raised the flag. They travel on the wire because the frontend
+         *     is forbidden from keeping an object literal keyed by a flag code
+         *     (`docs/standards/FRONTEND.md` §7) — that map is what would make a seventh specification a
+         *     frontend change. ``label`` is non-empty by validation; ``severity`` stays a bare code, because
+         *     it is what the client branches on to pick a tone.
          */
         RiskFlagView: {
             /** Code */
             code: string;
             /** Severity */
             severity: string;
+            /** Label */
+            label: string;
             /**
              * Reason
              * @default
@@ -945,10 +1587,18 @@ export interface components {
          *     ``contribution`` is ``raw * weight * 100`` as it was computed, not as the client should
          *     recompute it — floating point in a browser would put a row a hundredth of a point out of order
          *     against a server that used ``Decimal``.
+         *
+         *     ``label`` is the Spanish name of what the signal measures and ``reason`` the Spanish sentence
+         *     naming the fact it read. Both ship from the server because `docs/standards/FRONTEND.md` forbids
+         *     any table in the frontend keyed by signal code — which is exactly what keeps a seventh signal a
+         *     backend-only change. ``label`` is non-empty by validation; ``code`` stays on the wire as the
+         *     stable identifier a client may key state on, never as something to render.
          */
         ScoreSignalView: {
             /** Code */
             code: string;
+            /** Label */
+            label: string;
             /** Raw */
             raw: number;
             /** Weight */
@@ -992,24 +1642,6 @@ export interface components {
              * @default []
              */
             flags: string[];
-        };
-        /**
-         * StateRef
-         * @description One workflow state, ready to render and safe to branch on.
-         *
-         *     ``category`` travels alongside ``code`` because ``code`` is unique only inside its workflow —
-         *     two workflows may both own ``bloqueada`` — so a client deciding "is this blocked" reads
-         *     ``category`` and never a list of codes it would have to keep in sync (DATA_MODEL §12).
-         */
-        StateRef: {
-            /** Code */
-            code: string;
-            /** Label */
-            label: string;
-            /** Category */
-            category: string;
-            /** Color */
-            color?: string | null;
         };
         /**
          * BlockerView
@@ -1118,6 +1750,11 @@ export interface components {
             name: string;
             /** Summary */
             summary?: string | null;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
             client: components["schemas"]["TaxonomyRef"];
             owner?: components["schemas"]["ActorRef"] | null;
             engagement_type: components["schemas"]["TaxonomyRef"];
@@ -1287,6 +1924,8 @@ export interface components {
             currency?: string | null;
             /** Summary */
             summary?: string | null;
+            /** Description */
+            description?: string | null;
             /** Next Step */
             next_step?: string | null;
             /** Is Archived */
@@ -1361,17 +2000,38 @@ export interface components {
          * TeamLoadQuery
          * @description Query parameters of ``GET /api/v1/team/load``.
          *
-         *     Not paginated: the roster is five people, and a pager over five rows costs the client a second
-         *     request to learn there is no second page.
+         *     Not paginated: the roster is bounded by how many people the company employs, and a pager over
+         *     it costs the client a second request to learn there is no second page.
+         *
+         *     ``status`` replaced the earlier ``include_inactive`` boolean, which could not express "show me
+         *     only the people we have retired" — the question an operator asks before restoring somebody.
+         *
+         *     ``overloaded`` is tri-state: absent is everybody, ``true`` is the people over capacity, and
+         *     ``false`` is the people with room, which is what somebody about to assign work is looking for.
          */
         TeamLoadQuery: {
             /** Owner */
             owner?: string[];
+            /** Role */
+            role?: string[];
             /**
-             * Include Inactive
-             * @default false
+             * Status
+             * @default active
+             * @enum {string}
              */
-            include_inactive: boolean;
+            status: "active" | "inactive" | "all";
+            /** Overloaded */
+            overloaded?: boolean | null;
+            /**
+             * Q
+             * @default
+             */
+            q: string;
+            /**
+             * Order By
+             * @default -utilization
+             */
+            order_by: string;
         };
         /**
          * TeamLoadPage
@@ -1400,6 +2060,17 @@ export interface components {
          *     ``is_overloaded`` never lowers a project's score. It raises ``OWNER_OVERLOADED`` on that
          *     person's projects, because being short-staffed is a staffing decision and not a reason for the
          *     work itself to matter less (ARCHITECTURE §4.1).
+         *
+         *     ``role`` is the label and ``role_code`` the slug, and both travel because the row is both read
+         *     and edited from the same screen: text renders from the label, while the edit dialog has to send
+         *     a code back and must never map the Spanish label onto one itself (CLAUDE.md rule 1). They are
+         *     two fields rather than a :class:`~apps.shared.refs.TaxonomyRef` only because this shape
+         *     predates the roster being editable and widening it is not a breaking change, while replacing
+         *     ``role`` would be.
+         *
+         *     ``is_active`` and ``has_password`` are identity facts served here rather than through a second
+         *     request, because the table renders them in columns beside the load: who is retired, and who is
+         *     a real assignee that cannot sign in yet.
          */
         TeamLoadView: {
             /** Alias */
@@ -1408,6 +2079,18 @@ export interface components {
             label: string;
             /** Role */
             role?: string | null;
+            /** Role Code */
+            role_code?: string | null;
+            /**
+             * Is Active
+             * @default true
+             */
+            is_active: boolean;
+            /**
+             * Has Password
+             * @default false
+             */
+            has_password: boolean;
             /** Weekly Capacity Points */
             weekly_capacity_points: number;
             /** Load Points */
@@ -1511,6 +2194,11 @@ export interface components {
              * @default
              */
             detail: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
             /** Assignee */
             assignee?: string | null;
             /** Due Date */
@@ -1522,6 +2210,185 @@ export interface components {
             last_progress: string;
             /** Depends On */
             depends_on?: string[];
+        };
+        /**
+         * NoteView
+         * @description One chronological comment on a project, or on one task of it.
+         *
+         *     ``author`` is a bare code rather than an :class:`~apps.shared.refs.ActorRef` because the column
+         *     is a denormalized string that outlives its author's row and can hold ``system``: resolving it
+         *     to a person would fail for exactly the rows the denormalization exists to keep readable.
+         *
+         *     Nothing parses a note's text. A note is not a substitute for a :class:`BlockerView`, and the
+         *     moment something greps it for "blocked" the typed row stops being written.
+         */
+        NoteView: {
+            /** Id */
+            id: number;
+            /** Code */
+            code: string;
+            /** Body */
+            body: string;
+            /** Author */
+            author: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Task Code */
+            task_code?: string | null;
+        };
+        /**
+         * TaskDetailView
+         * @description One task in full, as ``GET /api/v1/tasks/{code}`` returns it.
+         *
+         *     The screen-shaped read: everything the task detail draws itself from arrives in one response.
+         *     ``notes`` is inside rather than behind a second route for the reason the catalog read already
+         *     states — a surface that needs two requests to render is two chances to render half a page, and
+         *     the second request is the one that fails while the first has already painted. It is also the
+         *     only shape in which the notes are guaranteed to describe *this* version of the task: two reads
+         *     can straddle a write, and a comment rendered beside a state it does not refer to is worse than
+         *     a slow page. A task carries a handful of comments, so the join costs nothing that would justify
+         *     splitting it. Should a task ever carry hundreds, the fix is a paginated
+         *     ``/tasks/{code}/notes`` *beside* this field, not instead of it — the first screenful must not
+         *     become a second round trip.
+         *
+         *     ``transitions`` is the **only** source of state buttons on this screen, and it comes from the
+         *     same place the project detail's does: ``WorkflowTransition``, filtered to the active edges
+         *     leaving the task's current state. The frontend holds no list of task state codes and never
+         *     guesses legality, so adding a task state is a fixture row and zero frontend changes. An empty
+         *     tuple is a legitimate answer — the task sits in a terminal state — and the UI renders no
+         *     buttons rather than inventing one.
+         *
+         *     ``is_overdue`` is derived from ``due_date`` against the instant the request was served, never
+         *     read from a column, for the same reason it is on :class:`TaskView`.
+         */
+        TaskDetailView: {
+            /** Code */
+            code: string;
+            /** Title */
+            title: string;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            project: components["schemas"]["TaskProjectRef"];
+            assignee?: components["schemas"]["ActorRef"] | null;
+            priority: components["schemas"]["TaxonomyRef"];
+            state: components["schemas"]["StateRef"];
+            /** Due Date */
+            due_date?: string | null;
+            /**
+             * Is Overdue
+             * @default false
+             */
+            is_overdue: boolean;
+            /**
+             * Last Progress
+             * @default
+             */
+            last_progress: string;
+            /**
+             * Dependencies
+             * @default []
+             */
+            dependencies: components["schemas"]["DependencyRef"][];
+            /**
+             * Transitions
+             * @default []
+             */
+            transitions: components["schemas"]["TransitionOption"][];
+            /**
+             * Notes
+             * @default []
+             */
+            notes: components["schemas"]["NoteView"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * TaskProjectRef
+         * @description The project a task belongs to, as the task detail names it.
+         *
+         *     Two fields and no more: ``code`` is what every other route is addressed by and ``name`` is what
+         *     a header renders. Not a :class:`~apps.shared.refs.TaxonomyRef` — a project is an aggregate, not
+         *     an operator-editable catalog row, and giving it a ``color`` would invite a client to paint a
+         *     swatch for something the taxonomy does not own.
+         *
+         *     Deliberately not the whole :class:`~apps.portfolio.domain.views.ProjectDetailView`: a task
+         *     detail that embedded its project would carry that project's tasks, and therefore itself.
+         */
+        TaskProjectRef: {
+            /** Code */
+            code: string;
+            /** Name */
+            name: string;
+        };
+        /**
+         * TaskUpdateIn
+         * @description Body of ``PATCH /api/v1/tasks/{code}``.
+         *
+         *     Every field is optional and "absent" and "``null``" mean different things — the same contract
+         *     ``ProjectUpdateIn`` documents. An absent field is left untouched; an explicit ``null`` clears
+         *     the column, which is how a task is unassigned or loses its due date. The router reads which
+         *     fields actually arrived from Pydantic's ``model_fields_set`` and carries that set into the
+         *     command, so the distinction survives to the service. With a plain dict, "unassign this task"
+         *     and "do not touch the assignee" would be the same request.
+         *
+         *     ``null`` is therefore accepted only where the column is nullable. ``title``, ``detail``,
+         *     ``last_progress`` and ``priority`` are ``NOT NULL``, so sending ``null`` for one of them is a
+         *     422 rather than a silent clear: the value that would clear ``detail`` is ``""``, and it is
+         *     accepted. ``title`` and ``priority`` additionally refuse ``""`` — a task with no title is not
+         *     an edit anybody meant to make.
+         *
+         *     ``workflow_state`` is absent, as it is from every schema in this module: a state moves through
+         *     ``POST /api/v1/tasks/{code}/transition`` and nowhere else (CLAUDE.md rule 2).
+         */
+        TaskUpdateIn: {
+            /**
+             * Title
+             * @default
+             */
+            title: string;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Last Progress
+             * @default
+             */
+            last_progress: string;
+            /**
+             * Priority
+             * @default
+             */
+            priority: string;
+            /** Assignee */
+            assignee?: string | null;
+            /** Due Date */
+            due_date?: string | null;
         };
         /**
          * TaskTransitionIn
@@ -1580,34 +2447,6 @@ export interface components {
         BlockerResolveIn: {
             /** Resolution */
             resolution: string;
-        };
-        /**
-         * NoteView
-         * @description One chronological comment on a project, or on one task of it.
-         *
-         *     ``author`` is a bare code rather than an :class:`~apps.shared.refs.ActorRef` because the column
-         *     is a denormalized string that outlives its author's row and can hold ``system``: resolving it
-         *     to a person would fail for exactly the rows the denormalization exists to keep readable.
-         *
-         *     Nothing parses a note's text. A note is not a substitute for a :class:`BlockerView`, and the
-         *     moment something greps it for "blocked" the typed row stops being written.
-         */
-        NoteView: {
-            /** Id */
-            id: number;
-            /** Code */
-            code: string;
-            /** Body */
-            body: string;
-            /** Author */
-            author: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Task Code */
-            task_code?: string | null;
         };
         /**
          * NoteIn
@@ -1723,6 +2562,52 @@ export interface components {
             items: components["schemas"]["ActivityEntry"][];
             /** Count */
             count: number;
+        };
+        /**
+         * PortfolioTimelineQuery
+         * @description Query parameters of ``GET /api/v1/activity``, the portfolio-wide feed.
+         *
+         *     Every facet is optional and no facet is validated against its vocabulary. ``entity_type``,
+         *     ``verb``, ``origin`` and ``actor`` are declared as plain strings rather than enums on purpose:
+         *     an enum here would turn a retired verb, a renamed origin or a departed colleague's alias —
+         *     values that live in a saved URL or a bookmarked filter — into a 422 on a screen with no bad
+         *     input on it. Filtering on a value this deployment does not know is a well-formed question
+         *     whose answer is "nothing", and that is what the endpoint answers.
+         *
+         *     ``entity_id`` is the business code (``PRJ-22``, never a primary key) and is meant to be paired
+         *     with ``entity_type``; alone it still narrows, because codes are unique across kinds in
+         *     practice and the caller passing one read it off a record.
+         *
+         *     Like the project timeline there is no ``order_by``: the feed is a narrative and is always
+         *     newest first.
+         */
+        PortfolioTimelineQuery: {
+            /**
+             * Page
+             * @default 1
+             */
+            page: number;
+            /**
+             * Page Size
+             * @default 50
+             */
+            page_size: number;
+            /** Entity Type */
+            entity_type?: string | null;
+            /** Entity Id */
+            entity_id?: string | null;
+            /** Verb */
+            verb?: string[];
+            /** Actor */
+            actor?: string | null;
+            /** Origin */
+            origin?: string | null;
+            /** Since */
+            since?: string | null;
+            /** Until */
+            until?: string | null;
+            /** Correlation Id */
+            correlation_id?: string | null;
         };
         /**
          * OverrideOut
@@ -1952,6 +2837,102 @@ export interface operations {
             };
         };
     };
+    apps_accounts_api_routers_post_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberCreateIn"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberView"];
+                };
+            };
+        };
+    };
+    apps_accounts_api_routers_delete_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                member_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    apps_accounts_api_routers_patch_member: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                member_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberUpdateIn"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberView"];
+                };
+            };
+        };
+    };
+    apps_accounts_api_routers_post_member_password: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                member_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemberPasswordIn"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemberView"];
+                };
+            };
+        };
+    };
     apps_catalog_api_routers_get_catalog: {
         parameters: {
             query?: never;
@@ -1968,6 +2949,98 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CatalogView"];
+                };
+            };
+        };
+    };
+    apps_catalog_api_routers_get_roles: {
+        parameters: {
+            query?: {
+                status?: "active" | "inactive" | "all";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaxonomyRef"][];
+                };
+            };
+        };
+    };
+    apps_catalog_api_routers_post_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleCreateIn"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaxonomyRef"];
+                };
+            };
+        };
+    };
+    apps_catalog_api_routers_patch_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                role_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleUpdateIn"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaxonomyRef"];
+                };
+            };
+        };
+    };
+    apps_workflow_api_routers_get_workflows: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowCatalogView"];
                 };
             };
         };
@@ -2109,7 +3182,11 @@ export interface operations {
         parameters: {
             query?: {
                 owner?: string[];
-                include_inactive?: boolean;
+                role?: string[];
+                status?: "active" | "inactive" | "all";
+                overloaded?: boolean | null;
+                q?: string;
+                order_by?: string;
             };
             header?: never;
             path?: never;
@@ -2182,6 +3259,54 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TaskView"];
+                };
+            };
+        };
+    };
+    apps_work_api_routers_get_task: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDetailView"];
+                };
+            };
+        };
+    };
+    apps_work_api_routers_patch_task: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                task_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TaskUpdateIn"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaskDetailView"];
                 };
             };
         };
@@ -2304,6 +3429,37 @@ export interface operations {
             path: {
                 project_code: string;
             };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_ActivityEntry_"];
+                };
+            };
+        };
+    };
+    apps_activity_api_routers_get_portfolio_activity: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                entity_type?: string | null;
+                entity_id?: string | null;
+                verb?: string[];
+                actor?: string | null;
+                origin?: string | null;
+                since?: string | null;
+                until?: string | null;
+                correlation_id?: string | null;
+            };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;

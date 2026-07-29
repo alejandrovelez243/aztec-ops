@@ -34,7 +34,12 @@ _AUDITED_FIELDS: Final[dict[str, str]] = {
 }
 
 #: Free-text columns copied straight through when present in the payload.
-_TEXT_FIELDS: Final[tuple[str, ...]] = ("title", "detail", "last_progress")
+_TEXT_FIELDS: Final[tuple[str, ...]] = (
+    "title",
+    "detail",
+    "description",
+    "last_progress",
+)
 
 
 @transaction.atomic

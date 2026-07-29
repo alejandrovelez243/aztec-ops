@@ -1,0 +1,55 @@
+---
+/**
+ * The live root of the Resumen surface.
+ *
+ * It renders almost nothing: the staleness banner, and a wrapper carrying the
+ * contract its script needs (`data-ov-root`, and which regions were refused on
+ * the server). Everything visible is server-rendered inside the slot, and this
+ * island only patches it — the split `docs/standards/PATTERNS_FRONTEND.md` §5
+ * asks for between a container and the markup it owns.
+ *
+ * The colocated module runs once per app because `ClientRouter` swaps documents
+ * without reloading, so it wires itself on `astro:page-load` and releases every
+ * subscription on `astro:before-swap`. Skipping that teardown leaks handlers
+ * that keep patching cards which are no longer in the DOM, and holds the SSE
+ * connection open for a page that stopped displaying it.
+ */
+import { STREAM_COPY } from "../components/overview/copy";
+import type { RegionKey } from "../components/overview/markup";
+
+export interface Props {
+  /**
+   * Regions whose first paint was refused and must be re-read from the browser —
+   * the one place that holds the refresh token the server render cannot use
+   * (`src/middleware.ts`). A region that rendered rows on the server is absent
+   * from this list and is never re-read, so this is a recovery and not a
+   * duplicate of the request the page already made.
+   */
+  hydrate: readonly RegionKey[];
+}
+
+const { hydrate } = Astro.props;
+---
+
+<div class="ov-live" data-ov-root data-ov-hydrate={hydrate.join(" ")}>
+  <div class="ov-stale card tone-ambar" data-ov-stale role="status" hidden>
+    <span class="dot" aria-hidden="true"></span>
+    <p class="small ov-stale-text">
+      <strong>{STREAM_COPY.staleTitle}.</strong>
+      {STREAM_COPY.staleBody} · <span data-ov-stale-time></span>
+    </p>
+    <button
+      type="button"
+      class="btn btn-secondary ov-stale-action"
+      data-ov-reconnect>{STREAM_COPY.reconnect}</button
+    >
+  </div>
+  <slot />
+</div>
+
+<script>
+  import { mount, unmount } from "../components/overview/live";
+
+  document.addEventListener("astro:page-load", mount);
+  document.addEventListener("astro:before-swap", unmount);
+</script>

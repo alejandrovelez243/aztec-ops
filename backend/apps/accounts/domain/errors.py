@@ -1,25 +1,46 @@
-"""Typed failures of authentication and of the two authorization rules.
+"""Typed failures of the identity context: authenticating a caller, and editing the roster.
 
-Four errors, and the split between them is the point: the client does something different for
-each. No credential at all means "show the sign-in form"; a token the API refuses means "try the
-refresh endpoint before giving up"; wrong username or password means "the form was answered
-incorrectly"; a refusal on an ops-lead action means "this account is signed in and still may not
-do this", which signing in again never fixes.
+Two trees under one root, because they are two different conversations. The authentication half is
+about *this* request's credential and the split between its four cases is what tells the client
+what to do next: no credential at all means "show the sign-in form"; a token the API refuses means
+"try the refresh endpoint before giving up"; wrong username or password means "the form was
+answered incorrectly"; a refusal on a privileged action means "this account is signed in and still
+may not do this", which signing in again never fixes.
 
-They are 401/403 rather than the 422 the ``X-Actor`` stand-in returned, because there is now a
-credential to reject. The 401 is a real promise: the token endpoints exist, so a frontend that
-renders a sign-in prompt on one is responding to something true.
+The roster half is about *somebody else's* row and is ordinary 404/409/422 territory. It is a
+separate subtree rather than four more ``AuthError`` subclasses because a client catching "the
+credential is the problem" must not also catch "the capacity you typed is not a number" — the two
+have opposite recoveries, and only the exception hierarchy can keep them apart.
 
-``domain/`` is pure, so nothing here knows about HTTP. :mod:`config.errors` owns the mapping from
-each class to its status and its wire ``code``.
+:mod:`config.errors` registers the root, so adding a class below never edits the API's error table
+unless the new case deserves a status of its own.
+
+``domain/`` is pure, so nothing here knows about HTTP.
 """
 
 
-class AuthError(Exception):
+class AccountsError(Exception):
+    """Base class for every failure of the identity context.
+
+    The one class :mod:`config.errors` registers for this app. Both subtrees hang off it so a new
+    error is a typed rejection by default rather than a 500.
+    """
+
+
+class AuthError(AccountsError):
     """Base class for every authentication and authorization failure.
 
     Registered once with the API's exception handler, so adding a case below never adds a
     ``try/except`` to a router.
+    """
+
+
+class MemberError(AccountsError):
+    """Base class for every rejection of a write against the roster.
+
+    Separate from :class:`AuthError` on purpose: these are refusals about the *subject* of the
+    request, not about the caller. A frontend that treated them alike would sign an operator out
+    because they typed a duplicate code.
     """
 
 
@@ -76,3 +97,66 @@ class OpsLeadRequired(AuthError):
     def __init__(self, action: str) -> None:
         super().__init__(f"{action} is reserved for an ops lead.")
         self.action = action
+
+
+class MemberNotFound(MemberError):
+    """The addressed person does not exist.
+
+    Carries ``person_code`` rather than a primary key, matching every other ``*NotFound`` in the
+    codebase: the API addresses people by their stable code, so that is what the 404 can name.
+    """
+
+    def __init__(self, person_code: str) -> None:
+        super().__init__(f"No person is registered under the code {person_code!r}.")
+        self.person_code = person_code
+
+
+class DuplicateMemberCode(MemberError):
+    """The requested code already belongs to somebody.
+
+    A conflict rather than a validation failure: the request is well-formed and the operator has
+    to pick a different code, which is a different fix from correcting a malformed one. The code is
+    also the ``username``, so this is the single answer for both collisions — they cannot happen
+    independently, because :class:`~apps.accounts.models.User` keeps the two in step.
+    """
+
+    def __init__(self, person_code: str) -> None:
+        super().__init__(f"The code {person_code!r} is already taken.")
+        self.person_code = person_code
+
+
+class RoleNotFound(MemberError):
+    """The requested role code matches no ``catalog.Role`` row.
+
+    A 422 naming ``role``, not a 404: the *person* is not what could not be found, and answering
+    404 would tell a form that the row it is editing has disappeared.
+    """
+
+    def __init__(self, role_code: str) -> None:
+        super().__init__(f"No role is registered under the code {role_code!r}.")
+        self.role_code = role_code
+
+
+class PasswordRejected(MemberError):
+    """The proposed password did not survive Django's configured validators.
+
+    Carries every complaint rather than the first, because a form that fixes one rule at a time
+    across four round trips is a form people work around by choosing something worse.
+    """
+
+    def __init__(self, problems: tuple[str, ...]) -> None:
+        super().__init__(" ".join(problems) or "The password was rejected.")
+        self.problems = problems
+
+
+class CannotDeactivateSelf(MemberError):
+    """An operator attempted to retire their own account.
+
+    Refused because the effect is immediate and self-inflicted: the next token refresh fails, the
+    session ends, and if that operator was the last ops lead nobody can undo it from the product at
+    all — recovery would mean a shell on the database. Retiring somebody is somebody else's action.
+    """
+
+    def __init__(self, person_code: str) -> None:
+        super().__init__("You cannot deactivate your own account; ask another ops lead.")
+        self.person_code = person_code
