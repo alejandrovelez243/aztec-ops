@@ -1,0 +1,153 @@
+---
+/**
+ * Actividad (`/activity`): the portfolio-wide feed, declared missing.
+ *
+ * There is no global activity endpoint. The API exposes exactly one activity route —
+ * `GET /api/v1/projects/{code}/activity` (`backend/apps/activity/api/routers.py`) — and the
+ * typed client exposes exactly one function for it (`getProjectActivity`). A portfolio feed
+ * would therefore have to be assembled by fanning out one request per project, which is a
+ * different feed than the one the product promises: it could not paginate, could not order
+ * across projects and would silently omit whatever page it did not fetch.
+ *
+ * So this page states the gap instead of faking it, and routes the reader to the timelines
+ * that do exist. It ships no JavaScript: there is no live region to hydrate, and an island
+ * that only renders static text is a runtime shipped for nothing
+ * (`docs/standards/FRONTEND.md` §4). Delete this page and build the feed the day
+ * `PRODUCT.md`'s pending backend addition lands.
+ */
+import Icon from "../components/ui/Icon.astro";
+import Shell from "../layouts/Shell.astro";
+
+const CRUMBS = [{ label: "Resumen", href: "/" }, { label: "Actividad" }];
+
+/** The one activity route the API actually serves; rendered verbatim, not translated. */
+const PROJECT_ACTIVITY_PATH = "/api/v1/projects/{code}/activity";
+---
+
+<Shell title="Actividad" active="activity" crumbs={CRUMBS}>
+  <section class="activity">
+    <header>
+      <h1 class="h1">Actividad</h1>
+      <p class="body-text lead">
+        Cada cambio queda registrado en una bitácora de solo anexión. Hoy esa
+        bitácora se lee proyecto por proyecto.
+      </p>
+    </header>
+
+    <article class="card pending">
+      <span class="state-icon tone-ambar" aria-hidden="true">
+        <Icon name="pulse" size={22} />
+      </span>
+      <p><span class="chip tone-ambar">Pendiente</span></p>
+      <h2 class="h2">El feed de toda la cartera todavía no existe</h2>
+      <p class="body-text">
+        La API publica la bitácora de cada proyecto en <code class="chip chip-code"
+          >{PROJECT_ACTIVITY_PATH}</code
+        >, pero no hay ninguna ruta que devuelva la actividad de la cartera
+        completa. Reunirla en un solo feed —ordenado, paginado y sin huecos—
+        necesita esa adición en el backend, que ya está anotada como pendiente
+        en PRODUCT.md.
+      </p>
+      <p class="small">
+        Con lo que hay hoy, esta pantalla solo podría mostrar un feed incompleto
+        o inventado. Preferimos decirlo.
+      </p>
+      <p class="actions">
+        <a class="btn btn-primary" href="/projects">
+          Ver proyectos
+          <Icon name="chevron-right" />
+        </a>
+      </p>
+    </article>
+
+    <article class="card meanwhile">
+      <h2 class="h2">Mientras tanto</h2>
+      <ul class="notes">
+        <li>
+          <span class="dot tone-cielo" aria-hidden="true"></span>
+          <p class="body-text">
+            Abre cualquier proyecto y ve a su pestaña de actividad: ahí está su
+            bitácora completa, de lo más reciente a lo más antiguo.
+          </p>
+        </li>
+        <li>
+          <span class="dot tone-cielo" aria-hidden="true"></span>
+          <p class="body-text">
+            Las repriorizaciones comparten un identificador de correlación, así
+            que los registros de una misma decisión se leen juntos: cuando un
+            proyecto sube porque otro baja, las dos mitades están enlazadas.
+          </p>
+        </li>
+        <li>
+          <span class="dot tone-cielo" aria-hidden="true"></span>
+          <p class="body-text">
+            Nada se edita ni se borra. La bitácora solo admite anexar, y por eso
+            sirve como prueba de lo que pasó y de quién lo hizo.
+          </p>
+        </li>
+      </ul>
+      <p class="small">
+        Se registran altas, cambios de estado, de prioridad y de responsable,
+        próximos pasos, bloqueos levantados y resueltos, tareas añadidas y
+        notas.
+      </p>
+    </article>
+  </section>
+</Shell>
+
+<style>
+  .activity {
+    display: grid;
+    gap: var(--space-5);
+    max-width: 78ch;
+  }
+
+  .lead {
+    margin-top: var(--space-2);
+    color: var(--tinta-media);
+  }
+
+  .card {
+    display: grid;
+    justify-items: start;
+    gap: var(--space-3);
+    padding: var(--space-6);
+  }
+
+  .state-icon {
+    display: grid;
+    place-items: center;
+    width: var(--space-7);
+    height: var(--space-7);
+    border-radius: var(--radius-full);
+    background-color: var(--tone-wash);
+    color: var(--tone-ink);
+  }
+
+  .actions {
+    margin-top: var(--space-2);
+  }
+
+  .notes {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .notes li {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: var(--space-3);
+  }
+
+  /* Optical alignment: the dot sits on the first line's baseline, not on its box. */
+  .notes .dot {
+    margin-top: 7px;
+  }
+
+  @media (max-width: 640px) {
+    .card {
+      padding: var(--space-5);
+    }
+  }
+</style>

@@ -63,9 +63,7 @@ RUN groupadd --gid 1000 app \
 
 WORKDIR /app
 
-# Copied to /usr/local/bin, not left under /app: Compose bind-mounts the host's ./backend over
-# /app, and a mount hides everything beneath it. An entrypoint that can be shadowed by a mount is
-# an entrypoint that runs a different version than the one this image was built from.
+# Under /usr/local/bin, not /app: compose bind-mounts ./backend over /app and would hide it.
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
@@ -75,8 +73,7 @@ USER app
 
 EXPOSE 8000
 
-# The image owns the start-up sequence for each role; compose only names the role. `api` migrates
-# and serves, `worker` and `beat` run Celery, anything else is executed verbatim.
+# The image owns the start-up sequence for each role; compose only names the role.
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["api"]
 
@@ -97,6 +94,5 @@ RUN DJANGO_SECRET_KEY=build-time-only-not-used-at-runtime \
 FROM base AS dev
 COPY --from=builder-dev --chown=app:app /opt/venv /opt/venv
 
-# Reload is a property of this image, not of the compose file: the same `command: ["api"]` that
-# hot-reloads here serves without a watcher from the runtime target.
+# Reload is a property of this image, not of the compose file.
 ENV UVICORN_RELOAD=true

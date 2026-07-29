@@ -1,0 +1,83 @@
+---
+/**
+ * One line of the argument: what a priority signal read, what it was worth, and the
+ * reason the engine persisted when it computed it.
+ *
+ * This component is the *only* definition of a breakdown bar's markup. The live
+ * island clones it out of a `<template>` and fills the `data-slot` nodes, so a
+ * recalculated breakdown arriving over SSE cannot drift from the server-rendered
+ * one — there is no second copy of this markup to forget to update.
+ *
+ * `code` renders verbatim: signal codes are registry identifiers (CLAUDE.md rule 8)
+ * and a Spanish label map keyed by code would silently drop the seventh signal.
+ * `reason` is the engine's own prose and is rendered as it arrived.
+ */
+export interface Props {
+  /** Registered signal code, e.g. `deadline_pressure`. */
+  code: string;
+  /** Pre-formatted contribution, from `formatPoints`. */
+  points: string;
+  /** The reason persisted with the score; English prose from the backend. */
+  reason: string;
+  /** Bar width as a 0–1 ratio of the widest signal beside it. */
+  ratio: number;
+}
+
+const { code, points, reason, ratio } = Astro.props;
+---
+
+<li class="signal" data-signal={code}>
+  <p class="signal-head">
+    <span class="chip chip-code" data-slot="code" lang="en">{code}</span>
+    <span class="figure points"><span data-slot="points">{points}</span> pts</span>
+  </p>
+  <span class="track" aria-hidden="true">
+    <span class="fill" data-slot="fill" style={`--bar: ${ratio}`}></span>
+  </span>
+  <p class="small reason" data-slot="reason" lang="en">{reason}</p>
+</li>
+
+<style>
+  .signal {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .signal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .points {
+    color: var(--tinta);
+  }
+
+  .track {
+    display: block;
+    height: var(--space-1);
+    border-radius: var(--radius-full);
+    background-color: var(--pozo);
+    overflow: hidden;
+  }
+
+  /*
+   * Cobalto, like the arc above it: the bar and the dial render the *same*
+   * quantity — the score, decomposed — so they speak with one voice. This is not a
+   * chart series and never encodes a state (DESIGN.md, The One-Voice Rule).
+   */
+  .fill {
+    display: block;
+    height: 100%;
+    width: calc(var(--bar, 0) * 100%);
+    border-radius: var(--radius-full);
+    background-color: var(--cobalto);
+    transition: width var(--motion-carta-duration) var(--motion-carta-ease);
+  }
+
+  .reason {
+    color: var(--tinta-media);
+  }
+</style>

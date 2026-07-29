@@ -1,0 +1,76 @@
+---
+/**
+ * The queue row's risk strip: one dot per raised flag, coloured by its severity.
+ *
+ * Every flag the API sends is drawn, including a `code` this frontend has never seen
+ * — an unknown flag renders with its reason rather than disappearing (CLAUDE.md
+ * rule 8: a new specification is one class plus a registry line, and the queue must
+ * show it with no frontend change).
+ *
+ * A project with nothing raised draws a single hollow slot rather than an empty
+ * cell, so "no risks" reads as an answer instead of a rendering gap. There are no
+ * hollow slots *per criterion*: the queue payload reports only the flags that are
+ * raised, so a per-criterion ghost legend would be a list this component invented.
+ *
+ * The whole strip is one `role="img"` with a summarising label. Six separately
+ * announced dots per row is how a screen reader turns a twenty-two row queue into
+ * noise; the reason of each flag stays reachable through the panel's risk chips.
+ */
+import type { RiskFlag } from "../../lib/api/domain";
+import { isTopSeverity, severityRank, toneForSeverity } from "./tone";
+
+export interface Props {
+  /** Raised flags for this row, as the API sent them. */
+  flags: readonly RiskFlag[];
+}
+
+const { flags } = Astro.props;
+
+/** Worst first; presentation only — this reorders nothing about what was raised. */
+const ordered = [...flags].sort(
+  (left, right) => severityRank(left.severity) - severityRank(right.severity),
+);
+
+const summary =
+  ordered.length === 0
+    ? "Sin riesgos abiertos"
+    : `${ordered.length} riesgo(s): ${ordered.map((flag) => flag.code).join(", ")}`;
+---
+
+<span class="strip" role="img" aria-label={summary}>
+  {
+    ordered.length === 0 ? (
+      <span class="dot dot-unlit" title="Sin riesgos abiertos"></span>
+    ) : (
+      ordered.map((flag) => (
+        <span
+          class:list={[
+            "dot",
+            toneForSeverity(flag.severity),
+            { "is-top": isTopSeverity(flag.severity) },
+          ]}
+          title={`${flag.code} · ${flag.reason}`}
+          lang="en"
+        />
+      ))
+    )
+  }
+</span>
+
+<style>
+  .strip {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    overflow: hidden;
+  }
+
+  /*
+   * CRITICAL and HIGH share Rojo (DESIGN.md assigns red to blocked *and* overdue),
+   * so the top severity is told apart by size — magnitude, not a sixth colour.
+   */
+  .is-top {
+    width: var(--space-3);
+    height: var(--space-3);
+  }
+</style>

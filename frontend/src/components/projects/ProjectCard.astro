@@ -1,0 +1,150 @@
+---
+/**
+ * One project as a card on the wall: code, state, name, client, owner,
+ * deadline, score and the risks against it.
+ *
+ * The left rail carries the project's derived health, so a screen of cards
+ * reads as colour before it reads as text (DESIGN.md §Colors). The whole card
+ * is the link — a card you can only open by hitting a 14px title is a card the
+ * operator will miss on a laptop trackpad.
+ *
+ * `transition:name` on the title is what makes this card morph into the detail
+ * header instead of the page cutting to it.
+ */
+import DueChip from "./DueChip.astro";
+import OwnerBadge from "./OwnerBadge.astro";
+import StateChip from "./StateChip.astro";
+import { formatScore } from "./format";
+import { healthTone } from "./tone";
+import type { ProjectPresentation } from "./presentation";
+
+export interface Props {
+  /** The row's presentation model; the card renders all of it. */
+  project: ProjectPresentation;
+}
+
+const { project } = Astro.props;
+const rail = healthTone(project.healthCode);
+---
+
+<a
+  class:list={["card", "card-hover", "rail", "proj-card", rail]}
+  href={`/projects/${project.code}`}
+  data-project
+  data-code={project.code}
+  data-search={project.searchKey}
+  data-category={project.stateCategory}
+  data-engagement={project.engagementCode}
+  data-health={project.healthCode}
+  data-updated-at={project.updatedAt}
+>
+  <div class="head">
+    <span class="chip chip-code">{project.code}</span>
+    <StateChip
+      label={project.stateLabel}
+      category={project.stateCategory}
+      color={project.stateColor}
+    />
+  </div>
+
+  <h3 class="title name" transition:name={`proj-${project.code}`}>
+    {project.name}
+  </h3>
+  <p class="small client">{project.clientAlias}</p>
+
+  <div class="meta">
+    <OwnerBadge alias={project.ownerAlias} label={project.ownerLabel} />
+    <DueChip date={project.targetDate} />
+  </div>
+
+  <div class="foot">
+    <span class="score">
+      <span class="label">Prioridad</span>
+      <span class="figure value" data-field="score">{formatScore(project.score)}</span>
+    </span>
+    <span class="marks">
+      {project.hasOverride && <span class="chip tone-cielo">Ajuste manual</span>}
+      <span
+        class="chip tone-rojo"
+        data-field="risk-count"
+        data-risk-format="words"
+        hidden={project.riskCount === 0}
+      >
+        {project.riskCount} {project.riskCount === 1 ? "riesgo" : "riesgos"}
+      </span>
+      {project.nextStep === null && <span class="chip tone-ambar">Sin próximo paso</span>}
+    </span>
+  </div>
+</a>
+
+<style>
+  .proj-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-4) var(--space-3);
+    padding-left: calc(var(--space-4) + var(--rail-width));
+    text-decoration: none;
+    color: inherit;
+    min-width: 0;
+  }
+
+  .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .name {
+    margin-top: var(--space-1);
+    overflow-wrap: anywhere;
+  }
+
+  .client {
+    margin-top: calc(var(--space-1) * -1);
+  }
+
+  .meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    margin-top: var(--space-2);
+  }
+
+  .foot {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-top: auto;
+    padding-top: var(--space-3);
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .score {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .score .value {
+    font-size: var(--text-h2-size);
+    line-height: var(--text-h2-line);
+    color: var(--tinta);
+  }
+
+  .marks {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--space-1);
+  }
+
+  /* `hidden` must beat the chip's inline-flex, or a patched-away chip lingers. */
+  .chip[hidden] {
+    display: none;
+  }
+</style>

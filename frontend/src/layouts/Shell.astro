@@ -19,6 +19,7 @@ import { ClientRouter } from "astro:transitions";
 
 import "../styles/tokens.css";
 import "../styles/base.css";
+import BrandMark from "../components/ui/BrandMark.astro";
 import Icon from "../components/ui/Icon.astro";
 import type { IconName } from "../components/ui/Icon.astro";
 import ConnectionBadge from "../islands/ConnectionBadge.astro";
@@ -95,6 +96,8 @@ const LOGIN_PATH = "/login";
       }
     </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>{title} — Aztec Ops</title>
     <ClientRouter />
   </head>
@@ -104,13 +107,7 @@ const LOGIN_PATH = "/login";
       <aside class="sidebar" id="sidebar" transition:persist="sidebar">
         <div class="sidebar-top">
           <a class="brand" href="/" aria-label="Aztec Ops, ir al resumen">
-            <span class="brand-mark" aria-hidden="true">
-              <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
-                <rect x="3" y="8.5" width="15" height="11" rx="3" fill="var(--cobalto-papel)"></rect>
-                <rect x="6" y="5.5" width="15" height="11" rx="3" fill="var(--cobalto)" opacity="0.35"></rect>
-                <rect x="9" y="2.5" width="15" height="11" rx="3" fill="var(--cobalto)"></rect>
-              </svg>
-            </span>
+            <BrandMark size={26} />
             <span class="brand-name">Aztec Ops</span>
           </a>
           <button

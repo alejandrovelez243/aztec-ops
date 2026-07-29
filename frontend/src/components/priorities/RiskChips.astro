@@ -1,0 +1,74 @@
+---
+/**
+ * The context panel's risk block: one chip per raised flag, with the reason the
+ * specification recorded when it fired.
+ *
+ * The row's {@link RiskStrip} answers "how bad, at a glance"; this answers "why".
+ * They are separate components rather than one with a `variant` flag, because a flag
+ * parameter that selects markup is a component with two jobs (CLAUDE.md rule 13).
+ *
+ * The `code` renders verbatim in a mono chip: it is an identifier the backend owns,
+ * and mapping it to Spanish copy here is exactly the object-literal-keyed-by-code
+ * that `docs/standards/PATTERNS_FRONTEND.md` §7 forbids — the next specification
+ * would ship a code the map does not have and the flag would vanish.
+ */
+import type { RiskFlag } from "../../lib/api/domain";
+import { severityRank, toneForSeverity } from "./tone";
+
+export interface Props {
+  /** Raised flags for this project, as the API sent them. */
+  flags: readonly RiskFlag[];
+}
+
+const { flags } = Astro.props;
+
+const ordered = [...flags].sort(
+  (left, right) => severityRank(left.severity) - severityRank(right.severity),
+);
+---
+
+{
+  ordered.length === 0 ? (
+    <p class="small">Ningún criterio de riesgo está activo en este proyecto.</p>
+  ) : (
+    <ul class="risks">
+      {ordered.map((flag) => (
+        <li class:list={["risk", toneForSeverity(flag.severity)]}>
+          <span class="chip chip-code" lang="en">
+            {flag.code}
+          </span>
+          <span class="small reason" lang="en">
+            {flag.reason}
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+<style>
+  .risks {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .risk {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: baseline;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border-radius: var(--radius-chip);
+    background-color: var(--tone-wash);
+  }
+
+  .risk .chip-code {
+    background-color: var(--carta);
+    color: var(--tone-ink);
+  }
+
+  .reason {
+    color: var(--tone-ink);
+  }
+</style>

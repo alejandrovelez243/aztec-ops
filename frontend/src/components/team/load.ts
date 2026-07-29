@@ -68,9 +68,12 @@ export const BLANK_ENTRY: TeamLoadEntry = {
   projects_owned: 0,
 };
 
-/** Copy of the `empty` arm: what is empty, and what fills it. */
+/**
+ * Copy of the `empty` arm: what fills it. The heading beside it names what is empty, so this
+ * sentence carries only the action.
+ */
 export const EMPTY_MESSAGE =
-  "Todavía no hay nadie en el equipo. El roster llega con los datos semilla y se edita desde el panel de administración; en cuanto alguien tenga tareas asignadas, su carga aparece aquí.";
+  "El roster llega con los datos semilla y se edita desde el panel de administración; en cuanto alguien tenga tareas asignadas, su carga aparece aquí.";
 
 /**
  * Orders the roster the way the surface is read: the most loaded person first.

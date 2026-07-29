@@ -1,0 +1,231 @@
+---
+/**
+ * The projects toolbar: search, the filter pills, and the grid ↔ table switch.
+ *
+ * Every pill is built from a value **present in the fetched rows** — a state
+ * category nobody is in offers no filter, and an engagement type added in the
+ * admin appears here with no frontend change. The counts beside them are what
+ * makes the bar a summary as well as a control.
+ *
+ * The controls are markup only; the list island owns the filtering, so the same
+ * bar can be server-rendered and still work the moment JavaScript arrives.
+ */
+import Icon from "../ui/Icon.astro";
+import type { Facets } from "./presentation";
+
+export interface Props {
+  /** Facet values present in the fetched rows, with their counts. */
+  facets: Facets;
+  /** How many projects were fetched; the denominator of the count line. */
+  total: number;
+}
+
+const { facets, total } = Astro.props;
+---
+
+<div class="toolbar" data-toolbar>
+  <div class="row">
+    <div class="search">
+      <Icon name="search" size={18} />
+      <input
+        class="input"
+        type="search"
+        placeholder="Buscar proyecto o código"
+        aria-label="Buscar proyecto o código"
+        data-search-input
+        autocomplete="off"
+      />
+    </div>
+
+    <div class="view-toggle" role="group" aria-label="Forma de ver la lista">
+      <button class="btn btn-ghost" type="button" data-view-button="grid" aria-pressed="true">
+        <Icon name="board" size={18} />
+        Tarjetas
+      </button>
+      <button class="btn btn-ghost" type="button" data-view-button="table" aria-pressed="false">
+        <Icon name="menu" size={18} />
+        Tabla
+      </button>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="pills" role="group" aria-label="Filtros">
+      {
+        facets.categories.map((facet) => (
+          <button
+            class="chip pill filter"
+            type="button"
+            data-filter="category"
+            data-value={facet.value}
+            aria-pressed="false"
+          >
+            {facet.label}
+            <span class="figure count">{facet.count}</span>
+          </button>
+        ))
+      }
+      {
+        facets.engagements.map((facet) => (
+          <button
+            class="chip pill filter"
+            type="button"
+            data-filter="engagement"
+            data-value={facet.value}
+            aria-pressed="false"
+          >
+            {facet.label}
+            <span class="figure count">{facet.count}</span>
+          </button>
+        ))
+      }
+      {
+        facets.atRisk > 0 && (
+          <button
+            class="chip pill filter tone-rojo"
+            type="button"
+            data-filter="risk"
+            data-value="at-risk"
+            aria-pressed="false"
+          >
+            En riesgo
+            <span class="figure count">{facets.atRisk}</span>
+          </button>
+        )
+      }
+    </div>
+
+    <p class="count-line small" aria-live="polite">
+      <span class="figure" data-field="visible-count">{total}</span> de
+      <span class="figure">{total}</span> proyectos
+      <button class="btn btn-ghost clear" type="button" data-action="clear-filters" hidden>
+        <Icon name="close" size={16} />
+        Limpiar filtros
+      </button>
+    </p>
+  </div>
+</div>
+
+<style>
+  .toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin-bottom: var(--space-5);
+  }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .search {
+    position: relative;
+    flex: 1 1 280px;
+    max-width: 420px;
+    color: var(--tinta-suave);
+  }
+
+  .search :global(svg) {
+    position: absolute;
+    left: var(--space-3);
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+  }
+
+  .search .input {
+    padding-left: var(--space-6);
+  }
+
+  .view-toggle {
+    display: flex;
+    gap: var(--space-1);
+    margin-left: auto;
+    padding: var(--space-1);
+    background-color: var(--pozo);
+    border-radius: var(--radius-control);
+  }
+
+  .view-toggle .btn {
+    height: 32px;
+    padding: 0 var(--space-3);
+    font-size: var(--text-small-size);
+  }
+
+  .view-toggle .btn[aria-pressed="true"] {
+    background-color: var(--carta);
+    color: var(--tinta);
+    box-shadow: var(--shadow-resting);
+  }
+
+  .pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .filter {
+    min-height: 32px;
+    padding: var(--space-1) var(--space-3);
+    border: var(--border-width) solid transparent;
+    transition:
+      background-color var(--motion-micro-duration) var(--motion-micro-ease),
+      border-color var(--motion-micro-duration) var(--motion-micro-ease),
+      color var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .filter:hover {
+    border-color: var(--tinta-suave);
+  }
+
+  .filter[aria-pressed="true"] {
+    background-color: var(--cobalto-papel);
+    border-color: var(--cobalto);
+    color: var(--cobalto);
+  }
+
+  .filter .count {
+    color: var(--tinta-suave);
+  }
+
+  .filter[aria-pressed="true"] .count {
+    color: var(--cobalto);
+  }
+
+  .count-line {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+    white-space: nowrap;
+  }
+
+  .clear {
+    height: 32px;
+    padding: 0 var(--space-2);
+    font-size: var(--text-small-size);
+  }
+
+  @media (pointer: coarse) {
+    .filter {
+      min-height: 40px;
+    }
+
+    .view-toggle .btn {
+      height: 40px;
+    }
+  }
+
+  @media (max-width: 767px) {
+    .view-toggle {
+      display: none;
+    }
+
+    .count-line {
+      margin-left: 0;
+    }
+  }
+</style>

@@ -1,0 +1,147 @@
+---
+import type { BoardColumnModel } from "./board-model";
+import Icon from "../ui/Icon.astro";
+import ProjectCard from "./ProjectCard.astro";
+
+/**
+ * One workflow state as a zone on the wall: a labelled header over a sunken well of cards.
+ *
+ * The column is the only place the rendered taxonomy of a state exists in the DOM — its
+ * label, its tone and its inline colour — which is why the runtime reads them back from
+ * `data-*` here when it patches a card's state chip: the `project.state_changed` payload
+ * carries a state `code` and no label or colour.
+ *
+ * The lock chip and the empty line are rendered here (hidden) rather than built in JS, so
+ * the copy stays in the template with the rest of the Spanish and never ships as a string
+ * literal inside the island.
+ */
+export interface Props {
+  column: BoardColumnModel;
+}
+
+const { column } = Astro.props;
+const { state, tone, cards } = column;
+const headingId = `column-${state.code}`;
+---
+
+<section
+  class="column"
+  data-column
+  data-state-code={state.code}
+  data-state-label={state.label}
+  data-state-category={state.category}
+  data-tone-class={tone.className}
+  data-tone-style={tone.style ?? ""}
+  data-drop="idle"
+  aria-labelledby={headingId}
+>
+  <header class="column-head">
+    <span class:list={["dot", tone.className]} style={tone.style} aria-hidden="true"
+    ></span>
+    <h2 class="label column-title" id={headingId} lang="es">{state.label}</h2>
+    <span class="chip figure column-count" data-column-count
+      >{cards.length}</span
+    >
+  </header>
+
+  <p class="chip column-lock" data-column-lock hidden role="status">
+    <Icon name="lock" size={14} />
+    <span data-column-lock-text lang="es"></span>
+  </p>
+
+  <div class="well column-body" data-column-body>
+    {
+      cards.map((card) => (
+        <ProjectCard
+          card={card}
+          stateToneClass={tone.className}
+          stateToneStyle={tone.style}
+        />
+      ))
+    }
+    <p
+      class="small column-empty"
+      data-column-empty
+      hidden={cards.length > 0}
+      lang="es"
+    >
+      Sin proyectos en este estado.
+    </p>
+  </div>
+</section>
+
+<style>
+  .column {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+    transition: opacity var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .column-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding-inline: var(--space-2);
+    min-height: var(--space-6);
+  }
+
+  .column-title {
+    color: var(--tinta);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .column-count {
+    margin-left: auto;
+  }
+
+  .column-lock {
+    align-self: flex-start;
+    background-color: var(--pozo);
+    color: var(--tinta-media);
+    white-space: normal;
+  }
+
+  .column-lock[hidden] {
+    display: none;
+  }
+
+  .column-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    min-height: 120px;
+    flex: 1;
+    transition: box-shadow var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .column-empty {
+    padding: var(--space-3) var(--space-2);
+    color: var(--tinta-suave);
+    text-align: center;
+  }
+
+  .column-empty[hidden] {
+    display: none;
+  }
+
+  /* --- Drag legality (DESIGN.md §Motion, "the board announces legality") --- */
+
+  /* A column that cannot receive the card steps back instead of pretending. */
+  .column[data-drop="illegal"],
+  .column[data-drop="blocked"] {
+    opacity: 0.55;
+  }
+
+  .column[data-drop="legal"] .column-body {
+    box-shadow: inset 0 0 0 2px var(--cobalto-papel);
+  }
+
+  .column[data-drop="legal"][data-hover="true"] .column-body {
+    box-shadow: inset 0 0 0 2px var(--cobalto);
+  }
+</style>

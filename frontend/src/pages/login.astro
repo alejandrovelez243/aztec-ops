@@ -9,6 +9,7 @@
  */
 import "../styles/tokens.css";
 import "../styles/base.css";
+import BrandMark from "../components/ui/BrandMark.astro";
 import Icon from "../components/ui/Icon.astro";
 import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
 ---
@@ -34,6 +35,8 @@ import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
       }
     </script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>Iniciar sesión — Aztec Ops</title>
   </head>
   <body>
@@ -46,13 +49,7 @@ import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
 
       <section class="card door" aria-labelledby="login-title">
         <header class="door-head">
-          <span class="brand-mark" aria-hidden="true">
-            <svg width="30" height="30" viewBox="0 0 26 26" fill="none">
-              <rect x="3" y="8.5" width="15" height="11" rx="3" fill="var(--cobalto-papel)"></rect>
-              <rect x="6" y="5.5" width="15" height="11" rx="3" fill="var(--cobalto)" opacity="0.35"></rect>
-              <rect x="9" y="2.5" width="15" height="11" rx="3" fill="var(--cobalto)"></rect>
-            </svg>
-          </span>
+          <BrandMark size={34} animate />
           <p class="label">Aztec Ops</p>
           <h1 id="login-title" class="h1">Inicia sesión</h1>
           <p class="small">El tablero del día espera tu decisión.</p>

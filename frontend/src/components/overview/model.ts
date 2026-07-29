@@ -19,20 +19,29 @@ import type { QueueItem, ScoreBreakdownEntry } from "../../lib/api/domain";
 /** The three density tiers of comp C. Rank decides the tier, nothing else. */
 export type ZoneKey = "today" | "week" | "radar";
 
+/**
+ * How many queue rows the Resumen reads.
+ *
+ * One constant for both reads — the page's first paint and the island's
+ * client-side re-read — because a radar built from 50 rows on the server and 20
+ * on the client would silently drop projects on reconnect.
+ */
+export const QUEUE_PAGE_SIZE = 50;
+
 /** Last rank that still belongs to "Atender hoy". */
 export const ZONE_TODAY_MAX_RANK = 3;
 
 /** Last rank that still belongs to "Esta semana"; everything after is radar. */
 export const ZONE_WEEK_MAX_RANK = 10;
 
-/** How many breakdown bars each tier renders — density *is* depth of argument. */
-export const BARS_PER_ZONE: Readonly<Record<ZoneKey, number>> = {
-  today: 3,
-  week: 2,
-  radar: 1,
-};
-
-/** Widest set of bars any tier shows; rows carry this many and CSS hides the rest. */
+/**
+ * Widest set of bars any tier shows.
+ *
+ * Every card carries this many and the zone's stylesheet hides the surplus
+ * (3 in "Atender hoy", 2 in "Esta semana", 1 in "Radar"): density *is* depth of
+ * argument, and a card that travels between zones must not be rebuilt to change
+ * how much of its breakdown is visible.
+ */
 const MAX_BARS = 3;
 
 const DAY_MS = 86_400_000;

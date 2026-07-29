@@ -27,7 +27,6 @@ import type { QueuePage, TeamLoad, TeamLoadEntry } from "../../lib/api/domain";
 import { avatarHue, initials } from "../../lib/auth/session";
 import { assertNever, type ViewState } from "../../lib/view-state";
 import {
-  BARS_PER_ZONE,
   toRows,
   zoneOfRank,
   type BreakdownBar,
@@ -382,12 +381,14 @@ export function rankText(rank: number): string {
   return String(rank).padStart(2, "0");
 }
 
-/** How many bars a zone shows; the island needs it when it rebuilds a card's bars. */
-export function barsForZone(zone: ZoneKey): number {
-  return BARS_PER_ZONE[zone];
+/** A tone resolved from data: the class to set, and the solid to set with it. */
+export interface ToneChoice {
+  readonly className: string;
+  /** `null` when the taxonomy carries no usable colour and the neutral tone wins. */
+  readonly solid: string | null;
 }
 
-/** The tone class plus the inline custom property a card header band paints with. */
+/** The same choice, pre-rendered as the attributes a string template needs. */
 export interface ToneAttributes {
   readonly className: string;
   readonly styleAttr: string;
@@ -396,17 +397,27 @@ export interface ToneAttributes {
 /**
  * Maps an API taxonomy colour onto the tone system.
  *
- * A valid colour becomes `.tone-data` with `--tone-solid` set inline, from which
- * base.css derives a readable ink and a wash — so a state recoloured in the
- * admin renders correctly with zero frontend changes (Data-Owns-Color Rule). A
- * missing or unparseable colour falls back to the neutral tone rather than
- * pushing an untrusted string into a style attribute.
+ * A valid colour becomes `.tone-data` with `--tone-solid` set on the element,
+ * from which base.css derives a readable ink and a wash — so a state recoloured
+ * in the admin renders correctly with zero frontend changes (Data-Owns-Color
+ * Rule). A missing or unparseable colour falls back to the neutral tone rather
+ * than pushing an untrusted string into a style declaration.
  */
-export function toneAttributes(color: string | null): ToneAttributes {
+export function toneChoice(color: string | null): ToneChoice {
   if (color !== null && HEX_COLOR.test(color)) {
-    return { className: "tone-data", styleAttr: `style="--tone-solid:${color}"` };
+    return { className: "tone-data", solid: color };
   }
-  return { className: "tone-piedra", styleAttr: "" };
+  return { className: "tone-piedra", solid: null };
+}
+
+/** {@link toneChoice} rendered for a string template. */
+export function toneAttributes(color: string | null): ToneAttributes {
+  const choice = toneChoice(color);
+  return {
+    className: choice.className,
+    styleAttr:
+      choice.solid === null ? "" : `style="--tone-solid:${choice.solid}"`,
+  };
 }
 
 /**

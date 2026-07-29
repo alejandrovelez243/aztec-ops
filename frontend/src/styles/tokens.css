@@ -33,6 +33,8 @@
   --cobalto: #2545de;
   --cobalto-profundo: #1b33ae;
   --cobalto-papel: #eaedfc;
+  /** Middle card of the brand mark — the ramp's midpoint, brand surfaces only. */
+  --cobalto-medio: #8fa2ee;
 
   /*
    * --- Semantic set (Data-Owns-Color Rule) ---

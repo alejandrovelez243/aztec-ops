@@ -229,8 +229,13 @@ flowchart TD
   R --> DB
   M -->|"to_result / to_view / to_entry"| D
 
-  API x--x M
-  D x--x M```
+  API x--x|"never imports"| M
+  D x--x|"never imports"| M
+
+  %% The two forbidden edges are the point of this diagram, so they are drawn as such:
+  %% red and dashed. Rendered like the allowed arrows they read as permission.
+  linkStyle 10,11 stroke:#d33,stroke-width:2px,stroke-dasharray:6 4
+```
 
 The two crossed links are the illegal arrows, and they are the whole rule:
 
@@ -501,7 +506,7 @@ flowchart TD
   S5 --> SUM
   S6 --> SUM
 
-  SUM["base = Σ round of raw × weight × 100<br/>each strategy returns a score 0–1 and a reason"]
+  SUM["contribution = round(raw × weight × 100, 2) per signal<br/>base = Σ contributions<br/>every strategy returns a raw 0–1 and a reason"]
   SUM --> MOD["× engagement_type.weight<br/>THE ONLY MODIFIER<br/>applied when policy.modifiers.engagement_type"]
   MOD --> CLAMP["clamp to 0–100, quantize to 2dp"]
   CLAMP --> SCORE[("PriorityScore<br/>value · policy_version · breakdown<br/>modifier_total · input_hash · valid_until")]

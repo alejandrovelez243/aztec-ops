@@ -1,0 +1,120 @@
+---
+import Icon from "../ui/Icon.astro";
+
+/**
+ * The board's non-happy arms rendered as real, designed regions: `empty` and `error`.
+ *
+ * Both name what is missing and offer the move that fixes it — an empty state without the
+ * action that fills it, or an error without a retry, is an unfinished view
+ * (`docs/standards/FRONTEND.md` §7).
+ *
+ * The retry reloads the route on purpose: first paint is fetched in page frontmatter, so
+ * re-running *the same call* means asking the server for the page again. Nothing here
+ * refetches through the client, which would leave the server-rendered markup and the client's
+ * idea of the data disagreeing.
+ */
+export interface Props {
+  /** Which arm this is; drives the tone and the icon, never a colour literal. */
+  kind: "empty" | "error";
+  title: string;
+  detail: string;
+  /** A link that fills the emptiness. */
+  link?: { label: string; href: string } | null;
+  /** Label of a control that re-runs the page's own request. */
+  retryLabel?: string | null;
+}
+
+const { kind, title, detail, link = null, retryLabel = null } = Astro.props;
+const toneClass = kind === "error" ? "tone-rojo" : "tone-piedra";
+---
+
+<section
+  class:list={["card notice", toneClass]}
+  role={kind === "error" ? "alert" : "status"}
+>
+  <span class="notice-mark" aria-hidden="true">
+    <Icon name={kind === "error" ? "alert" : "board"} size={22} />
+  </span>
+  <div class="notice-text">
+    <h2 class="h2" lang="es">{title}</h2>
+    <p class="body-text" lang="es">{detail}</p>
+  </div>
+  <div class="notice-actions">
+    {
+      link !== null && (
+        <a class="btn btn-secondary" href={link.href} lang="es">
+          {link.label}
+        </a>
+      )
+    }
+    {
+      retryLabel !== null && (
+        <button type="button" class="btn btn-primary" data-board-retry lang="es">
+          <Icon name="refresh" size={18} />
+          {retryLabel}
+        </button>
+      )
+    }
+  </div>
+</section>
+
+<script>
+  // Delegated once per app so the control keeps working across view transitions;
+  // it re-runs the page's own server fetch rather than patching around a failure.
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest("[data-board-retry]") === null) return;
+    window.location.reload();
+  });
+</script>
+
+<style>
+  .notice {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-4);
+    padding: var(--space-5);
+  }
+
+  .notice-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--space-7);
+    height: var(--space-7);
+    border-radius: var(--radius-control);
+    background-color: var(--tone-wash);
+    color: var(--tone-ink);
+    flex: none;
+  }
+
+  .notice-text {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .notice-text p {
+    color: var(--tinta-media);
+  }
+
+  .notice-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+    flex-wrap: wrap;
+  }
+
+  @media (max-width: 767px) {
+    .notice {
+      flex-direction: column;
+    }
+
+    .notice-actions {
+      margin-left: 0;
+    }
+  }
+</style>

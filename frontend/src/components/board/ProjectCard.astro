@@ -1,0 +1,270 @@
+---
+import type { ProjectCardModel } from "./board-model";
+import Icon from "../ui/Icon.astro";
+
+/**
+ * One project as a card on the wall: the object a hand picks up.
+ *
+ * Presentational only — it renders what {@link ProjectCardModel} decided and emits nothing.
+ * Every behaviour (grab, "Mover a…", live patching) belongs to `islands/BoardCanvas.astro`,
+ * which finds this card through the `data-*` attributes below; they are the component's real
+ * contract with the runtime, so renaming one is renaming an API.
+ *
+ * Two details carry meaning rather than decoration:
+ *
+ * - The **state chip** repeats the column it sits in, which looks redundant until a move is
+ *   in flight: while pending, the card already sits in the target column and the chip still
+ *   names where the *server* believes it is. The disagreement is the honest picture of an
+ *   unconfirmed transition, and the chip snapping is the confirmation.
+ * - The **score** carries its breakdown in `title`/`aria-label`. A number with no argument
+ *   behind it is forbidden (CLAUDE.md rule 7), so a project the engine has not scored yet
+ *   renders an ámbar absence chip instead of a figure.
+ */
+export interface Props {
+  /** The card's own view model — never the queue entity (FRONTEND.md §3). */
+  card: ProjectCardModel;
+  /** Tone class of the column's state, so the chip matches the wall it hangs on. */
+  stateToneClass: string;
+  /** Inline `--tone-solid` when the taxonomy carries its own colour, else `null`. */
+  stateToneStyle: string | null;
+}
+
+const { card, stateToneClass, stateToneStyle } = Astro.props;
+
+const titleId = `card-title-${card.code}`;
+const blockerLabel =
+  card.openBlockers === 1 ? "1 bloqueo" : `${card.openBlockers} bloqueos`;
+---
+
+<article
+  class="card card-hover pcard"
+  data-card
+  data-code={card.code}
+  data-state-code={card.stateCode}
+  data-updated-at={card.updatedAt}
+  data-pending="false"
+  aria-labelledby={titleId}
+>
+  <div class="pcard-top">
+    <span class="chip chip-code">{card.code}</span>
+    <span
+      class:list={["chip", "card-state", stateToneClass]}
+      style={stateToneStyle}
+      data-card-state
+      lang="es"><span data-card-state-text>{card.stateLabel}</span></span
+    >
+    <span class="chip card-pending" data-card-pending hidden lang="es">
+      <span class="pending-spinner" aria-hidden="true"></span>
+      Moviendo…
+    </span>
+  </div>
+
+  <a
+    class="title pcard-title"
+    id={titleId}
+    href={`/projects/${card.code}`}
+    transition:name={`proj-${card.code}`}
+    lang="es">{card.name}</a
+  >
+
+  <p class="small pcard-client" lang="es">{card.clientAlias}</p>
+
+  <div class="pcard-foot">
+    {
+      card.owner === null ? (
+        <span class="chip tone-ambar" lang="es">
+          sin responsable
+        </span>
+      ) : (
+        <span
+          class="avatar pcard-avatar"
+          style={`--avatar-h: ${card.owner.hue}`}
+          title={card.owner.label}
+          aria-label={`Responsable: ${card.owner.label}`}
+          role="img"
+        >
+          {card.owner.initials}
+        </span>
+      )
+    }
+
+    <span
+      class:list={["chip", "card-due", card.due.toneClass]}
+      title={card.due.description}
+      aria-label={card.due.description}
+      lang="es"
+    >
+      <Icon name="calendar" size={13} />
+      <span class:list={[card.due.isAbsence ? null : "figure"]}
+        >{card.due.text}</span
+      >
+    </span>
+
+    {
+      card.openBlockers > 0 && (
+        <span class="chip tone-rojo" lang="es">
+          {blockerLabel}
+        </span>
+      )
+    }
+
+    {
+      card.manualOverride !== null && (
+        <span
+          class="chip tone-cielo"
+          title={card.manualOverride.description}
+          aria-label={card.manualOverride.description}
+          lang="es"
+        >
+          {card.manualOverride.label}
+        </span>
+      )
+    }
+
+    <span
+      class:list={[
+        "card-score",
+        card.score.kind === "computed" ? "figure" : "chip tone-ambar",
+      ]}
+      data-card-score
+      data-score-state={card.score.kind}
+      title={card.score.description}
+      aria-label={card.score.description}
+      lang="es">{card.score.text}</span
+    >
+
+    <button
+      type="button"
+      class="btn btn-ghost btn-icon pcard-move"
+      data-move-trigger
+      aria-haspopup="menu"
+      aria-expanded="false"
+      aria-controls="board-move-menu"
+      aria-label={`Mover ${card.code} a otro estado`}
+      title="Mover a…"
+    >
+      <Icon name="chevron-down" size={18} />
+    </button>
+  </div>
+</article>
+
+<style>
+  .pcard {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    /* The grab affordance; vertical panning stays the browser's so a touch
+       scroll over the board still scrolls. */
+    touch-action: pan-y;
+    cursor: grab;
+    position: relative;
+  }
+
+  .pcard-top {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .card-pending {
+    background-color: var(--cobalto-papel);
+    color: var(--cobalto);
+  }
+
+  .card-pending[hidden] {
+    display: none;
+  }
+
+  .pending-spinner {
+    width: var(--space-3);
+    height: var(--space-3);
+    border-radius: var(--radius-full);
+    border: 2px solid var(--cobalto-papel);
+    border-top-color: var(--cobalto);
+    animation: spin 700ms linear infinite;
+  }
+
+  .pcard-title {
+    text-decoration: none;
+    color: var(--tinta);
+  }
+
+  .pcard-title:hover {
+    color: var(--cobalto);
+  }
+
+  .pcard-client {
+    margin-top: calc(var(--space-1) * -1);
+  }
+
+  .pcard-foot {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    padding-top: var(--space-2);
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .pcard-avatar {
+    width: var(--space-5);
+    height: var(--space-5);
+  }
+
+  .card-score {
+    margin-left: auto;
+    font-size: var(--text-h2-size);
+    color: var(--tinta);
+  }
+
+  .card-score[data-score-state="absent"] {
+    font-size: var(--text-label-size);
+  }
+
+  .pcard-move {
+    /* The keyboard and touch twin of the drag; never smaller than the touch floor. */
+    width: 40px;
+    height: 40px;
+  }
+
+  /* --- Drag lifecycle (DESIGN.md §Motion, the card lifecycle) --- */
+
+  .pcard[data-dragging="true"] {
+    cursor: grabbing;
+    box-shadow: var(--shadow-lifted);
+    z-index: var(--z-drawer);
+    will-change: transform;
+    /* The follower writes `transform` every frame; `.card-hover`'s transition
+       would smear each of those writes over 120ms and eat the spring lag. */
+    transition: none;
+  }
+
+  .pcard[data-pending="true"] {
+    opacity: 0.72;
+  }
+
+  .pcard[data-remote="true"] {
+    animation: anillo 900ms var(--motion-carta-ease);
+  }
+
+  /* The colleague's hand: a cobalto ring pulses where the card landed. */
+  @keyframes anillo {
+    0% {
+      box-shadow:
+        var(--shadow-resting),
+        0 0 0 0 var(--cobalto);
+    }
+    40% {
+      box-shadow:
+        var(--shadow-raised),
+        0 0 0 3px var(--cobalto-papel);
+    }
+    100% {
+      box-shadow:
+        var(--shadow-resting),
+        0 0 0 0 transparent;
+    }
+  }
+</style>
