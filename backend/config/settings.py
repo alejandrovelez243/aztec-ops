@@ -344,18 +344,47 @@ CELERY_BEAT_SCHEDULE = {
     # The sweeper. ``enqueue_event`` already kicks the drain on commit, so this exists for the one
     # case that kick cannot cover: the broker was down when the transaction committed. Both paths
     # read the same table, so the worst case is a duplicate dispatch, which the ledger absorbs.
+    # `description` is not a Celery key — DatabaseScheduler passes unknown entry keys straight
+    # through to the PeriodicTask model, so the text below IS the admin description and is
+    # re-applied on every Beat start. Writing it here rather than typing it into the admin is what
+    # keeps it from being overwritten by the next sync.
     "drain-outbox": {
         "task": "events.drain_outbox",
         "schedule": float(settings.event_drain_interval_seconds),
+        "description": (
+            "Sweeps the transactional outbox and dispatches each unpublished event to the "
+            "handlers registered for its topic. This is the safety net, not the hot path: "
+            "writing an event already kicks a drain from transaction.on_commit, so this only "
+            "catches what that kick missed — typically a broker that was down at commit time. "
+            "Both paths read the same table, so neither can lose an event, and a double dispatch "
+            "is absorbed by the ProcessedEvent ledger. A run reporting a rising 'still pending' "
+            "count means the worker is falling behind."
+        ),
     },
     "emit-interval-tick": {
         "task": "events.emit_interval_tick",
         "schedule": float(settings.ticker_interval_seconds),
+        "description": (
+            "Emits clock.ticked on a fixed interval. Two priority signals — deadline_pressure "
+            "and staleness — are functions of *now* rather than of any change, so a project can "
+            "cross its target date or go stale with nobody touching it, and a purely "
+            "change-driven system never notices. This tick is what notices. The recalculator "
+            "re-scores only the projects whose PriorityScore.valid_until has passed, so a quiet "
+            "tick costs one index scan and emits nothing. This interval is therefore the upper "
+            "bound on how stale a time-derived score can be."
+        ),
     },
     "emit-day-boundary-tick": {
         "task": "events.emit_day_boundary_tick",
         # Local midnight. Overdue and days-open change here, not on the interval grid.
         "schedule": crontab(hour=0, minute=0),
+        "description": (
+            "Emits clock.ticked once at local midnight. Calendar-derived facts — overdue, days "
+            "open — change at the date boundary and not on a five-minute grid, so they get their "
+            "own schedule instead of waiting for the next interval tick to notice. Separate from "
+            "the interval tick on purpose: the alternative is remembering the last local date in "
+            "the process, which is wrong after every restart and duplicated by a second replica."
+        ),
     },
 }
 
