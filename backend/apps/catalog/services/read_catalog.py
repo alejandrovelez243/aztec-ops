@@ -21,7 +21,7 @@ def read_catalog() -> CatalogView:
         safe to serialize with no further database access.
     """
     return CatalogView(
-        engagement_types=tuple(row.to_ref() for row in EngagementType.objects.active()),
+        engagement_types=tuple(row.to_engagement_ref() for row in EngagementType.objects.active()),
         project_types=tuple(row.to_ref() for row in ProjectType.objects.active()),
         stages=tuple(row.to_ref() for row in Stage.objects.active()),
         priorities=tuple(row.to_ref() for row in Priority.objects.active()),

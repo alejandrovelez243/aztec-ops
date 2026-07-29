@@ -224,6 +224,26 @@ def _state_in_use_details(exc: Exception) -> dict[str, JsonValue]:
     return details
 
 
+def _incompatible_state_details(exc: Exception) -> dict[str, JsonValue]:
+    """Name the record, the state it is standing on, both graphs, and what the target does offer.
+
+    The refusal has to be actionable without a second request, because the operator has exactly two
+    ways forward and each needs a different fact: add the missing column to the target — for which
+    they need to know which column is missing — or move the record first, for which they need to
+    know where the target could receive it. ``available`` is what the error carried out of the
+    transaction that looked it up, so nothing here re-reads a graph the rejection already knew.
+    """
+    return {
+        "entity": "workflow_state",
+        "id": str(getattr(exc, "state_code", "")),
+        "record": str(getattr(exc, "entity_id", "")),
+        "workflow": str(getattr(exc, "workflow_code", "")),
+        "current_workflow": str(getattr(exc, "from_workflow_code", "")),
+        "current": "incompatible",
+        "available": list(getattr(exc, "available", ())),
+    }
+
+
 def _binding_taken_details(exc: Exception) -> dict[str, JsonValue]:
     """Render which graph already answers for an engagement type, so the client can go and edit it."""
     return {
@@ -359,6 +379,20 @@ _DESCRIPTORS: Final[
         _workflow_part_details("workflow_transition", "exists"),
     ),
     workflow_errors.WorkflowStateInUse: (409, CODE_CONFLICTING_STATE, _state_in_use_details),
+    # Reassignment conflicts. ``incompatible`` says "the target has no column for where this record
+    # stands" and carries the columns it does have; ``retired`` says "that lifecycle takes no more
+    # records". Both are 409 rather than 422 because the request is well formed and it is the world,
+    # not the payload, that refuses it.
+    workflow_errors.IncompatibleWorkflowState: (
+        409,
+        CODE_CONFLICTING_STATE,
+        _incompatible_state_details,
+    ),
+    workflow_errors.WorkflowRetired: (
+        409,
+        CODE_CONFLICTING_STATE,
+        _workflow_part_details("workflow", "retired"),
+    ),
     workflow_errors.EngagementTypeAlreadyBound: (
         409,
         CODE_CONFLICTING_STATE,
@@ -376,6 +410,10 @@ _DESCRIPTORS: Final[
     # edge, where the offending input is a field of a form somebody is filling in.
     workflow_errors.GuardNotRegistered: (422, CODE_VALIDATION_ERROR, _field("guard")),
     workflow_errors.ValueOutsideVocabulary: (422, CODE_VALIDATION_ERROR, _vocabulary_details),
+    # ``fields.workflow`` because the offending input is the one field of the assignment body: the
+    # caller named a graph that governs the other kind of aggregate, which is a form error and not
+    # a conflict with the state of the world.
+    workflow_errors.WorkflowKindMismatch: (422, CODE_VALIDATION_ERROR, _field("workflow")),
     workflow_errors.EngagementTypeNotFound: (
         422,
         CODE_VALIDATION_ERROR,

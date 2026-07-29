@@ -3,15 +3,29 @@
  * `/projects` — the whole portfolio, as cards or as a table.
  *
  * The container (`docs/standards/PATTERNS_FRONTEND.md` §5): this frontmatter
- * performs the one read for the first paint and composes presentational
+ * performs the reads for the first paint and composes presentational
  * components; the island underneath filters and patches, and never fetches the
  * list again.
  *
- * The read is `GET /api/v1/queue` — the snapshot read model that already
- * carries state, owner, deadline, score and risk flags for every project, so
- * the surface costs one index scan instead of a join per card. It is ordered by
- * name because this page is where an operator *looks something up*; the ranked
- * order is what `/priorities` is for.
+ * Four reads, in parallel, because they are one screen and four round trips in
+ * series is a screen that paints in four parts:
+ *
+ * - `GET /api/v1/queue` is the snapshot read model that already carries state,
+ *   owner, deadline, score and risk flags for every project, so the surface
+ *   costs one index scan instead of a join per card. It is ordered by name
+ *   because this page is where an operator *looks something up*; the ranked
+ *   order is what `/priorities` is for.
+ * - `GET /api/v1/clients`, `GET /api/v1/catalog` and `GET /api/v1/team/load`
+ *   are the pickers of the create-project sheet. Read here rather than by the
+ *   island, because "Nuevo proyecto" opens a modal in place: a fetch on open
+ *   would give that sheet a loading arm for lists that do not change while the
+ *   page is open.
+ *
+ * **Only the queue can fail the page**, exactly as `board.astro` states for
+ * itself. A failed client directory or catalog costs the creation button, which
+ * renders visibly dead with the reason; a failed roster costs only the owner
+ * picker inside the sheet, and creation goes ahead without one. Neither is
+ * worth blanking a portfolio somebody is reading.
  *
  * All four view states are rendered as real markup. `disconnected` is a
  * client-side arm — the server render is always fresh — and is carried by
@@ -19,6 +33,7 @@
  * blanking a board somebody is reading.
  */
 import Shell from "../../layouts/Shell.astro";
+import CreateProjectDialog from "../../components/projects/CreateProjectDialog.astro";
 import ProjectCard from "../../components/projects/ProjectCard.astro";
 import ProjectsSkeleton from "../../components/projects/ProjectsSkeleton.astro";
 import ProjectsTable from "../../components/projects/ProjectsTable.astro";
@@ -36,14 +51,50 @@ import {
   regionFailureCopy,
   type FailureCopy,
 } from "../../components/projects/messages";
-import { getQueue } from "../../lib/api/client";
+import {
+  CREATE_PROJECT_CLIENTS_FAILED,
+  CREATE_PROJECT_ENGAGEMENT_FAILED,
+  CREATE_PROJECT_NO_CLIENTS,
+} from "../../components/projects/create-project-copy";
+import {
+  getCatalog,
+  getClients,
+  getQueue,
+  getTeamLoad,
+} from "../../lib/api/client";
 import type { QueuePage } from "../../lib/api/domain";
 import { assertNever, toViewState, type ViewState } from "../../lib/view-state";
 
 /** The pagination cap (`docs/API.md` §1.3): the portfolio fits in one page. */
 const PAGE_SIZE = 200;
 
-const result = await getQueue({ page_size: PAGE_SIZE, order_by: "name" });
+const [result, clientsResult, catalogResult, teamResult] = await Promise.all([
+  getQueue({ page_size: PAGE_SIZE, order_by: "name" }),
+  getClients(),
+  getCatalog(),
+  getTeamLoad(),
+]);
+
+const clients = clientsResult.ok ? clientsResult.data.items : [];
+const catalog = catalogResult.ok ? catalogResult.data : null;
+const members = teamResult.ok ? teamResult.data.items : [];
+
+/**
+ * Why "Nuevo proyecto" cannot be offered, or `null` when it can.
+ *
+ * Three refusals, each with its own sentence, because the operator's next move
+ * differs: nobody to register against is a data gap somebody has to fill, while
+ * a failed read is a reload. The button renders **dead and visible** in all
+ * three (`FRONTEND.md` §10) — a control that disappears teaches that the
+ * capability does not exist.
+ */
+const createBlockedReason: string | null = !clientsResult.ok
+  ? CREATE_PROJECT_CLIENTS_FAILED
+  : clients.length === 0
+    ? CREATE_PROJECT_NO_CLIENTS
+    : catalog === null || catalog.engagement_types.length === 0
+      ? CREATE_PROJECT_ENGAGEMENT_FAILED
+      : null;
 
 const EMPTY_MESSAGE = "No hay proyectos en la cartera.";
 
@@ -99,6 +150,16 @@ function toPlan(state: ViewState<QueuePage>): Plan {
 
 const plan = toPlan(view);
 const crumbs = [{ label: "Inicio", href: "/" }, { label: "Proyectos" }];
+
+/**
+ * One id per trigger, because both can be on screen at once.
+ *
+ * The reason is attached through `aria-describedby` as well as `title`, so the
+ * refusal is available to a screen reader and not only to a pointer that
+ * happens to rest on a disabled button.
+ */
+const headBlockedId = "create-project-blocked-head";
+const emptyBlockedId = "create-project-blocked-empty";
 ---
 
 <Shell title="Proyectos" active="projects" crumbs={crumbs}>
@@ -110,10 +171,39 @@ const crumbs = [{ label: "Inicio", href: "/" }, { label: "Proyectos" }];
         el motor.
       </p>
     </div>
-    <a class="btn btn-secondary" href="/priorities">
-      <Icon name="flag" size={18} />
-      Ver la cola priorizada
-    </a>
+    {
+      /* The creating control belongs to the page header and not to
+        `ProjectsToolbar`: the toolbar narrows what is already on screen, while
+        this acts on the portfolio itself. It sits before the link to
+        `/priorities` because it is the primary act here and that one is a way
+        out to another surface. */
+    }
+    <div class="head-actions">
+      <button
+        class="btn btn-primary"
+        type="button"
+        data-action="open-create-project"
+        disabled={createBlockedReason !== null}
+        title={createBlockedReason}
+        aria-describedby={createBlockedReason === null
+          ? undefined
+          : headBlockedId}
+      >
+        <Icon name="plus" size={18} />
+        Nuevo proyecto
+      </button>
+      {
+        createBlockedReason !== null && (
+          <span class="visually-hidden" id={headBlockedId}>
+            {createBlockedReason}
+          </span>
+        )
+      }
+      <a class="btn btn-secondary" href="/priorities">
+        <Icon name="flag" size={18} />
+        Ver la cola priorizada
+      </a>
+    </div>
   </header>
 
   <StaleBanner />
@@ -162,8 +252,27 @@ const crumbs = [{ label: "Inicio", href: "/" }, { label: "Proyectos" }];
         kind="empty"
         title={EMPTY_MESSAGE}
         detail="En cuanto se registre el primero aparecerá aquí, ya priorizado."
-        actionLabel="Actualizar"
-      />
+        actionLabel={null}
+      >
+        <button
+          class="btn btn-primary"
+          type="button"
+          data-action="open-create-project"
+          disabled={createBlockedReason !== null}
+          title={createBlockedReason}
+          aria-describedby={
+            createBlockedReason === null ? undefined : emptyBlockedId
+          }
+        >
+          <Icon name="plus" size={18} />
+          Crear el primero
+        </button>
+        {createBlockedReason !== null && (
+          <span class="visually-hidden" id={emptyBlockedId}>
+            {createBlockedReason}
+          </span>
+        )}
+      </RegionMessage>
     )
   }
 
@@ -179,6 +288,22 @@ const crumbs = [{ label: "Inicio", href: "/" }, { label: "Proyectos" }];
   }
 
   {plan.mode === "loading" && <ProjectsSkeleton />}
+
+  {
+    /* Rendered once, outside `[data-projects]` and outside every plan arm. The
+      list island delegates clicks and mounts menus on its own subtree, so a
+      dialog inside it would have two owners for the same pickers — and the
+      empty arm, which offers creation, does not render that subtree at all. */
+  }
+  <CreateProjectDialog
+    clients={clients}
+    engagementTypes={catalog?.engagement_types ?? []}
+    projectTypes={catalog?.project_types ?? []}
+    stages={catalog?.stages ?? []}
+    currencies={catalog?.currencies ?? []}
+    members={members}
+    isTeamUnavailable={!teamResult.ok}
+  />
 
   {/* Before paint, so a table-first operator never sees the grid flash by. */}
   <script is:inline>
@@ -200,8 +325,10 @@ const crumbs = [{ label: "Inicio", href: "/" }, { label: "Proyectos" }];
   <script>
     import { onPage } from "../../components/projects/island";
     import { mountProjectsList } from "../../components/projects/list-island";
+    import { mountCreateProject } from "../../components/projects/create-project";
 
     onPage("[data-projects]", mountProjectsList);
+    onPage("[data-create-project-dialog]", mountCreateProject);
   </script>
 </Shell>
 
@@ -218,6 +345,13 @@ const crumbs = [{ label: "Inicio", href: "/" }, { label: "Proyectos" }];
   .lead {
     color: var(--tinta-media);
     margin-top: var(--space-2);
+  }
+
+  .head-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
   }
 
   .projects-grid {

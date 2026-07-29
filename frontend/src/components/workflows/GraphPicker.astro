@@ -1,0 +1,240 @@
+---
+/**
+ * A single choice, whose options are only known at the moment it opens.
+ *
+ * The same trigger-and-panel grammar as `MenuSelect` and driven by the same `lib/ui/menu.ts`
+ * — open, close, `Escape`, arrow keys, one panel at a time — and a separate component for one
+ * reason: the things this asks for are *the graph being edited*. Which states a move may join,
+ * and which guards exist, are answered per workflow and change while the operator works, so the
+ * options cannot be server-rendered once and left alone.
+ *
+ * There is no `<select>` in this app: the native popup is drawn by the operating system and
+ * lands as a grey system list in the middle of a surface that is otherwise paper and ink
+ * (`docs/standards/FRONTEND.md` §10).
+ *
+ * The option `<template>` lives **inside this component** on purpose. Astro scopes styles per
+ * component, so an option cloned from a template declared anywhere else would arrive without
+ * this file's scope attribute and render unstyled — which is the same reason every island clones
+ * its rows from a template emitted by the component that owns the markup.
+ *
+ * Presentational: it renders options and reports the choice through the DOM
+ * (`[data-graph-picker][data-value]`). It does not know what a choice means, and it never
+ * fetches.
+ */
+import Icon from "../ui/Icon.astro";
+import type { Choice } from "./authoring";
+
+export interface Props {
+  /** Stable key of what this control edits; the editor reads it off the DOM. */
+  facet: string;
+  /** Visible name of the control, in Spanish. */
+  label: string;
+  /** Options known at build time; the editor replaces them for the graph-shaped ones. */
+  options?: readonly Choice[];
+  /** Currently chosen value; `""` renders {@link placeholder}. */
+  value?: string;
+  /** What the trigger reads when nothing is chosen, in Spanish. */
+  placeholder: string;
+  /** Optional one-line explanation under the control, in Spanish. */
+  hint?: string;
+}
+
+const {
+  facet,
+  label,
+  options = [],
+  value = "",
+  placeholder,
+  hint,
+} = Astro.props;
+
+const current = options.find((option) => option.value === value);
+const currentLabel = current?.label ?? placeholder;
+
+const labelId = `pick-${facet}-label`;
+const triggerId = `pick-${facet}-trigger`;
+const hintId = `pick-${facet}-hint`;
+---
+
+<div
+  class="graph-picker"
+  data-graph-picker
+  data-facet={facet}
+  data-value={value}
+  data-placeholder={placeholder}
+>
+  <span class="label" id={labelId}>{label}</span>
+
+  <button
+    class="btn btn-secondary trigger"
+    type="button"
+    id={triggerId}
+    data-menu-trigger
+    aria-haspopup="menu"
+    aria-expanded="false"
+    aria-labelledby={`${labelId} ${triggerId}`}
+    aria-describedby={hint === undefined ? undefined : hintId}
+  >
+    <span data-field="picker-current">{currentLabel}</span>
+    <Icon name="chevron-down" size={16} />
+  </button>
+
+  {
+    hint !== undefined && (
+      <p class="small hint" id={hintId}>
+        {hint}
+      </p>
+    )
+  }
+
+  <div
+    class="panel card"
+    role="menu"
+    data-menu-panel
+    aria-labelledby={labelId}
+    hidden
+  >
+    {
+      options.map((option) => (
+        <button
+          class="item"
+          type="button"
+          role="menuitemradio"
+          data-menu-item
+          data-value={option.value}
+          aria-checked={option.value === value}
+        >
+          <span class="tick" data-option-tick hidden={option.value !== value}>
+            <Icon name="check" size={16} />
+          </span>
+          <span data-field="option-label">{option.label}</span>
+        </button>
+      ))
+    }
+  </div>
+
+  <template data-template="picker-option">
+    <button
+      class="item"
+      type="button"
+      role="menuitemradio"
+      data-menu-item
+      aria-checked="false"
+    >
+      <span class="tick" data-option-tick hidden>
+        <Icon name="check" size={16} />
+      </span>
+      <span data-field="option-label"></span>
+    </button>
+  </template>
+</div>
+
+<style>
+  .graph-picker {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .trigger {
+    justify-content: space-between;
+    gap: var(--space-2);
+    height: 40px;
+    padding: 0 var(--space-2) 0 var(--space-3);
+    font-size: var(--text-small-size);
+    font-weight: 400;
+  }
+
+  .trigger :global(svg) {
+    flex: none;
+    color: var(--tinta-suave);
+    transition: transform var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .trigger[aria-expanded="true"] {
+    border-color: var(--cobalto);
+    color: var(--cobalto);
+  }
+
+  .trigger[aria-expanded="true"] :global(svg) {
+    transform: rotate(180deg);
+    color: var(--cobalto);
+  }
+
+  .trigger span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .hint {
+    color: var(--tinta-media);
+  }
+
+  /* Anchored in viewport coordinates by `lib/ui/menu.ts`; everything but `top`/`left` is
+     decided here. Inside a `<dialog>` the panel stays in the top layer with it, so `fixed`
+     does not escape the modal. */
+  .panel {
+    position: fixed;
+    z-index: var(--z-drawer);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    width: max-content;
+    min-width: 220px;
+    max-width: min(340px, calc(100vw - var(--space-6)));
+    max-height: min(320px, 60vh);
+    overflow-y: auto;
+    padding: var(--space-2);
+    box-shadow: var(--shadow-lifted);
+  }
+
+  .panel[hidden] {
+    display: none;
+  }
+
+  .item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: 36px;
+    padding: var(--space-2);
+    border-radius: var(--radius-chip);
+    text-align: left;
+    font-size: var(--text-small-size);
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .item:hover,
+  .item:focus-visible {
+    background-color: var(--pozo);
+  }
+
+  .item[aria-checked="true"] {
+    color: var(--cobalto);
+  }
+
+  /* The tick keeps its box when unchecked, so choosing one does not shunt the labels
+     sideways. */
+  .tick {
+    display: inline-flex;
+    width: 16px;
+    flex: none;
+    color: var(--cobalto);
+    line-height: 0;
+  }
+
+  .tick[hidden] {
+    display: inline-flex;
+    visibility: hidden;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .trigger :global(svg) {
+      transition: none;
+    }
+  }
+</style>

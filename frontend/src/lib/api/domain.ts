@@ -126,6 +126,25 @@ export type Member = Schemas["MemberView"];
 export type Catalog = Schemas["CatalogView"];
 
 /**
+ * One currency, ready to render *and* to format an amount with.
+ *
+ * A `TaxonomyRef` plus `decimals`, which is the one fact a client cannot derive: an amount
+ * rendered with two decimals in a zero-decimal currency is a hundredfold lie, and guessing it
+ * from the code would be a table keyed by a business vocabulary this side does not own.
+ */
+export type CurrencyRef = Schemas["CurrencyRef"];
+
+/**
+ * The counterparties a project can be registered against (`GET /api/v1/clients`).
+ *
+ * An `{items: [...]}` envelope rather than a bare array, for the reason the roster gives: a
+ * top-level list cannot grow a sibling key without breaking every client that parsed it as one.
+ * Retired counterparties are absent, so an empty `items` means "nobody to register a project
+ * against yet" — a real state the creating surface has to render, not an error.
+ */
+export type ClientDirectory = Schemas["ClientDirectoryView"];
+
+/**
  * The editor's view of the vocabulary — retired roles included, which `Catalog.roles`
  * deliberately excludes because that list feeds the pickers.
  */
@@ -143,6 +162,17 @@ export type ActivityEntry = Schemas["ActivityEntry"];
 export type ActivityPage = Schemas["Page_ActivityEntry_"];
 
 // --- Request bodies ----------------------------------------------------------
+
+/**
+ * Body of `POST /api/v1/projects`.
+ *
+ * Neither `code` nor `workflow_state` is a field of it, and neither is an oversight: the service
+ * allocates the next `PRJ-NN` inside the creating transaction — a code chosen by a client could
+ * collide with one an already-published event names — and the project lands on the `is_initial`
+ * state of the workflow its engagement type binds to, so nothing can be entered directly into a
+ * state no declared transition leads to (CLAUDE.md rule 2).
+ */
+export type ProjectCreateIn = Schemas["ProjectCreateIn"];
 
 export type ProjectTransitionIn = Schemas["TransitionIn"];
 export type TaskTransitionIn = Schemas["TaskTransitionIn"];
@@ -198,6 +228,44 @@ export type WorkflowCatalog = Schemas["WorkflowCatalogView"];
  * or a task, which names only a target and means "legal right now".
  */
 export type WorkflowShape = Schemas["WorkflowShapeView"];
+
+/**
+ * One node of a graph as the authoring surface reads it: the rendered reference
+ * every board already draws, plus the four facts only an editor needs —
+ * `order`, `is_initial`, `is_active` and `record_count` — and `can_retire`,
+ * which the server answers so a client cannot offer a retirement the API then
+ * refuses.
+ */
+export type WorkflowNode = Schemas["WorkflowNodeView"];
+
+/**
+ * The lifecycle an aggregate follows, as its detail names it.
+ *
+ * Two facts, not one. `code`/`name` say which graph governs the record right now — its states and
+ * its arrows are the ones this record obeys. `source` says why: `DIRECT` means an ops lead chose
+ * this graph for this record, `INHERITED` means nobody did and the binding ladder handed it over.
+ * That is what decides whether there is anything to revert.
+ */
+export type WorkflowRef = Schemas["WorkflowRef"];
+
+// --- Workflow authoring bodies -----------------------------------------------
+
+export type WorkflowCreateIn = Schemas["WorkflowCreateIn"];
+export type WorkflowUpdateIn = Schemas["WorkflowUpdateIn"];
+export type StateCreateIn = Schemas["StateCreateIn"];
+export type StateUpdateIn = Schemas["StateUpdateIn"];
+export type TransitionCreateIn = Schemas["TransitionCreateIn"];
+export type TransitionUpdateIn = Schemas["TransitionUpdateIn"];
+
+/**
+ * Body of `PUT /api/v1/projects/{code}/workflow` and `PUT /api/v1/tasks/{code}/workflow`.
+ *
+ * One shape for both, because it is one decision — "this record follows that lifecycle" — and its
+ * only field is a `Workflow.code`. Going back to inheriting is `DELETE` on the same path and not a
+ * `null` here, so a client that forgot to fill the field cannot clear an assignment it meant to
+ * change. There is no landing state on it: a reassignment never moves the record.
+ */
+export type WorkflowAssignmentIn = Schemas["WorkflowAssignmentIn"];
 
 // --- Authentication ----------------------------------------------------------
 

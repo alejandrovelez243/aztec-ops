@@ -1,22 +1,35 @@
 ---
 /**
- * One configured workflow: what it is, what it governs, and the two views of its
- * graph — the diagram, and the table that carries the same edges accessibly.
+ * One workflow: what it is, what it governs, and the three views of its graph — the diagram,
+ * the states that make it up, and the moves between them.
  *
- * Both come from one {@link WorkflowView}, so the picture and the rows cannot
- * fall out of step: the drawing is a projection of the same edge list the table
- * enumerates, not a second reading of the wire.
+ * All three come from one {@link WorkflowView}, so the picture and the rows cannot fall out of
+ * step: the drawing is a projection of the same state and edge lists the tables enumerate, not a
+ * second reading of the wire.
  *
- * The header states the facts a reader needs before believing anything below it
- * — which records this graph applies to, whether it is the default one, which
- * engagement types are bound to it, and whether it is active at all. An inactive
- * workflow still draws: it is configuration, and "why is nothing moving" is
- * answered by seeing it marked inactive, not by hiding it.
+ * The header states the facts a reader needs before believing anything below it — which records
+ * this graph applies to, whether it is the default one, which engagement types are bound to it,
+ * and whether it is active at all. An inactive workflow still draws: it is configuration, and
+ * "why is nothing moving" is answered by seeing it marked inactive, not by hiding it.
+ *
+ * **Every control is rendered and hidden**, then revealed by the editor once the session says
+ * the reader is an ops lead. Hidden-by-default rather than shown-and-then-hidden: a control that
+ * flashes into view and disappears is a control somebody will click in the meantime. The server
+ * cannot make that decision — it renders from a mirror cookie that carries a token, not a
+ * capability — and a hidden control is a courtesy anyway: the API refuses the write regardless,
+ * and the editor names the missing capability when it does.
+ *
+ * "Añadir movimiento" renders dead rather than absent while the graph has fewer than two active
+ * states, with the reason beside it (`docs/standards/FRONTEND.md` §10) — the operator is being
+ * told what to do next, which is exactly what an empty lifecycle needs.
  */
+import Icon from "../ui/Icon.astro";
 import GraphLegend from "./GraphLegend.astro";
 import StateGraph from "./StateGraph.astro";
+import StateTable from "./StateTable.astro";
 import TransitionTable from "./TransitionTable.astro";
 import type { WorkflowView } from "./graph";
+import { plural } from "./authoring";
 import { taxonomyTone, toneStyle } from "../projects/tone";
 
 export interface Props {
@@ -27,40 +40,74 @@ const { workflow } = Astro.props;
 
 const stateCount = workflow.nodes.length;
 const moveCount = workflow.rows.length;
+/** An edge needs two ends, and both of them have to be states the graph still has. */
+const canAddTransition = stateCount >= 2;
+
+/** Why the move button is dead; also its `aria-describedby` target. */
+const noMovesHint = `wf-${workflow.code}-no-moves`;
 ---
 
-<section class="workflow" aria-labelledby={`wf-${workflow.code}`}>
+<section
+  class="workflow"
+  data-workflow
+  data-code={workflow.code}
+  data-applies-to={workflow.appliesTo}
+  data-name={workflow.name}
+  data-active={String(workflow.isActive)}
+  aria-labelledby={`wf-${workflow.code}`}
+>
   <header class="head">
     <div class="titles">
-      <h2 class="h2" id={`wf-${workflow.code}`} lang="es">{workflow.name}</h2>
+      <h2 class="h2" id={`wf-${workflow.code}`} lang="es" data-field="wf-name">
+        {workflow.name}
+      </h2>
+      {
+        /* The separators are written as expressions rather than as literal text between the
+           spans: a newline after `</span>` is collapsed away by the compiler, and the line read
+           "6estados" until the spaces were made explicit. */
+      }
       <p class="small counts">
-        Aplica a {workflow.appliesToLabel.toLowerCase()} · <span class="figure"
+        Aplica a <span data-field="wf-applies"
+          >{workflow.appliesToLabel.toLowerCase()}</span
+        >{" · "}<span class="figure" data-field="wf-state-count"
           >{stateCount}</span
-        > estados · <span class="figure">{moveCount}</span> movimientos
+        >{" "}<span data-field="wf-state-noun"
+          >{plural(stateCount, "estado")}</span
+        >{" · "}<span class="figure" data-field="wf-move-count"
+          >{moveCount}</span
+        >{" "}<span data-field="wf-move-noun"
+          >{plural(moveCount, "movimiento")}</span
+        >
       </p>
     </div>
 
     <ul class="marks">
-      <li><code class="chip chip-code">{workflow.code}</code></li>
-      {
-        workflow.isDefault && (
-          <li>
-            <span class="chip tone-cielo">Predeterminado</span>
-          </li>
-        )
-      }
-      {
-        !workflow.isActive && (
-          <li>
-            <span class="chip tone-ambar">Inactivo</span>
-          </li>
-        )
-      }
+      <li>
+        <code class="chip chip-code" data-field="wf-code">{workflow.code}</code>
+      </li>
+      <li>
+        <span
+          class="chip tone-cielo"
+          data-mark="default"
+          hidden={!workflow.isDefault}
+        >
+          Predeterminado
+        </span>
+      </li>
+      <li>
+        <span
+          class="chip tone-ambar"
+          data-mark="inactive"
+          hidden={workflow.isActive}
+        >
+          Inactivo
+        </span>
+      </li>
       {
         workflow.engagementTypes.map((type) => {
           const tone = taxonomyTone(type.color);
           return (
-            <li>
+            <li data-engagement-type>
               <span
                 class:list={["chip", tone.className]}
                 style={toneStyle(tone)}
@@ -72,34 +119,130 @@ const moveCount = workflow.rows.length;
           );
         })
       }
-      {
-        workflow.engagementTypes.length === 0 && (
-          <li>
-            <span class="chip tone-ambar">sin tipo asignado</span>
-          </li>
-        )
-      }
+      <li>
+        <span
+          class="chip tone-ambar"
+          data-mark="no-types"
+          hidden={workflow.engagementTypes.length > 0}
+        >
+          sin tipo asignado
+        </span>
+      </li>
     </ul>
   </header>
 
   {
-    stateCount === 0 ? (
-      <p class="small empty-graph">
-        Este flujo no tiene estados configurados, así que no hay nada que
-        dibujar.
-      </p>
-    ) : (
-      <StateGraph
-        nodes={workflow.nodes}
-        arcs={workflow.arcs}
-        width={workflow.width}
-        height={workflow.height}
-        arrowId={workflow.arrowId}
-      />
-    )
+    /*
+    Two groups, not one row of four equal buttons. Adding a state and opening a
+    movement are how a lifecycle is BUILT, so they lead and carry the weight;
+    renaming and deactivating administer one that already exists, so they sit
+    apart and quiet. When every control looked the same, the way in was
+    invisible — which is exactly how an operator reported it.
+  */
   }
+  <div class="actions" data-wf-actions hidden>
+    <div class="build">
+      <button
+        class="btn btn-primary"
+        type="button"
+        data-wf-action="add-state"
+        data-focus-key={`wf:${workflow.code}:add-state`}
+      >
+        <Icon name="plus" size={16} />
+        Añadir estado
+      </button>
+      <button
+        class="btn btn-secondary"
+        type="button"
+        data-wf-action="add-transition"
+        data-focus-key={`wf:${workflow.code}:add-transition`}
+        disabled={!canAddTransition}
+        aria-describedby={canAddTransition ? undefined : noMovesHint}
+      >
+        <Icon name="plus" size={16} />
+        Añadir movimiento
+      </button>
+    </div>
+    <div class="administer">
+      <button
+        class="btn btn-ghost"
+        type="button"
+        data-wf-action="rename"
+        data-focus-key={`wf:${workflow.code}:rename`}
+      >
+        <Icon name="pencil" size={16} />
+        Renombrar
+      </button>
+      <button
+        class="btn btn-ghost"
+        type="button"
+        data-wf-action="toggle-active"
+        data-focus-key={`wf:${workflow.code}:toggle-active`}
+      >
+        {
+          /* Both directions are drawn; only which one is hidden moves, because an icon is
+          markup and this button is repainted from TypeScript after every write. */
+        }
+        <span data-icon="deactivate" hidden={!workflow.isActive}>
+          <Icon name="eye-off" size={16} />
+        </span>
+        <span data-icon="activate" hidden={workflow.isActive}>
+          <Icon name="eye" size={16} />
+        </span>
+        <span data-field="wf-toggle">
+          {workflow.isActive ? "Desactivar" : "Activar"}
+        </span>
+      </button>
+    </div>
+    <p
+      class="small hint"
+      id={noMovesHint}
+      data-move-hint
+      hidden={canAddTransition}
+    >
+      Un movimiento une dos estados: añade al menos dos para poder declarar uno.
+    </p>
+  </div>
 
-  <GraphLegend />
+  {
+    /*
+    A workflow with no states is the one moment the screen must teach rather
+    than display: there is no graph to read and no row to edit, so the invitation
+    IS the interface. It names the first move instead of describing the feature.
+  */
+  }
+  <div class="start card" data-empty-arm hidden={stateCount > 0}>
+    <p class="h2">Este ciclo de vida todavía no tiene estados</p>
+    <p class="body-text">
+      Un ciclo se construye en dos pasos: primero los estados por los que pasa
+      el trabajo, después los movimientos permitidos entre ellos. Empieza por el
+      estado en el que entra todo lo nuevo.
+    </p>
+    <button
+      class="btn btn-primary"
+      type="button"
+      data-wf-action="add-state"
+      data-ops-lead
+      hidden
+      data-focus-key={`wf:${workflow.code}:add-first-state`}
+    >
+      <Icon name="plus" size={16} />
+      Añadir el primer estado
+    </button>
+  </div>
+
+  <div data-graph-arm hidden={stateCount === 0}>
+    <StateGraph
+      nodes={workflow.nodes}
+      arcs={workflow.arcs}
+      width={workflow.width}
+      height={workflow.height}
+      arrowId={workflow.arrowId}
+    />
+    <GraphLegend />
+  </div>
+
+  <StateTable name={workflow.name} states={workflow.states} />
 
   <TransitionTable
     name={workflow.name}
@@ -107,6 +250,13 @@ const moveCount = workflow.rows.length;
     terminalLabels={workflow.terminalLabels}
     isolatedLabels={workflow.isolatedLabels}
   />
+
+  {/* One engagement-type chip, cloned when a binding changes. */}
+  <template data-template="engagement-chip">
+    <li data-engagement-type>
+      <span class="chip" lang="es" data-field="type-label"></span>
+    </li>
+  </template>
 </section>
 
 <style>
@@ -123,6 +273,47 @@ const moveCount = workflow.rows.length;
     grid-template-columns: minmax(0, 1fr);
     gap: var(--space-4);
     min-width: 0;
+  }
+
+  .workflow > * {
+    min-width: 0;
+  }
+
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .build,
+  .administer {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  /* The administrative pair steps away from the building pair. */
+  .administer {
+    margin-left: auto;
+  }
+
+  .start {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-6);
+  }
+
+  .start[hidden] {
+    display: none;
+  }
+
+  @media (max-width: 767px) {
+    .administer {
+      margin-left: 0;
+    }
   }
 
   .head {
@@ -154,9 +345,30 @@ const moveCount = workflow.rows.length;
     letter-spacing: 0;
   }
 
-  .empty-graph {
-    padding: var(--space-5);
-    border-radius: var(--radius-card);
-    background-color: var(--pozo);
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .hint {
+    flex-basis: 100%;
+    color: var(--tinta-media);
+  }
+
+  /* Author rules beat the user agent's `[hidden] { display: none }`: the flex and grid
+     containers below would otherwise render their hidden children. */
+  .actions[hidden],
+  .hint[hidden],
+  .marks .chip[hidden],
+  [data-graph-arm][hidden] {
+    display: none;
+  }
+
+  /* An empty `<li>` still takes the list's gap, which would leave a hole where a hidden mark
+     is. Collapsing the item, not just the chip, is what keeps the row tight. */
+  .marks li:has(> .chip[hidden]) {
+    display: none;
   }
 </style>

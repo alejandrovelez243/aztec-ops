@@ -24,6 +24,7 @@ a new one — an ADR is never edited to match code that drifted.
 | [0009](0009-celery-beat-for-scheduling.md) | Celery Beat for scheduling, not for the bus | Accepted 2026-07-28, transport section superseded by 0010 |
 | [0010](0010-celery-as-the-bus.md) | Celery as the bus, Redis Streams removed | Accepted 2026-07-28 |
 | [0011](0011-risk-flags-computed-on-read.md) | Risk flags computed on read, not stored | Accepted 2026-07-28 |
+| [0012](0012-soft-delete-for-tasks.md) | Soft delete for tasks, scoped at the application layer | Accepted 2026-07-29 |
 
 ## Writing a new one
 

@@ -22,7 +22,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.shared.refs import ActorRef, StateRef, TaxonomyRef
-from apps.workflow.domain.views import TransitionOption
+from apps.workflow.domain.views import TransitionOption, WorkflowRef
 
 
 class DependencyRef(BaseModel):
@@ -45,6 +45,11 @@ class TaskView(BaseModel):
 
     ``state`` carries its ``category`` so the board can group by "blocked" without holding a list
     of state codes that two workflows could both own (DATA_MODEL §12).
+
+    ``is_archived`` is ``False`` on every row of an ordinary list, because the list is scoped to
+    the unremoved tasks. It travels anyway, and defaults to ``False`` rather than being omitted,
+    so the one screen that asks for removed tasks renders them as removed instead of inferring it
+    from the filter it happened to send (ADR 0012).
     """
 
     model_config = ConfigDict(frozen=True)
@@ -57,6 +62,7 @@ class TaskView(BaseModel):
     due_date: date | None = None
     is_overdue: bool = False
     last_progress: str = ""
+    is_archived: bool = False
     dependencies: tuple[DependencyRef, ...] = ()
 
 
@@ -149,6 +155,15 @@ class TaskDetailView(BaseModel):
 
     ``is_overdue`` is derived from ``due_date`` against the instant the request was served, never
     read from a column, for the same reason it is on :class:`TaskView`.
+
+    ``is_archived`` is always ``False`` on the ``GET`` route — a removed task is a 404 there
+    (ADR 0012) — and is the point of the field on the ``PATCH`` response, which reports the task as
+    it now stands whichever way the removal flag was just moved.
+
+    ``workflow`` names the graph ``state`` and ``transitions`` both come from, and whether an ops
+    lead chose it for this task. Two tasks of the same project can legitimately follow different
+    lifecycles, so a screen showing only the state would leave an operator unable to say why the
+    buttons differ from the task beside it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -161,9 +176,11 @@ class TaskDetailView(BaseModel):
     assignee: ActorRef | None = None
     priority: TaxonomyRef
     state: StateRef
+    workflow: WorkflowRef
     due_date: date | None = None
     is_overdue: bool = False
     last_progress: str = ""
+    is_archived: bool = False
     dependencies: tuple[DependencyRef, ...] = ()
     transitions: tuple[TransitionOption, ...] = ()
     notes: tuple[NoteView, ...] = ()

@@ -22,9 +22,21 @@
 
 import { cloneTemplate, setField } from "../../lib/dom/patch";
 import { mountMenus } from "../../lib/ui/menu";
-import type { MultiOption } from "./MultiSelect.astro";
 
-export type { MultiOption };
+/**
+ * One choosable value. `value` is what is sent, `label` what is read.
+ *
+ * Declared here rather than in the component, because the runtime is the half
+ * that both surfaces import: an `.astro` module cannot be type-imported from a
+ * plain `.ts` one, and a second copy of this shape is a second thing to keep
+ * true.
+ */
+export interface MultiOption {
+  /** Business code, sent to the API and shown on the chip. */
+  readonly value: string;
+  /** Human name of that value, in the operator's language. */
+  readonly label: string;
+}
 
 const SELECTOR = {
   control: "[data-multi-select]",
@@ -42,9 +54,19 @@ const SELECTOR = {
  * Wires every `[data-multi-select]` inside `container`.
  *
  * @param container - Delegation root; must outlive the controls inside it.
+ * @param onChange - Called with the control after the *operator* added or
+ *   removed a chip, and only then: a surface that saves on every change — the
+ *   task header, where the chips are the task's prerequisites — hangs its write
+ *   here. A repaint through {@link setMultiValues} deliberately does not call
+ *   it, because a paint answering the server that would re-post to the server is
+ *   an infinite exchange. Omit it and the control is a form field that is read
+ *   at submit time, which is what the create dialog does.
  * @returns The teardown; drops the listeners and closes any open panel.
  */
-export function mountMultiSelects(container: HTMLElement): () => void {
+export function mountMultiSelects(
+  container: HTMLElement,
+  onChange?: (control: HTMLElement) => void,
+): () => void {
   const controller = new AbortController();
   const { signal } = controller;
 
@@ -54,6 +76,7 @@ export function mountMultiSelects(container: HTMLElement): () => void {
     fill: () => Promise.resolve(),
     choose: (control, item) => {
       choose(control, item);
+      onChange?.(control);
       return Promise.resolve();
     },
   });
@@ -69,6 +92,7 @@ export function mountMultiSelects(container: HTMLElement): () => void {
       const chip = button.closest<HTMLElement>(SELECTOR.chip);
       if (control === null || chip === null) return;
       remove(control, chip);
+      onChange?.(control);
     },
     { signal },
   );
@@ -132,6 +156,53 @@ export function setMultiOptions(
   sync(control);
 }
 
+/**
+ * Makes the chosen set exactly `values`, in that order, leaving the options
+ * alone.
+ *
+ * For the surfaces where the set is a *stored* value rather than a form answer:
+ * the task header seeds its prerequisites with this and repaints with it after
+ * every write and every `task.updated`, so an edit made here and one made by a
+ * colleague leave the control identical.
+ *
+ * A value the panel does not offer still becomes a chip. That is not a leniency
+ * but the whole point on this surface: a prerequisite recorded as prose, or one
+ * naming a task that fell outside the page of options this screen read, is part
+ * of the set — dropping it from the control would make the very next save delete
+ * it from the record, silently, on behalf of an operator who never touched it.
+ *
+ * **A no-op when the set already reads that way**, which is the reason for the
+ * comparison up front rather than an unconditional rebuild: the chips carry the
+ * focus after a removal, and rebuilding them under the operator's cursor when the
+ * server merely confirmed what they did would throw a keyboard user to `<body>`.
+ */
+export function setMultiValues(
+  control: HTMLElement,
+  values: readonly string[],
+): void {
+  const current = multiValues(control);
+  if (
+    current.length === values.length &&
+    current.every((value, index) => value === values[index])
+  ) {
+    return;
+  }
+
+  clearMultiSelect(control);
+  for (const value of values) {
+    if (value === "") continue;
+    const item = control.querySelector<HTMLButtonElement>(
+      `${SELECTOR.item}[data-value="${CSS.escape(value)}"]`,
+    );
+    if (item === null) {
+      appendChip(control, value);
+      continue;
+    }
+    choose(control, item);
+  }
+  sync(control);
+}
+
 /** Removes every chip and re-offers every option. */
 export function clearMultiSelect(control: HTMLElement): void {
   const chips = control.querySelector<HTMLElement>(SELECTOR.chips);
@@ -145,25 +216,41 @@ export function clearMultiSelect(control: HTMLElement): void {
   sync(control);
 }
 
-/** Turns one offered option into a chip. */
+/** Turns one offered option into a chip, and takes it off the panel. */
 function choose(control: HTMLElement, item: HTMLElement): void {
   const value = item.dataset["value"] ?? "";
   if (value === "") return;
-  const chips = control.querySelector<HTMLElement>(SELECTOR.chips);
-  if (chips === null) return;
-
-  const chip = cloneTemplate(control, "multi-chip");
-  if (chip === null) return;
-  chip.dataset["value"] = value;
-  setField(chip, "chip-code", value);
-  // The code, spoken as part of the remove button's name, so "Quitar" is never
-  // read out on its own beside four identical siblings.
-  setField(chip, "chip-remove-code", value);
-  chips.appendChild(chip);
+  if (!appendChip(control, value)) return;
 
   if (item instanceof HTMLButtonElement) item.disabled = true;
   item.hidden = true;
   sync(control);
+}
+
+/**
+ * Adds one chip for `value`, and reports whether it could.
+ *
+ * Split from {@link choose} because a chip does not always come from an option:
+ * {@link setMultiValues} paints a stored set whose entries may name nothing the
+ * panel offers, and a second copy of this markup written there is how the two
+ * would start disagreeing about what a chip is.
+ */
+function appendChip(control: HTMLElement, value: string): boolean {
+  const chips = control.querySelector<HTMLElement>(SELECTOR.chips);
+  if (chips === null) return false;
+
+  const chip = cloneTemplate(control, "multi-chip");
+  if (chip === null) return false;
+  chip.dataset["value"] = value;
+  setField(chip, "chip-code", value);
+  // Long values are ellipsised by the chip's own styles, so the full text has to
+  // stay reachable: a prerequisite recorded as prose is a whole sentence.
+  chip.title = value;
+  // The code, spoken as part of the remove button's name, so "Quitar" is never
+  // read out on its own beside four identical siblings.
+  setField(chip, "chip-remove-code", value);
+  chips.appendChild(chip);
+  return true;
 }
 
 /** Takes one chip back off, and re-offers what it named. */

@@ -16,16 +16,17 @@
  * (`docs/standards/PATTERNS_FRONTEND.md` §8). This is the same discipline the
  * project's transition bar keeps, for the same reason.
  *
- * Rows are patched in place and new ones are appended; nothing is removed,
- * because the API has no task deletion and a row vanishing under an operator's
- * cursor would be a bug, not a feature.
+ * **Removing.** Rows are patched in place, new ones are appended, and — since
+ * `DELETE /api/v1/tasks/{code}` exists — strays are reconciled away against the
+ * fresh read. That last part is guarded on the read being *complete*
+ * (`items.length === count`): this table renders one page, and reconciling a
+ * partial one would delete every row that merely fell off it. When the guard
+ * does not hold the table keeps its extra rows, which is the harmless failure.
  */
 
-import {
-  getProjectTasks,
-  postProjectTask,
-  postTaskTransition,
-} from "../../lib/api/client";
+import { navigate } from "astro:transitions/client";
+
+import { getProjectTasks, postTaskTransition } from "../../lib/api/client";
 import { shake } from "../../lib/motion/spring";
 import { subscribe } from "../../lib/stream/store";
 import { toast } from "../../lib/toast";
@@ -37,22 +38,24 @@ import {
   pulse,
   readString,
   setField,
-  setPending,
 } from "./dom";
-import { mountMenus } from "../../lib/ui/menu";
-import {
-  CREATE_INCOMPLETE,
-  failureCopy,
-  joinFields,
-  TASK_MOVES_UNAVAILABLE,
-} from "./messages";
+import { closeMenu, mountMenus } from "../../lib/ui/menu";
+import { failureCopy, TASK_MOVES_UNAVAILABLE } from "./messages";
+import { mountCreateTask } from "./create-task";
+import type { MultiOption } from "../ui/multi-select";
 import { mountOwnerMenus, renderOwnerControl } from "./owner-menu";
+import { mountPriorityMenus, renderPriorityControl } from "./priority-menu";
 import { askReason } from "./reason-dialog";
 import { markEvent } from "./stale";
 import { taskMoves, type TaskMove } from "./task-moves";
-import { submitTaskDueDate, submitTaskOwner } from "../tasks/task-writes";
+import {
+  submitTaskDueDate,
+  submitTaskOwner,
+  submitTaskPriority,
+  submitTaskRemoval,
+} from "../tasks/task-writes";
 import { mountDateFields, renderDateControl } from "../ui/date-field";
-import { stateTone, taxonomyTone } from "./tone";
+import { stateTone } from "./tone";
 import type { TaskItem } from "../../lib/api/domain";
 
 /** Topics that can change something a task row shows. */
@@ -60,10 +63,24 @@ const WATCHED: readonly Topic[] = [
   "task.created",
   "task.updated",
   "task.state_changed",
+  // One topic for both directions, carrying `is_archived`. A colleague's
+  // removal — and their undo — therefore reaches this table live, which matters
+  // more here than for any other change: a row nobody can act on any more is
+  // worse than a stale label.
+  "task.archive_changed",
 ];
 
 /** How long a submitted move waits for the stream before trusting the POST. */
 const STREAM_CONFIRM_MS = 8_000;
+
+/**
+ * Rows per re-read, sent explicitly rather than left to the server's default.
+ *
+ * It mirrors what the page's first paint asked for, so the island reads the same
+ * page it is patching. Sending it by hand is what keeps the reconciliation guard
+ * honest: a silent default is a ceiling nobody notices moving.
+ */
+const TASKS_PAGE_SIZE = 50;
 
 /** A move the server accepted and the stream has not yet confirmed. */
 interface PendingMove {
@@ -84,6 +101,19 @@ export function mountTasks(root: HTMLElement): () => void {
 
   /** Moves awaiting confirmation, keyed by task code. */
   const pending = new Map<string, PendingMove>();
+
+  /**
+   * Drops a task's pending move without settling it.
+   *
+   * Called when its row leaves the table: the timer would otherwise fire against
+   * a detached control, and `settle` would toast about a task that is gone.
+   */
+  const forget = (taskCode: string): void => {
+    const move = pending.get(taskCode);
+    if (move === undefined) return;
+    pending.delete(taskCode);
+    window.clearTimeout(move.timer);
+  };
 
   /** Paints the answer for one task and releases its control, once. */
   const settle = (taskCode: string, source: "stream" | "timeout"): void => {
@@ -124,7 +154,7 @@ export function mountTasks(root: HTMLElement): () => void {
       if (pending.has(envelope.entity.id)) settle(envelope.entity.id, "stream");
       if (refreshing) return;
       refreshing = true;
-      void refresh(root, code, envelope.occurred_at).finally(() => {
+      void refresh(root, code, envelope.occurred_at, forget).finally(() => {
         refreshing = false;
       });
     }),
@@ -164,7 +194,7 @@ export function mountTasks(root: HTMLElement): () => void {
         // A refused move means this row was stale about legality; re-read
         // rather than patch, so the menu matches reality again.
         if (result.error.kind === "transition_not_allowed") {
-          void refresh(root, code, new Date().toISOString());
+          void refresh(root, code, new Date().toISOString(), forget);
         }
         return;
       }
@@ -179,14 +209,70 @@ export function mountTasks(root: HTMLElement): () => void {
     },
   });
 
+  /**
+   * The row's overflow: open the task, or remove it.
+   *
+   * Both items are `<button>`s because that is what `menu.ts` walks, so "Abrir"
+   * navigates here rather than being an `<a>`. `navigate()` from the client
+   * router, never `window.location`: a full reload would tear down the stream
+   * connection and every island on the page to reach a route the router already
+   * serves.
+   */
+  const offRowMenus = mountMenus(root, "[data-row-menu]", {
+    fill: () => Promise.resolve(),
+    choose: async (control, item) => {
+      const taskCode = control.dataset["code"] ?? "";
+      if (taskCode === "") return;
+
+      if (item.dataset["rowAction"] === "open") {
+        await navigate(taskHref(taskCode));
+        return;
+      }
+      if (item.dataset["rowAction"] !== "remove") return;
+
+      await submitTaskRemoval(taskCode, async () => {
+        await refresh(root, code, new Date().toISOString(), forget);
+      });
+    },
+  });
+
   const offOwners = mountOwnerMenus(root, submitTaskOwner);
+  const offPriorities = mountPriorityMenus(root, submitTaskPriority);
   const offDates = mountDateFields(root, submitTaskDueDate);
-  const offCreate = mountCreateTask(root, code);
+
+  /**
+   * The create dialog, shared with the board (`create-task.ts`).
+   *
+   * The table knows its project from the markup and its dependency options from
+   * the rows it has on screen — including the ones the stream appended after the
+   * first paint, which is why they are read on every open rather than captured
+   * here.
+   */
+  const opener = root.querySelector<HTMLButtonElement>(
+    "[data-action='open-create-task']",
+  );
+  const offCreate =
+    opener === null || code === ""
+      ? () => {}
+      : mountCreateTask({
+          opener,
+          projectCode: () => code,
+          dependencies: () => dependencyOptions(root),
+          onCreated: async () => {
+            // Refreshed rather than cloned from the response: `refresh` is the
+            // one place that also moves the tab count and flips the empty arm,
+            // and the `task.created` envelope that follows is a no-op under
+            // `isFresher`.
+            await refresh(root, code, new Date().toISOString(), forget);
+          },
+        });
 
   return () => {
     for (const off of offs) off();
     offMoves();
+    offRowMenus();
     offOwners();
+    offPriorities();
     offDates();
     offCreate();
     for (const move of pending.values()) window.clearTimeout(move.timer);
@@ -205,6 +291,17 @@ function moveLabel(item: HTMLElement): string {
     item.querySelector<HTMLElement>("[data-field='move-label']")?.textContent ??
     ""
   ).trim();
+}
+
+/**
+ * Where a task's own screen lives.
+ *
+ * Duplicated from `TasksTable.astro`'s frontmatter deliberately: that copy runs
+ * on the server and this one in the browser, and the two builds cannot share a
+ * value without one of them importing the other's module.
+ */
+function taskHref(taskCode: string): string {
+  return `/tasks/${encodeURIComponent(taskCode)}`;
 }
 
 /** The rendered row for one task code, or `null` when it is not on screen. */
@@ -236,13 +333,24 @@ function setMovePending(control: HTMLElement, isPending: boolean): void {
   if (spinner !== null) spinner.hidden = !isPending;
 }
 
-/** Re-reads the tasks and patches the rows that changed. */
+/**
+ * Re-reads the tasks, patches the rows that changed and drops the ones that are
+ * gone.
+ *
+ * @param root - The element carrying `data-tasks`.
+ * @param code - The project whose tasks are being read.
+ * @param occurredAt - The freshness floor for the patch; a row already stamped
+ *   at or after this is left alone.
+ * @param forget - Releases a removed task's pending move, so its timer cannot
+ *   fire against a detached control.
+ */
 async function refresh(
   root: HTMLElement,
   code: string,
   occurredAt: string,
+  forget: (taskCode: string) => void,
 ): Promise<void> {
-  const result = await getProjectTasks(code);
+  const result = await getProjectTasks(code, { page_size: TASKS_PAGE_SIZE });
   if (!result.ok) return;
 
   const body = root.querySelector<HTMLElement>("[data-task-rows]");
@@ -266,6 +374,21 @@ async function refresh(
   }
 
   const count = result.data.count;
+
+  // Only a complete read can say a row is gone. On a partial page the rows
+  // beyond it are absent because of paging, not because anybody removed them.
+  if (result.data.items.length === count) {
+    const live = new Set(result.data.items.map((task) => task.code));
+    for (const row of [
+      ...body.querySelectorAll<HTMLElement>("[data-task-row]"),
+    ]) {
+      const rowCode = row.dataset["code"] ?? "";
+      if (rowCode === "" || live.has(rowCode)) continue;
+      forget(rowCode);
+      removeRow(row);
+    }
+  }
+
   const tabs = document.querySelector<HTMLElement>("[data-tabs]");
   if (tabs !== null) setField(tabs, "tasks-count", String(count));
 
@@ -273,6 +396,41 @@ async function refresh(
   const wrap = root.querySelector<HTMLElement>("[data-tasks-wrap]");
   if (empty !== null) empty.hidden = count > 0;
   if (wrap !== null) wrap.hidden = count === 0;
+}
+
+/**
+ * Takes one row off the table without leaving anything of it behind.
+ *
+ * Three things outlive a naive `remove()`, and each is a real defect:
+ *
+ * - `menu.ts` holds a module-global reference to the open panel. Removing its
+ *   host leaves a `position: fixed` panel floating beside nothing, still
+ *   answering clicks for a task that is gone — so the menu is closed first,
+ *   unconditionally: closing an already-closed menu is free.
+ * - Focus. Removing the element that holds `document.activeElement` drops focus
+ *   to `<body>`, which sends a keyboard operator back to the top of the page
+ *   mid-gesture. It is handed to the next row's kebab instead — the previous
+ *   row's when the last one went — so the operator stays where they were.
+ * - The row's own controls are delegated, so nothing else needs unmounting.
+ */
+function removeRow(row: HTMLElement): void {
+  closeMenu(false);
+
+  const active = document.activeElement;
+  const heldFocus = active instanceof Node && row.contains(active);
+  const successor =
+    row.nextElementSibling instanceof HTMLElement
+      ? row.nextElementSibling
+      : row.previousElementSibling instanceof HTMLElement
+        ? row.previousElementSibling
+        : null;
+
+  row.remove();
+
+  if (!heldFocus) return;
+  successor
+    ?.querySelector<HTMLButtonElement>("[data-row-menu] [data-menu-trigger]")
+    ?.focus();
 }
 
 /** Writes one task's current values into its row. */
@@ -284,7 +442,17 @@ function patchRow(
 ): void {
   setField(row, "task-title", task.title);
   const link = row.querySelector<HTMLAnchorElement>("[data-task-link]");
-  if (link !== null) link.href = `/tasks/${encodeURIComponent(task.code)}`;
+  if (link !== null) link.href = taskHref(task.code);
+
+  // A cloned row carries the template's empty code; the overflow has to learn
+  // which task it acts on before it can be opened, let alone used to remove one.
+  const rowMenu = row.querySelector<HTMLElement>("[data-row-menu]");
+  if (rowMenu !== null) {
+    rowMenu.dataset["code"] = task.code;
+    rowMenu
+      .querySelector<HTMLButtonElement>("[data-menu-trigger]")
+      ?.setAttribute("aria-label", `Acciones de ${task.title}`);
+  }
 
   const chip = row.querySelector<HTMLElement>("[data-state-chip]");
   if (chip !== null) {
@@ -293,10 +461,13 @@ function patchRow(
     chip.dataset.category = task.state.category;
   }
 
-  const priorityChip = row.querySelector<HTMLElement>("[data-priority-chip]");
-  if (priorityChip !== null) {
-    applyTone(priorityChip, taxonomyTone(task.priority.color));
-    setField(priorityChip, "priority-label", task.priority.label);
+  // The chip is a picker now, so it is repainted through the control's own
+  // painter: a priority this row set and one a colleague set must leave the
+  // trigger *and* the ticked option reading the same thing.
+  const priority = row.querySelector<HTMLElement>("[data-priority-control]");
+  if (priority !== null) {
+    priority.dataset["code"] = task.code;
+    renderPriorityControl(priority, task.priority);
   }
 
   const dueControl = row.querySelector<HTMLElement>("[data-date-control]");
@@ -402,234 +573,22 @@ function patchDependencies(
 }
 
 /**
- * Wires the "Crear tarea" modal: opens it, operates its controls, submits it.
+ * The project's tasks as dependency options for the create dialog.
  *
- * The options are rendered by the server (`CreateTaskDialog`), so there is
- * nothing to fetch here and no moment where the operator faces an empty picker.
- * What this owns is the three controls that are **not** form fields: the two
- * `MenuSelect`s and the `DateField` report a choice through the DOM, not through
- * a `name`, so their values are read off `data-value` and `FormData` is left to
- * the two real inputs.
- *
- * The date's submit is deliberately local. Every other `DateField` on this
- * screen PATCHes the aggregate it names; here the task does not exist yet, so
- * the write is a repaint and the value waits in the DOM until the POST carries
- * it. That is also why the dialog lives outside `[data-tasks]` — the row-level
- * `mountDateFields` is delegated and would otherwise answer these clicks too.
+ * Read from the rendered rows rather than from a prop: the rows are the same
+ * list the server sent, plus whatever the stream appended since, so a task
+ * created a minute ago can already be depended on. `<template>` content is a
+ * separate fragment, so the empty row template below is not offered as a task.
  */
-function mountCreateTask(root: HTMLElement, projectCode: string): () => void {
-  const opener = root.querySelector<HTMLButtonElement>(
-    "[data-action='open-create-task']",
-  );
-  const dialog = document.querySelector<HTMLDialogElement>(
-    "[data-create-task-dialog]",
-  );
-  if (opener === null || dialog === null || projectCode === "") return () => {};
-
-  const form = dialog.querySelector<HTMLFormElement>("[data-create-task-form]");
-  if (form === null) return () => {};
-
-  const controller = new AbortController();
-  const { signal } = controller;
-
-  // What the server chose, so "reset" means "back to the offered default"
-  // rather than "back to whatever was picked last time".
-  const defaults = new Map<HTMLElement, string>();
-  for (const control of menuControls(dialog)) {
-    defaults.set(control, control.dataset.value ?? "");
-  }
-
-  const releaseMenus = mountMenus(dialog, "[data-menu-select]", {
-    // Server-rendered; the panel is already correct when it opens.
-    fill: () => Promise.resolve(),
-    choose: (control, item) => {
-      chooseMenuOption(control, item);
-      return Promise.resolve();
+function dependencyOptions(root: HTMLElement): readonly MultiOption[] {
+  return [...root.querySelectorAll<HTMLElement>("[data-task-row]")].flatMap(
+    (row) => {
+      const value = row.dataset["code"] ?? "";
+      const label = (
+        row.querySelector<HTMLElement>("[data-field='task-title']")
+          ?.textContent ?? ""
+      ).trim();
+      return value === "" ? [] : [{ value, label }];
     },
-  });
-
-  const releaseDates = mountDateFields(dialog, (control, value) => {
-    renderDateControl(control, value);
-    return Promise.resolve();
-  });
-
-  opener.addEventListener(
-    "click",
-    () => {
-      resetCreateForm(dialog, form, defaults);
-      dialog.showModal();
-      form.querySelector<HTMLInputElement>("[name='title']")?.focus();
-    },
-    { signal },
   );
-
-  dialog.addEventListener(
-    "click",
-    (event) => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      if (target.closest("[data-action='close-create']") !== null) {
-        dialog.close();
-      }
-    },
-    { signal },
-  );
-
-  form.addEventListener(
-    "submit",
-    (event) => {
-      event.preventDefault();
-      void submitCreate(root, dialog, form, projectCode);
-    },
-    { signal },
-  );
-
-  return () => {
-    controller.abort();
-    releaseMenus();
-    releaseDates();
-    if (dialog.open) dialog.close();
-  };
-}
-
-/** Every `MenuSelect` of the create dialog, in the order it renders them. */
-function menuControls(dialog: HTMLDialogElement): readonly HTMLElement[] {
-  return [...dialog.querySelectorAll<HTMLElement>("[data-menu-select]")];
-}
-
-/**
- * Paints a `MenuSelect`'s choice, which is also how it stores it.
- *
- * The control has no hidden input: `data-value` on the wrapper *is* the field,
- * and the trigger's label and the ticks are what the operator reads back. All
- * three move together here so a chosen value can never disagree with the word
- * beside it.
- */
-function chooseMenuOption(control: HTMLElement, item: HTMLElement): void {
-  control.dataset.value = item.dataset.value ?? "";
-  setField(control, "menu-current", (item.textContent ?? "").trim());
-
-  for (const option of control.querySelectorAll<HTMLElement>(
-    "[data-menu-item]",
-  )) {
-    const isChosen = option === item;
-    option.setAttribute("aria-checked", String(isChosen));
-    const tick = option.querySelector<HTMLElement>("[data-option-tick]");
-    if (tick !== null) tick.hidden = !isChosen;
-  }
-}
-
-/** The value a `MenuSelect` currently holds, `""` when it holds none. */
-function menuValue(dialog: HTMLDialogElement, facet: string): string {
-  const control = dialog.querySelector<HTMLElement>(
-    `[data-menu-select][data-facet="${CSS.escape(facet)}"]`,
-  );
-  return control?.dataset.value ?? "";
-}
-
-/** The date the dialog's single `DateField` holds, `""` when it holds none. */
-function createDueDate(dialog: HTMLDialogElement): string {
-  const control = dialog.querySelector<HTMLElement>("[data-date-control]");
-  return control?.dataset.value ?? "";
-}
-
-/**
- * Returns the whole dialog to the state the server rendered.
- *
- * Called on every open rather than on close: a submission that failed keeps its
- * words on screen, and the operator who reopens the dialog starts clean.
- */
-function resetCreateForm(
-  dialog: HTMLDialogElement,
-  form: HTMLFormElement,
-  defaults: ReadonlyMap<HTMLElement, string>,
-): void {
-  form.reset();
-  showCreateError(dialog, null);
-
-  for (const [control, value] of defaults) {
-    const item = control.querySelector<HTMLElement>(
-      `[data-menu-item][data-value="${CSS.escape(value)}"]`,
-    );
-    if (item !== null) chooseMenuOption(control, item);
-  }
-
-  const date = dialog.querySelector<HTMLElement>("[data-date-control]");
-  if (date !== null) renderDateControl(date, null);
-}
-
-/** Reads the dialog, posts it, and lets the refresh paint the new row. */
-async function submitCreate(
-  root: HTMLElement,
-  dialog: HTMLDialogElement,
-  form: HTMLFormElement,
-  projectCode: string,
-): Promise<void> {
-  const data = new FormData(form);
-  const title = String(data.get("title") ?? "").trim();
-  const dependsOn = String(data.get("depends_on") ?? "").trim();
-  const priority = menuValue(dialog, "create-priority");
-  const assignee = menuValue(dialog, "create-assignee");
-  const dueDate = createDueDate(dialog);
-
-  // Checked here as well as by `required`, because a title of only spaces
-  // satisfies the browser and would create a task nobody can identify. No
-  // request leaves until both are answered.
-  if (title === "" || priority === "") {
-    showCreateError(dialog, CREATE_INCOMPLETE);
-    return;
-  }
-  showCreateError(dialog, null);
-
-  const button = dialog.querySelector<HTMLButtonElement>(
-    "[data-action='create-task']",
-  );
-  if (button !== null) setPending(button, true);
-
-  const result = await postProjectTask(projectCode, {
-    title,
-    priority,
-    detail: "",
-    description: "",
-    last_progress: "",
-    due_date: dueDate === "" ? null : dueDate,
-    ...(assignee === "" ? {} : { assignee }),
-    ...(dependsOn === "" ? {} : { depends_on: [dependsOn] }),
-  });
-
-  if (button !== null) setPending(button, false);
-
-  if (!result.ok) {
-    // The dialog stays open on every failure: closing it would take the
-    // operator's five answers with it.
-    if (result.error.kind === "validation") {
-      showCreateError(dialog, joinFields(Object.keys(result.error.fields)));
-      return;
-    }
-    const copy = failureCopy(result.error);
-    toast({ kind: "error", title: copy.title, detail: copy.detail });
-    return;
-  }
-
-  dialog.close();
-  // Refreshed rather than cloned from the response: `refresh` is the one place
-  // that also moves the tab count and flips the empty arm, and the
-  // `task.created` envelope that follows is a no-op under `isFresher`.
-  await refresh(root, projectCode, new Date().toISOString());
-  toast({
-    kind: "success",
-    title: "Tarea creada",
-    detail: `${result.data.code} quedó en ${result.data.state.label}.`,
-  });
-}
-
-/** Shows or clears the dialog's inline failure line. */
-function showCreateError(
-  dialog: HTMLDialogElement,
-  message: string | null,
-): void {
-  const line = dialog.querySelector<HTMLElement>("[data-field='create-error']");
-  if (line === null) return;
-  line.hidden = message === null;
-  line.textContent = message ?? "";
 }

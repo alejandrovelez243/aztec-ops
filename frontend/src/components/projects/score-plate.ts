@@ -20,6 +20,13 @@ import { getOperator } from "../../lib/auth/session";
 import { countUp } from "../../lib/motion/spring";
 import { subscribe } from "../../lib/stream/store";
 import { toast } from "../../lib/toast";
+import { mountMenus } from "../../lib/ui/menu";
+import {
+  applyMenuChoice,
+  findMenuSelect,
+  menuSelectValue,
+  setMenuValue,
+} from "../../lib/ui/menu-select";
 import {
   cloneTemplate,
   isFresher,
@@ -33,6 +40,12 @@ import { barWidth, formatContribution, formatScore } from "./format";
 import { failureCopy, signalLabel } from "./messages";
 import { overrideSummary } from "./presentation";
 import type { Override } from "../../lib/api/domain";
+
+/** The picker that chooses between a fixed position and a boost. */
+const MODE_FACET = "override-mode";
+
+/** The shape the dialog opens on, and returns to after a saved adjustment. */
+const DEFAULT_MODE = "position";
 
 /** One breakdown line as the recalculated payload carries it. */
 interface SignalPatch {
@@ -53,7 +66,7 @@ export function mountScorePlate(plate: HTMLElement): () => void {
   const { signal } = controller;
 
   revealOpsControls(plate);
-  wireOverrideDialog(plate, code, signal);
+  const releaseMenus = wireOverrideDialog(plate, code, signal);
 
   const off = subscribe("project.priority.recalculated", (envelope) => {
     if (envelope.entity.id !== code) return;
@@ -67,6 +80,7 @@ export function mountScorePlate(plate: HTMLElement): () => void {
 
   return () => {
     controller.abort();
+    releaseMenus();
     off();
   };
 }
@@ -85,17 +99,21 @@ function revealOpsControls(plate: HTMLElement): void {
   ops.hidden = getOperator()?.isOpsLead !== true;
 }
 
-/** Wires the dialog: open, close, the amount label, and the two writes. */
+/**
+ * Wires the dialog: open, close, the amount label, and the two writes.
+ *
+ * @returns The teardown for the popup grammar the kind picker runs on; the rest
+ *   of the listeners hang off `signal`.
+ */
 function wireOverrideDialog(
   plate: HTMLElement,
   code: string,
   signal: AbortSignal,
-): void {
+): () => void {
   const dialog = plate.querySelector<HTMLDialogElement>(
     "[data-override-dialog]",
   );
   const form = plate.querySelector<HTMLFormElement>("[data-override-form]");
-  const mode = plate.querySelector<HTMLSelectElement>("[data-override-mode]");
 
   plate.addEventListener(
     "click",
@@ -119,18 +137,6 @@ function wireOverrideDialog(
     { signal },
   );
 
-  mode?.addEventListener(
-    "change",
-    () => {
-      setField(
-        plate,
-        "amount-label",
-        mode.value === "boost" ? "Impulso" : "Posición",
-      );
-    },
-    { signal },
-  );
-
   form?.addEventListener(
     "submit",
     (event) => {
@@ -139,6 +145,27 @@ function wireOverrideDialog(
     },
     { signal },
   );
+
+  // The panel is `position: fixed`, which inside a top-layer `<dialog>` still anchors
+  // to the viewport, so the picker needs no stacking work of its own here.
+  return mountMenus(plate, "[data-menu-select]", {
+    fill: () => Promise.resolve(),
+    choose: (control, item) => {
+      applyMenuChoice(control, item);
+      paintAmountLabel(plate, item.dataset["value"] ?? DEFAULT_MODE);
+      return Promise.resolve();
+    },
+  });
+}
+
+/**
+ * Names the number the operator is about to type.
+ *
+ * A position and a boost are read off the same input, so the word beside it is
+ * the only thing that says which one a "3" means.
+ */
+function paintAmountLabel(plate: HTMLElement, mode: string): void {
+  setField(plate, "amount-label", mode === "boost" ? "Impulso" : "Posición");
 }
 
 /**
@@ -155,7 +182,8 @@ async function saveOverride(
   dialog: HTMLDialogElement | null,
 ): Promise<void> {
   const data = new FormData(form);
-  const mode = String(data.get("mode") ?? "position");
+  // Not in the `FormData`: the kind picker is a `MenuSelect`, whose `data-value` is the field.
+  const mode = menuSelectValue(plate, MODE_FACET) || DEFAULT_MODE;
   const amount = Number(data.get("amount"));
   const reason = String(data.get("reason") ?? "").trim();
   const errorLine = plate.querySelector<HTMLElement>(
@@ -192,6 +220,11 @@ async function saveOverride(
 
   dialog?.close();
   form.reset();
+  // `form.reset()` cannot reach the kind picker — it is a button and a panel, not a form control
+  // — so the next adjustment would otherwise open on the kind this one chose.
+  const modeControl = findMenuSelect(plate, MODE_FACET);
+  if (modeControl !== null) setMenuValue(modeControl, DEFAULT_MODE);
+  paintAmountLabel(plate, DEFAULT_MODE);
   applyOverride(plate, result.data.override ?? null);
   const score = result.data.score;
   if (score !== null && score !== undefined) patchValue(plate, score.value);

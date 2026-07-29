@@ -1,28 +1,32 @@
 ---
 /**
- * Every configured move of one workflow, one per row — and the accessible
- * representation of the diagram above it, which is `aria-hidden`.
+ * Every configured move of one workflow, one per row — the accessible representation of the
+ * diagram above it, which is `aria-hidden`, and the place a move is edited from.
  *
- * A real `<table>` with `<th scope="col">`: the column a value belongs to *is*
- * the information here, and "Bloqueada / En progreso / Desbloquear / Sí" read as
- * a flat list says nothing. Below 1024px the rows stack into cards, which means
- * `display: block` on table elements — that strips the implicit table roles in
- * every current engine, so the roles are written back explicitly and the header
- * row is clipped rather than removed, keeping the cell-to-header association a
- * screen reader depends on.
+ * A real `<table>` with `<th scope="col">`: the column a value belongs to *is* the information
+ * here, and "Bloqueada / En progreso / Desbloquear / Sí" read as a flat list says nothing. Below
+ * 1024px the rows stack into cards, which means `display: block` on table elements — that strips
+ * the implicit table roles in every current engine, so the roles are written back explicitly and
+ * the header row is clipped rather than removed, keeping the cell-to-header association a screen
+ * reader depends on.
  *
- * The two notes underneath carry what a list of edges structurally cannot: a
- * state nothing leaves, and a state nothing leaves *or* reaches. Neither appears
- * in any row, and both are precisely the answer somebody who was refused a move
- * came here for.
+ * The two notes underneath carry what a list of edges structurally cannot: a state nothing
+ * leaves, and a state nothing leaves *or* reaches. Neither appears in any row, and both are
+ * precisely the answer somebody who was refused a move came here for.
  *
- * `requires_fields` renders as the raw field identifier in a code chip rather
- * than a translated phrase. A Spanish name per field would be a map keyed by a
- * backend identifier, and the next field added would silently render as nothing
- * (`docs/standards/PATTERNS_FRONTEND.md` §7); the identifier is data, the way a
- * project code is.
+ * **Withdrawn moves are absent, and that is not an omission.** `is_active: false` is how an
+ * operator withdraws a move; publishing it as a row would advertise a move nothing can take. The
+ * consequence for the editor is that restoring one is offered where the collision happens — the
+ * "añadir movimiento" form, whose 409 says the pair already exists — and not from a row nobody
+ * can see.
+ *
+ * `requires_fields` renders as the raw field identifier in a code chip rather than a translated
+ * phrase. A Spanish name per field would be a map keyed by a backend identifier, and the next
+ * field added would silently render as nothing (`docs/standards/PATTERNS_FRONTEND.md` §7); the
+ * identifier is data, the way a project code is.
  */
 import EmptyState from "../ui/EmptyState.astro";
+import Icon from "../ui/Icon.astro";
 import StateTag from "./StateTag.astro";
 import type { EdgeRow } from "./graph";
 // The shared data-table grammar (`src/styles/table.css`): the card is its own
@@ -55,95 +59,207 @@ const COLUMNS = [
 const listing = (labels: readonly string[]): string => labels.join(", ");
 ---
 
-{
-  rows.length === 0 ? (
-    <EmptyState
-      scene="quiet"
-      title="Este flujo no tiene movimientos configurados"
-      description="Ningún estado lleva a otro, así que nada puede cambiar de estado por aquí hasta que se declare una transición en el panel de administración."
-      compact
-    />
-  ) : (
-    <div class="card table-wrap">
-      <table class="data-table moves" role="table">
-        <caption class="small">
-          Movimientos configurados de <b lang="es">{name}</b>: el mismo grafo
-          del diagrama, fila a fila.
-        </caption>
-        <thead role="rowgroup">
-          <tr role="row">
-            {COLUMNS.map((column) => (
-              <th scope="col" role="columnheader" class="label">
-                {column}
-              </th>
-            ))}
+<div class="card table-wrap" data-moves-card hidden={rows.length === 0}>
+  <table class="data-table moves" role="table">
+    <caption class="small">
+      Movimientos configurados de <b lang="es" data-field="moves-caption"
+        >{name}</b
+      >: el mismo grafo del diagrama, fila a fila.
+    </caption>
+    <thead role="rowgroup">
+      <tr role="row">
+        {
+          COLUMNS.map((column) => (
+            <th scope="col" role="columnheader" class="label">
+              {column}
+            </th>
+          ))
+        }
+        <th scope="col" role="columnheader" class="label right col-actions">
+          <span class="visually-hidden">Acciones</span>
+        </th>
+      </tr>
+    </thead>
+    <tbody role="rowgroup" data-move-rows>
+      {
+        rows.map((row) => (
+          <tr
+            role="row"
+            data-move-row
+            data-from={row.fromCode}
+            data-to={row.toCode}
+            data-move-label={row.label}
+            data-requires-reason={String(row.requiresReason)}
+            data-requires-fields={row.requiresFields.join(",")}
+          >
+            <td role="cell" data-label={COLUMNS[0]}>
+              <StateTag
+                hook="row-from"
+                label={row.from.state.label}
+                toneClass={row.from.toneClass}
+                toneStyle={row.from.toneStyle}
+              />
+            </td>
+            <td role="cell" data-label={COLUMNS[1]}>
+              <StateTag
+                hook="row-to"
+                label={row.to.state.label}
+                toneClass={row.to.toneClass}
+                toneStyle={row.to.toneStyle}
+              />
+            </td>
+            <td
+              role="cell"
+              data-label={COLUMNS[2]}
+              lang="es"
+              data-field="row-label"
+            >
+              {row.label}
+            </td>
+            <td role="cell" data-label={COLUMNS[3]}>
+              <span
+                class="chip tone-ambar"
+                data-mark="reason"
+                hidden={!row.requiresReason}
+              >
+                Sí
+              </span>
+              <span
+                class="none"
+                data-mark="no-reason"
+                hidden={row.requiresReason}
+              >
+                No
+              </span>
+            </td>
+            <td role="cell" data-label={COLUMNS[4]}>
+              <span
+                class="none"
+                data-mark="no-fields"
+                hidden={row.requiresFields.length > 0}
+              >
+                Ninguno
+              </span>
+              <span
+                class="fields"
+                data-fields
+                hidden={row.requiresFields.length === 0}
+              >
+                {row.requiresFields.map((field) => (
+                  <code class="chip chip-code">{field}</code>
+                ))}
+              </span>
+            </td>
+            <td role="cell" class="right" data-label="Acciones">
+              <span class="row-actions" data-wf-actions hidden>
+                <button
+                  class="btn btn-secondary btn-small"
+                  type="button"
+                  data-move-action="edit"
+                  data-focus-key={`move:${row.fromCode}->${row.toCode}:edit`}
+                >
+                  <Icon name="pencil" size={14} />
+                  Editar
+                </button>
+                <button
+                  class="btn btn-secondary btn-small"
+                  type="button"
+                  data-move-action="withdraw"
+                  data-focus-key={`move:${row.fromCode}->${row.toCode}:withdraw`}
+                >
+                  <Icon name="trash" size={14} />
+                  Retirar
+                </button>
+              </span>
+            </td>
           </tr>
-        </thead>
-        <tbody role="rowgroup">
-          {rows.map((row) => (
-            <tr role="row">
-              <td role="cell" data-label={COLUMNS[0]}>
-                <StateTag
-                  label={row.from.state.label}
-                  toneClass={row.from.toneClass}
-                  toneStyle={row.from.toneStyle}
-                />
-              </td>
-              <td role="cell" data-label={COLUMNS[1]}>
-                <StateTag
-                  label={row.to.state.label}
-                  toneClass={row.to.toneClass}
-                  toneStyle={row.to.toneStyle}
-                />
-              </td>
-              <td role="cell" data-label={COLUMNS[2]} lang="es">
-                {row.label}
-              </td>
-              <td role="cell" data-label={COLUMNS[3]}>
-                {row.requiresReason ? (
-                  <span class="chip tone-ambar">Sí</span>
-                ) : (
-                  <span class="none">No</span>
-                )}
-              </td>
-              <td role="cell" data-label={COLUMNS[4]}>
-                {row.requiresFields.length === 0 ? (
-                  <span class="none">Ninguno</span>
-                ) : (
-                  <span class="fields">
-                    {row.requiresFields.map((field) => (
-                      <code class="chip chip-code">{field}</code>
-                    ))}
-                  </span>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
-}
+        ))
+      }
+    </tbody>
+  </table>
+</div>
+
+<div class="card empty-card" data-moves-empty hidden={rows.length > 0}>
+  <EmptyState
+    scene="quiet"
+    title="Este flujo no tiene movimientos configurados"
+    description="Ningún estado lleva a otro, así que nada puede cambiar de estado por aquí hasta que se declare una transición."
+    compact
+  />
+</div>
+
+<p class="note small" data-note="terminal" hidden={terminalLabels.length === 0}>
+  <b>Sin salida:</b>{" "}<span lang="es" data-field="terminal-labels"
+    >{listing(terminalLabels)}</span
+  >. Ningún movimiento parte de estos estados, así que no aparecen en la columna
+  «Desde».
+</p>
+
+<p class="note small" data-note="isolated" hidden={isolatedLabels.length === 0}>
+  <b>Sin movimientos:</b>{" "}<span lang="es" data-field="isolated-labels"
+    >{listing(isolatedLabels)}</span
+  >. No entra ni sale ninguna flecha, de modo que estos estados no aparecen en
+  ninguna fila.
+</p>
 
 {
-  terminalLabels.length > 0 && (
-    <p class="note small">
-      <b>Sin salida:</b> <span lang="es">{listing(terminalLabels)}</span>.
-      Ningún movimiento parte de estos estados, así que no aparecen en la
-      columna «Desde».
-    </p>
-  )
+  /* The editor's hands: one move row, cloned so it keeps this component's styles. */
 }
+<template data-template="move-row">
+  <tr role="row" data-move-row>
+    <td role="cell" data-label="Desde">
+      <StateTag
+        hook="row-from"
+        label=""
+        toneClass="tone-piedra"
+        toneStyle={null}
+      />
+    </td>
+    <td role="cell" data-label="Hacia">
+      <StateTag
+        hook="row-to"
+        label=""
+        toneClass="tone-piedra"
+        toneStyle={null}
+      />
+    </td>
+    <td role="cell" data-label="Movimiento" lang="es" data-field="row-label"
+    ></td>
+    <td role="cell" data-label="Motivo obligatorio">
+      <span class="chip tone-ambar" data-mark="reason" hidden>Sí</span>
+      <span class="none" data-mark="no-reason">No</span>
+    </td>
+    <td role="cell" data-label="Campos requeridos">
+      <span class="none" data-mark="no-fields">Ninguno</span>
+      <span class="fields" data-fields hidden></span>
+    </td>
+    <td role="cell" class="right" data-label="Acciones">
+      <span class="row-actions" data-wf-actions hidden>
+        <button
+          class="btn btn-secondary btn-small"
+          type="button"
+          data-move-action="edit"
+        >
+          <Icon name="pencil" size={14} />
+          Editar
+        </button>
+        <button
+          class="btn btn-secondary btn-small"
+          type="button"
+          data-move-action="withdraw"
+        >
+          <Icon name="trash" size={14} />
+          Retirar
+        </button>
+      </span>
+    </td>
+  </tr>
+</template>
 
-{
-  isolatedLabels.length > 0 && (
-    <p class="note small">
-      <b>Sin movimientos:</b> <span lang="es">{listing(isolatedLabels)}</span>.
-      No entra ni sale ninguna flecha, de modo que estos estados no aparecen en
-      ninguna fila.
-    </p>
-  )
-}
+{/* One `requires_fields` chip, cloned per identifier. */}
+<template data-template="field-chip">
+  <code class="chip chip-code"></code>
+</template>
 
 <style>
   caption {
@@ -164,6 +280,35 @@ const listing = (labels: readonly string[]): string => labels.join(", ");
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-1);
+  }
+
+  /* Author rules beat the user agent's `[hidden] { display: none }`, so every element the
+     editor toggles has to say so itself. */
+  .fields[hidden],
+  .chip[hidden],
+  .none[hidden],
+  .note[hidden],
+  .empty-card[hidden],
+  [data-moves-card][hidden],
+  .row-actions[hidden] {
+    display: none;
+  }
+
+  .row-actions {
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
+
+  .btn-small {
+    height: 32px;
+    padding: 0 var(--space-3);
+    font-size: var(--text-small-size);
+  }
+
+  .empty-card {
+    padding: var(--space-5);
   }
 
   .note {
@@ -210,6 +355,7 @@ const listing = (labels: readonly string[]): string => labels.join(", ");
       align-items: baseline;
       gap: var(--space-1) var(--space-3);
       padding: var(--space-1) var(--space-4);
+      text-align: left;
     }
 
     .moves td::before {

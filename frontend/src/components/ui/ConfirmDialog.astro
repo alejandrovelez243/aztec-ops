@@ -1,0 +1,84 @@
+---
+/**
+ * The one place this app asks "¿seguro?" before doing something irreversible.
+ *
+ * Rendered once per surface that can destroy something and driven by
+ * `confirm-dialog.ts`, which is what makes "the same confirmation" a fact rather
+ * than an intention: the copy is the caller's, but the focus behaviour, the
+ * dismissal rules and the shape of the answer cannot diverge between two callers,
+ * because there is only one of these.
+ *
+ * A `<dialog>` and not a div: modality, `Escape`, the focus trap and the backdrop
+ * are the platform's, and destructive intent is exactly what `DESIGN.md` still
+ * grants a modal (`docs/standards/FRONTEND.md` §10).
+ *
+ * Every word inside is filled at open time. Nothing is hardcoded here, because a
+ * confirmation that names the act generically — "¿Confirmar?" — is a confirmation
+ * the operator answers without reading.
+ */
+---
+
+<dialog class="dialog" data-confirm-dialog aria-labelledby="confirm-title">
+  <h2 class="h2" id="confirm-title" data-field="confirm-title"></h2>
+  <p class="small" data-field="confirm-body"></p>
+  <div class="dialog-actions">
+    {
+      /* Cancelar first in the DOM and first in the tab order, and it is what
+        `confirm-dialog.ts` focuses on open: the safe answer is the one a hurried
+        `Enter` should land on. */
+    }
+    <button class="btn btn-secondary" type="button" data-action="cancel-confirm"
+      >Cancelar</button
+    >
+    <button
+      class="btn btn-destructive"
+      type="button"
+      data-action="accept-confirm"
+      data-field="confirm-accept"></button>
+  </div>
+</dialog>
+
+<style>
+  .dialog {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    width: min(420px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+  }
+
+  /* `display: flex` above would otherwise lay out a closed dialog. */
+  .dialog:not([open]) {
+    display: none;
+  }
+
+  .dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  /* The first destructive button in this codebase, so it is scoped here rather
+     than added to `base.css`: a `.btn-danger` in the global sheet invites the
+     next surface to wear the loudest colour we own for a merely important act.
+     `--rojo` is the palette's "no go"; the ink on it is `--carta` for contrast,
+     exactly as `.btn-primary` does over `--cobalto`. */
+  .btn-destructive {
+    background-color: var(--rojo);
+    color: var(--carta);
+  }
+
+  .btn-destructive:hover:not(:disabled) {
+    background-color: var(--rojo-ink);
+  }
+</style>

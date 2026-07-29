@@ -43,12 +43,12 @@ that **reversed an earlier one**; the ADR is where the reversal is argued.
 
 | # | Decision | Why | Rejected alternative, and the cost accepted |
 |---|---|---|---|
-| 1 | Django 6 + django-ninja ([ADR 0001](adr/0001-django-and-django-ninja.md)) | The admin comes free for managing taxonomies, workflows and transitions without writing CRUD; Ninja gives a typed API whose schemas *are* Pydantic models, so a domain value object is returned and serialized without a translation layer | DRF — more ceremony, weaker typing. Cost: two routing systems in one process (ninja under `/api/v1`, Django's own for `/admin/` and `/api/stream`) |
+| 1 | Django 6 + django-ninja ([ADR 0001](adr/0001-django-and-django-ninja.md)) | The admin comes free for managing taxonomies without writing CRUD, and stays the second door on the workflows the product itself now authors (§4.3); Ninja gives a typed API whose schemas *are* Pydantic models, so a domain value object is returned and serialized without a translation layer | DRF — more ceremony, weaker typing. Cost: two routing systems in one process (ninja under `/api/v1`, Django's own for `/admin/` and `/api/stream`) |
 | 2 | PostgreSQL ([ADR 0002](adr/0002-postgresql.md)) | Real transactions for the outbox; `SELECT … FOR UPDATE SKIP LOCKED` for the drain; JSONB for event payloads and score breakdowns | SQLite — no usable skip-locked claim, so the drain would need a lock table |
 | 3 | Transactional outbox, **drained onto Celery** ([ADR 0003](adr/0003-transactional-outbox-with-redis-streams.md), superseded in part by [ADR 0010](adr/0010-celery-as-the-bus.md)) | The event is written in the same transaction as the state change. No dual write, no lost event. A drain task dispatches to a handler registry, so fan-out costs no process and no producer ever names a consumer | Publishing straight from the service — the event vanishes if the broker is down right after commit. **Redis Streams consumer groups** were the original transport and were removed: real consumer groups, but a second job system beside Celery's, with its own retry policy and its own dead-letter story. Cost: at-least-once delivery, so every handler must be idempotent |
 | 4 | SSE, not WebSockets ([ADR 0004](adr/0004-sse-instead-of-websockets.md)) | The flow is one-way, server to client. SSE reconnects on its own, survives proxies, and resumes with `Last-Event-ID` | WebSockets — bidirectionality nothing here needs. Cost: the API must run on ASGI, and the browser cannot set a header on the stream request, which is what forces the access **cookie** (§9) |
 | 5 | Deterministic, versioned prioritization ([ADR 0005](adr/0005-deterministic-versioned-prioritization.md)) | An operational ranking must be auditable and reproducible; every score persists its per-signal reason breakdown | LLM-driven ranking — neither auditable nor reproducible. Cost: the weights are a policy someone has to own, and changing them means a portfolio-wide rebuild |
-| 6 | States, workflows and taxonomies in the database, not enums ([ADR 0006](adr/0006-workflows-and-taxonomies-as-data.md)) | The operation must evolve without a deploy; adding a state is a fixture row | `TextChoices` on the model. Cost: code may only compare against `code` and `category`, never against a label, and that rule has to be enforced at review |
+| 6 | States, workflows and taxonomies in the database, not enums ([ADR 0006](adr/0006-workflows-and-taxonomies-as-data.md)) | The operation must evolve without a deploy; adding a state is a fixture row, an admin form, or — since the operation owns its own lifecycles — a form on `/workflows` (§4.3) | `TextChoices` on the model. Cost: code may only compare against `code` and `category`, never against a label, and that rule has to be enforced at review |
 | 7 | Django fixtures for seed data ([ADR 0007](adr/0007-django-fixtures-for-seed-data.md)) | Built in, versioned in git, deterministic; `loaddata` is one command and reviewers read the data as JSON | A custom xlsx importer in the runtime path. Cost: `loaddata` bypasses `Model.save()`, so business-code sequences need an explicit repair step (§11) |
 | 8 | Astro with islands ([ADR 0008](adr/0008-astro-with-islands.md)) | Most of the product is server-renderable read views with a few genuinely live regions; server render gives the first paint and only those regions hydrate and listen to SSE | A full SPA — a router and a client store shipped for pages that are mostly static reads. Cost: shared client state (the one `EventSource`) lives in a store *outside* the component tree, and every live region is an explicit hydration boundary |
 | 9 | Celery for the schedule **and** the bus ([ADR 0009](adr/0009-celery-beat-for-scheduling.md), [ADR 0010](adr/0010-celery-as-the-bus.md)) | One job system, not two. Beat's `crontab(hour=0, minute=0)` replaces a hand-rolled ticker loop that had to remember the last local date; the same worker drains the outbox, runs every handler and executes the ticks. **Seven application processes became three** | A hand-rolled ticker (in-process date state, wrong after every restart, duplicated by a second replica) and Redis Streams beside Celery. Cost: one worker is one failure domain — isolating a handler later means `--queues` and a routing rule, justified by a measurement |
@@ -221,11 +221,18 @@ What the graph is asserting:
 - **`shared` is a kernel, not a context.** `Page[T]`, ordering resolution and `TaxonomyRef` are
   shapes the API speaks in, owned by no business area. Contexts import it directly and that is
   allowed precisely because it holds no business rule and no model.
-- **The one deliberate exception**, dotted: owner load. Its numerator aggregates `work.Task`; its
-  denominator is a column of `accounts.User`. No single model's manager can carry it without
-  learning about the other context, so it lives in `backend/apps/portfolio/repositories.py` — the
-  context that *consumes* the answer. That module's own docstring says not to tidy it onto a
-  manager. It is the only `repositories.py` in the codebase (§3.3).
+- **The deliberate exceptions**, dotted, and there are exactly two. Both are cross-context
+  *questions* that belong to no single model, and both live in the context that **consumes** the
+  answer rather than the one that owns the rows.
+  - **Owner load**, in `backend/apps/portfolio/repositories.py`. Its numerator aggregates
+    `work.Task`; its denominator is a column of `accounts.User`.
+  - **State occupancy**, in `backend/apps/workflow/repositories.py`: how many `portfolio.Project`
+    and `work.Task` rows are standing on a `WorkflowState`. It is what refuses the retirement of a
+    column somebody is still in, and what publishes `can_retire` on the graph document (`API.md`
+    §2.18); a counter column on the state would be a projection that drifts silently.
+
+  Neither may be tidied onto a manager — doing so is what creates the coupling they exist to
+  prevent — and each module's own docstring says so (§3.3).
 - **`portfolio` and `prioritization` reference each other**, and that is read-side composition, not
   a layering mistake: `prioritization` reads `Project` to assemble signal inputs, and
   `portfolio.services.read_project_detail` calls `read_project_priority` to attach the score and
@@ -237,7 +244,7 @@ What the graph is asserting:
 backend/apps/<context>/
   domain/          # pure. No django.db import. Provable on SimpleTestCase.
   models.py        # persistence + named queries as QuerySet/Manager methods + to_*() projections
-  repositories.py  # rare, one instance in the whole codebase (owner load)
+  repositories.py  # rare. Two in the whole codebase: owner load, and state occupancy
   services/        # one use case per module. Transactional.
   api/             # routers.py + schemas.py. HTTP <-> services. Zero logic.
   handlers.py      # event reactors. The module NAME is fixed.
@@ -376,7 +383,10 @@ public repository, not the demo path.
 
 ### 4.2 Configurable taxonomies (`catalog`)
 
-Anything the operation might want to change without a deploy lives in admin-editable tables. Every
+Anything the operation might want to change without a deploy lives in operator-editable tables.
+Taxonomies are edited in the admin; the workflows of §4.3 are authored from the product itself, and
+the difference is deliberate — a vocabulary is renamed occasionally, a lifecycle is reshaped as the
+operation learns. Every
 taxonomy carries `code` (stable slug — **the only thing code compares against**), `label`, `order`,
 `is_active` and `color`, plus whatever the engine consumes:
 
@@ -412,6 +422,28 @@ A workflow is a directed graph of states.
 **`category` is what the rest of the system reads — never `code`.** "Is it blocked?" and "is it
 closed?" are questions about the category. That is what lets a new state be added as a fixture row
 with zero code changes, on either side.
+
+**Where a workflow is edited: in the product, on `/workflows`.** The graphs, their states, their
+transitions and the engagement types bound to them are authored through
+`POST`/`PATCH`/`DELETE /api/v1/workflows/...` (`docs/API.md` §2.19), because the product's own claim
+is that the operation changes without a deploy — and a lifecycle only reshapeable by somebody
+holding a Django admin account is configurable by engineering, not by the operation. The Django
+admin keeps the same models registered and remains a second door, never the only one.
+
+Three properties keep that safe to expose, and none of them is new:
+
+- **Every write is ops lead only** (`auth=ops_lead`, §9) and writes an `ActivityRecord` under
+  `entity_type: "workflow"`. Reshaping a lifecycle changes how everyone else's work behaves, so it
+  is the same capability that overrules the ranking. Reading the graphs stays open to any
+  authenticated member.
+- **Authoring never deletes.** `DELETE` sets `is_active = False`: states are `PROTECT`ed by every
+  project and task standing on them, and edges are named by the trail and by every event that
+  traversed them. Retiring an occupied state is refused with a `409` that counts what is in the way,
+  and retiring a state withdraws every arrow touching it in the same transaction.
+- **Authoring a graph and obeying it are separate concerns.** Nothing on the authoring routes is
+  read by the transition service, which re-reads `WorkflowTransition` every time it decides.
+  Declaring an edge makes a move *available* from the state it leaves; whether a given record may
+  take it is still computed per record, against its own state, the guard and `requires_fields`.
 
 The seeded `project_default` workflow, which is what the demo exercises:
 
@@ -827,11 +859,19 @@ The stable envelope — full schemas in [`EVENTS.md`](EVENTS.md) §1 and §4:
 `actor` is an `accounts.User.code`, or the literal `system` when the engine or the clock caused the
 change.
 
-Eleven topics, and a topic absent from `ALL_TOPICS` does not exist: `project.created`,
+Fifteen topics, and a topic absent from `ALL_TOPICS` does not exist: `project.created`,
 `project.updated`, `project.state_changed`, `project.priority.recalculated`, `task.created`,
-`task.updated`, `task.state_changed`, `blocker.raised`, `blocker.resolved`, `note.added`,
-`clock.ticked`. Topic names are immutable once released — they are matched by handler subscriptions
-and by the frontend's `EventSource` listeners, so renaming one means emitting both for a release.
+`task.updated`, `task.state_changed`, `task.archive_changed`, `blocker.raised`,
+`blocker.resolved`, `note.added`, `clock.ticked`, `member.created`, `member.updated`,
+`member.activation_changed`. Topic names are immutable once released — they are matched by handler
+subscriptions and by the frontend's `EventSource` listeners, so renaming one means emitting both
+for a release.
+
+Two of them carry a boolean rather than being a pair of topics: `task.archive_changed`
+([ADR 0012](adr/0012-soft-delete-for-tasks.md)) and `member.activation_changed`. Removing and
+restoring, retiring and reinstating, are the same field moving in two directions, and a subscriber
+that had to list both names would handle them identically — which is the shape of the bug the
+first time somebody subscribes to only one.
 
 **The routing contract, which producers must follow.** `apps/events/domain/routing.py` answers the
 two questions every project-scoped handler asks: `project_code_of(envelope)` and
@@ -979,13 +1019,17 @@ open.
   resolve blockers, add notes. "My tickets" is a filter (`Task.objects.assigned_to`), never a
   restriction. Ownership scoping would stop a colleague unblocking a project while its owner is on
   holiday, which is the opposite of what an operational board is for.
-- **Two capabilities require ops lead** (`User.is_ops_lead`, a property over `is_staff`).
+- **Three capabilities require ops lead** (`User.is_ops_lead`, a property over `is_staff`).
   Three routes overrule the engine rather than participate in it:
   `POST /api/v1/projects/{code}/priority-override`, its `DELETE`, and `POST /api/v1/recompute`.
   The per-project `POST /api/v1/projects/{code}/recompute` deliberately does not — recomputing one
   project reproduces what the engine would have concluded anyway.
   Six more decide who is in the operation and what vocabulary describes them: the four
-  `/api/v1/team/members` writes and the two `/api/v1/catalog/roles` writes. Same rule, same class,
+  `/api/v1/team/members` writes and the two `/api/v1/catalog/roles` writes.
+  The authoring routes of §4.3 — every write under `/api/v1/workflows` (`docs/API.md` §2.19) —
+  decide the shape of the operation itself: a lifecycle is the rule everyone else's work obeys, so
+  drawing it is not a wider permission than overruling a ranking, it is the same one. Reading the
+  graphs is not gated at all. Same rule, same class,
   a different phrase in `details.action` — the account trusted to overrule the ranking is the
   account trusted to staff it, but a 403 that said "overriding the ranking" to somebody adding a
   colleague would send them looking for a bug that is not there.

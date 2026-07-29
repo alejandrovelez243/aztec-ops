@@ -106,6 +106,9 @@ class CreateProjectCommand(BaseModel):
     business_value: Decimal | None = None
     currency_code: str = Field(default=DEFAULT_CURRENCY_CODE, min_length=3, max_length=3)
     summary: str = ""
+    #: Long-form Markdown, unbounded because the column is a ``TextField``. The empty default is
+    #: what a project created without one carries; there is no null description.
+    description: str = ""
     next_step: str = Field(default="", max_length=255)
     imported_health: str = Field(default="", max_length=16)
 
@@ -136,6 +139,10 @@ class UpdateProjectCommand(BaseModel):
     business_value: Decimal | None = None
     currency_code: str | None = Field(default=None, min_length=3, max_length=3)
     summary: str | None = None
+    #: Long-form Markdown. Not one of the clearable fields: the column is NOT NULL with an empty
+    #: default, so an explicit ``null`` is not an instruction the domain can honour — clearing a
+    #: description is sending ``""``.
+    description: str | None = None
     next_step: str | None = Field(default=None, max_length=255)
     is_archived: bool | None = None
 

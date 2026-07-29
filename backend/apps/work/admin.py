@@ -99,20 +99,24 @@ class TaskAdmin(admin.ModelAdmin[Task]):
         "workflow_state",
         "assignee",
         "due_date",
+        "is_archived",
         "updated_at",
     )
-    list_filter = ("priority", "workflow_state", "assignee")
+    list_filter = ("priority", "workflow_state", "assignee", "is_archived")
     list_select_related = ("project", "priority", "workflow_state", "assignee")
     search_fields = ("code", "title")
     ordering = ("code",)
     date_hierarchy = "due_date"
     raw_id_fields = ("project", "assignee")
-    readonly_fields = ("created_at", "updated_at")
+    # ``workflow`` is shown and never edited, exactly as ``workflow_state`` is once the task
+    # exists: assigning a lifecycle writes an ``ActivityRecord`` and publishes an event, and an
+    # editable select here would skip both. The write is ``PUT /api/v1/tasks/{code}/workflow``.
+    readonly_fields = ("workflow", "created_at", "updated_at")
     inlines = (TaskDependencyInline, BlockerInline)
     fieldsets = (
         (None, {"fields": ("code", "project", "title", "detail")}),
         ("Assignment", {"fields": ("assignee", "priority", "due_date")}),
-        ("State", {"fields": ("workflow_state", "last_progress")}),
+        ("State", {"fields": ("workflow", "workflow_state", "last_progress", "is_archived")}),
         ("Timestamps", {"fields": ("created_at", "updated_at")}),
     )
 

@@ -26,6 +26,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import connection, models
 from django.db.models import Count, F, Min, Q
 
@@ -39,6 +40,7 @@ from apps.work.domain.views import (
     TaskProjectRef,
     TaskView,
 )
+from apps.workflow.domain.views import WorkflowRef
 from apps.workflow.models import StateCategory
 
 if TYPE_CHECKING:
@@ -80,7 +82,9 @@ TASK_CODE_DIGITS: Final = 2
 
 #: The joins every projection of a task reads. Kept in one bundle so no caller half-populates a
 #: task and then pays for the rest one lazy query at a time.
-TASK_RELATIONS: Final = ("project", "workflow_state", "priority", "assignee")
+#: ``workflow_state__workflow`` is two levels deep because the lifecycle a task follows is the graph
+#: that owns the node it stands on, and :meth:`Task.to_workflow_ref` reads it on every detail.
+TASK_RELATIONS: Final = ("project", "workflow_state__workflow", "priority", "assignee")
 
 
 def _next_business_code(sequence: str, prefix: str) -> str:
@@ -128,6 +132,32 @@ class TaskQuerySet(models.QuerySet["Task"]):
         leaving them lazy turns one read into four.
         """
         return self.select_related(*TASK_RELATIONS)
+
+    def active(self) -> TaskQuerySet:
+        """Narrow to the tasks still in the operation's attention: the ones nobody removed.
+
+        The **scope** of almost every read in the product, and deliberately not folded into
+        :meth:`open`, :meth:`counts` or :meth:`in_board_order`. Those are *definitions* — "open"
+        is a statement about a workflow category and nothing else — and a definition that also
+        carried the scope would apply it twice in ``active().open()`` and, worse, would silently
+        re-apply it in the one place that must not have it. Scope is the caller's decision; a
+        definition is not.
+
+        Removal is a soft delete (ADR 0012): the row, its dependency edges, its notes and its
+        blockers all survive, so this hides a task rather than forgetting it. Three reads are
+        exempt on purpose and each says so where it lives —
+        :meth:`next_code_for`, :meth:`TaskDependencyQuerySet.adjacency` with
+        :meth:`TaskDependencyQuerySet.resolved`, and ``Blocker.objects.for_project``.
+        """
+        return self.filter(is_archived=False)
+
+    def archived(self) -> TaskQuerySet:
+        """Narrow to the tasks that were removed, which is how one is found again to restore it.
+
+        The complement of :meth:`active`, and the reason removal is reversible in the product
+        rather than only in the database: a task nothing can select is a task nobody can put back.
+        """
+        return self.filter(is_archived=True)
 
     def locked(self) -> TaskQuerySet:
         """Row-lock the selected tasks for the rest of the transaction.
@@ -261,6 +291,13 @@ class TaskQuerySet(models.QuerySet["Task"]):
         The numbering is derived from the highest suffix already present rather than from a count,
         so deleting a task never causes the next one to reuse a retired code.
 
+        **Deliberately not scoped by :meth:`active`.** Removed tasks still count here, and that is
+        the whole point of deriving from the maximum: a code is permanent, it is what a published
+        ``task.created`` envelope and every ``ActivityRecord`` about that task already name, and
+        handing ``PRJ-01-T03`` to a new task because the old one was removed would merge two
+        histories in the timeline. ``portfolio.ProjectQuerySet.next_code`` says the same thing
+        about archived projects.
+
         This is *not* collision-proof under concurrency: two simultaneous creations can read the
         same maximum. The unique constraint on ``code`` catches that, and the losing transaction
         rolls back — acceptable while task creation is a single operator clicking a button, and the
@@ -355,6 +392,22 @@ class Task(models.Model):
     workflow_state = models.ForeignKey(
         "workflow.WorkflowState", on_delete=models.PROTECT, related_name="tasks"
     )
+    #: The lifecycle **this task** follows, when an ops lead chose one for it. Null means nobody
+    #: did, and the graph comes from the binding ladder (``Workflow.objects.resolve``); set, it is
+    #: the most specific step of that ladder. A task can therefore run a checklist its siblings in
+    #: the same project do not, which is the point: an exceptional piece of work stops being a
+    #: reason to fork the engagement type every other project shares.
+    #:
+    #: When set it always equals ``workflow_state.workflow``. ``assign_task_workflow`` is the only
+    #: writer and lands the task on a node of the graph it assigns; :meth:`clean` restates the rule
+    #: for the admin, which is the one door that does not go through the service.
+    workflow = models.ForeignKey(
+        "workflow.Workflow",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="tasks",
+    )
     due_date = models.DateField(null=True, blank=True)
     title = models.CharField(max_length=200)
     detail = models.TextField(default="", blank=True)
@@ -364,6 +417,10 @@ class Task(models.Model):
     #: every table row carry a document.
     description = models.TextField(default="", blank=True)
     last_progress = models.CharField(max_length=255, default="", blank=True)
+    #: Removed from the operation's attention without being deleted (ADR 0012). Named after
+    #: ``portfolio.Project.is_archived`` rather than ``is_deleted``, because it is the same fact
+    #: about the same kind of thing and two names for it would eventually mean two behaviours.
+    is_archived = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -378,12 +435,58 @@ class Task(models.Model):
         ]
         indexes = [
             models.Index(fields=["project", "workflow_state"], name="work_task_project_state"),
+            # Every task read in the product is scoped to one project and to the unremoved rows,
+            # so this is the leading pair of the task list, the board and the counts aggregate.
+            models.Index(fields=["project", "is_archived"], name="work_task_project_archived"),
             models.Index(fields=["assignee", "workflow_state"], name="work_task_assignee_state"),
             models.Index(fields=["due_date"], name="work_task_due_date"),
         ]
 
     def __str__(self) -> str:
         return f"{self.code} {self.title}"
+
+    def clean(self) -> None:
+        """Refuse a direct workflow assignment the task's own state contradicts.
+
+        Same rule and same reason as :meth:`apps.portfolio.models.Project.clean`:
+        ``assign_task_workflow`` is the only writer of the pair, so this defends every other path —
+        a shell session, a data migration, a form added later. A task pinned to a graph whose
+        columns it is not standing in has a lifecycle its ``workflow_state`` denies, and no board
+        can draw it and no move can leave it.
+
+        Raises:
+            ValidationError: ``workflow`` is set and is not the graph owning ``workflow_state``.
+        """
+        super().clean()
+        if self.workflow_id is None or self.workflow_state_id is None:
+            return
+        if self.workflow_id != self.workflow_state.workflow_id:
+            raise ValidationError(
+                {
+                    "workflow": (
+                        "This task stands on a state of another workflow. Move it first, or "
+                        "assign the workflow that owns its current state."
+                    )
+                }
+            )
+
+    def to_workflow_ref(self) -> WorkflowRef:
+        """Describe the lifecycle this task follows, and whether somebody chose it.
+
+        Reads the graph off the state the task stands on rather than re-running the binding ladder,
+        for the reason :meth:`apps.portfolio.models.Project.to_workflow_ref` sets out: after a
+        rebinding those two answers differ, and the one that governs the task's buttons is the graph
+        it is actually in. The ``workflow`` column supplies only ``source``.
+
+        Reads ``workflow_state.workflow``; chain :meth:`TaskQuerySet.with_relations`.
+
+        Returns:
+            The graph's code and name, tagged ``DIRECT`` or ``INHERITED``.
+        """
+        graph = self.workflow_state.workflow
+        if self.workflow_id is None:
+            return WorkflowRef.inherited(code=graph.code, name=graph.name)
+        return WorkflowRef.direct(code=graph.code, name=graph.name)
 
     def to_view(self, *, today: date) -> TaskView:
         """Describe this task as the projection the API returns.
@@ -417,6 +520,7 @@ class Task(models.Model):
             due_date=self.due_date,
             is_overdue=self.due_date is not None and self.due_date < today,
             last_progress=self.last_progress,
+            is_archived=self.is_archived,
             dependencies=tuple(edge.to_ref() for edge in self.dependencies.all()),
         )
 
@@ -463,9 +567,11 @@ class Task(models.Model):
                 color=self.priority.color,
             ),
             state=self.workflow_state.to_ref(),
+            workflow=self.to_workflow_ref(),
             due_date=self.due_date,
             is_overdue=self.due_date is not None and self.due_date < today,
             last_progress=self.last_progress,
+            is_archived=self.is_archived,
             dependencies=tuple(edge.to_ref() for edge in self.dependencies.all()),
             transitions=transitions,
             notes=notes,
@@ -475,7 +581,15 @@ class Task(models.Model):
 
 
 class TaskDependencyQuerySet(models.QuerySet["TaskDependency"]):
-    """Reads over the dependency edges, whose only consumer is the pure cycle check."""
+    """Reads over the dependency edges, whose only consumer is the pure cycle check.
+
+    **No method here is scoped by ``Task.is_archived``, on purpose** (ADR 0012). The graph keeps
+    its removed nodes: an edge whose endpoint was removed is still an edge, and dropping it would
+    make the acyclicity check answer differently depending on what is currently hidden — remove
+    the task closing a loop, add the edge that the loop forbade, restore the task, and the
+    invariant the whole ``domain.dependencies`` module exists to hold is gone. A graph that can be
+    tricked by archive-then-restore is not a graph.
+    """
 
     def for_project(self, project: Project | int | str) -> TaskDependencyQuerySet:
         """Narrow to the edges of one project, named by row, primary key or business code.
@@ -488,6 +602,15 @@ class TaskDependencyQuerySet(models.QuerySet["TaskDependency"]):
         if isinstance(project, int):
             return self.filter(task__project_id=project)
         return self.filter(task__project=project)
+
+    def with_target(self) -> TaskDependencyQuerySet:
+        """Join the task each edge points at, for the reads that render or compare its code.
+
+        Without it, deciding whether an edge already says what the caller asked for costs one
+        query per edge — and the one caller that has to decide it, replacing a task's whole
+        prerequisite set, holds every edge of that task at once.
+        """
+        return self.select_related("depends_on")
 
     def resolved(self) -> TaskDependencyQuerySet:
         """Edges that point at a real task, excluding the ones still carrying only prose.
@@ -596,6 +719,12 @@ class BlockerQuerySet(models.QuerySet["Blocker"]):
         """Narrow to the blockers of one project, named by row, primary key or business code.
 
         ``project`` is populated even on a task-level blocker, so this never joins ``Task``.
+
+        **Deliberately not scoped by ``Task.is_archived``** (ADR 0012). A blocker raised against a
+        removed task is still an open impediment on the project: hiding it would let an operator
+        clear a project's ``BLOCKED`` risk flag and lower its blockage signal by removing the task,
+        which is exactly the accounting the blocker table exists to prevent. Clearing an impediment
+        is resolving it, with a reason.
         """
         if isinstance(project, str):
             return self.filter(project__code=project)

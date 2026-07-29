@@ -53,6 +53,7 @@ class ProjectCreateIn(Schema):
     business_value: Decimal | None = Field(default=None, ge=0)
     currency: str = Field(default=DEFAULT_CURRENCY_CODE, min_length=3, max_length=3)
     summary: str = ""
+    description: str = ""
     next_step: str = Field(default="", max_length=255)
 
 
@@ -95,6 +96,13 @@ class TransitionIn(Schema):
 
     to_state: str = Field(min_length=1, max_length=32)
     reason: str = ""
+
+
+# ``WorkflowAssignmentIn`` does not live here either, for the same reason and one more:
+# ``PUT /projects/{code}/workflow`` and ``PUT /tasks/{code}/workflow`` take the identical body, one
+# field naming a ``Workflow.code``. That vocabulary belongs to the workflow context, so the schema
+# does (``apps.workflow.api.schemas``) — two copies of it would be two chances to disagree about the
+# length of a slug neither context owns.
 
 
 # ``NoteIn`` deliberately does not live here. ``POST /projects/{code}/notes`` hangs off a project

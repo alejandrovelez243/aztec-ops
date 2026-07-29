@@ -4,31 +4,38 @@
  * configured move arching over the row when it advances and under it when it
  * goes back.
  *
- * **The drawing is `aria-hidden`.** It is a picture of something the transitions
- * table beside it states in full — a screen reader that walked a hundred bezier
- * paths would learn nothing the table does not say better, and two accessible
- * copies of one graph is two things to keep in agreement.
+ * **The drawing is `aria-hidden`.** It is a picture of something the tables
+ * beside it state in full — a screen reader that walked a hundred bezier paths
+ * would learn nothing the rows do not say better, and two accessible copies of
+ * one graph is two things to keep in agreement. It is also why **no control ever
+ * goes inside it**: a focusable button in an `aria-hidden` subtree is focus
+ * landing somewhere the screen reader refuses to describe, so a state is edited
+ * from its row in the states table, never from its card here.
  *
  * The scroll container around it is *not* hidden, and that is deliberate rather
  * than an oversight. A horizontally scrollable region is keyboard-focusable
- * (Firefox makes it so on its own), and a focusable element inside an
- * `aria-hidden` subtree is the one combination that is worse than either choice:
- * focus lands somewhere the screen reader refuses to describe. So the container
- * keeps a label that says what it holds and where the content really is, and
- * everything inside it is hidden — a keyboard can still scroll the picture, and
- * a reader is pointed at the table instead of walked through the paths.
+ * (Firefox makes it so on its own), so the container keeps a label that says
+ * what it holds and where the content really is, and everything inside it is
+ * hidden — a keyboard can still scroll the picture, and a reader is pointed at
+ * the tables instead of walked through the paths.
  *
- * Geometry arrives already computed (`components/workflows/graph.ts`): this page
- * has no island, so the arcs must line up with the cards on the server's first
- * paint, and the numbers the CSS positions the cards with are the same numbers
- * the SVG drew its paths in.
+ * Geometry arrives already computed (`components/workflows/graph.ts`), so the
+ * arcs line up with the cards on the server's first paint, and the editor
+ * repaints from the same model after a write: the numbers the CSS positions the
+ * cards with are the numbers the SVG drew its paths in, whoever emitted them.
+ *
+ * The two templates at the bottom are the editor's only way to add a card or an
+ * arrow. Cloned rather than built in TypeScript, so a live node carries this
+ * component's scope attribute and its styles — and, for the arrow, so the
+ * `<path>` is parsed inside `<svg>` and is a real SVG element rather than an
+ * unknown HTML tag.
  *
  * The two cases the layout has to survive: a **back edge**, which is why arcs
  * have a side at all, and a **state nothing touches**, which keeps its column
  * and says so on the card rather than quietly vanishing from the picture.
  */
-import { GRAPH } from "./graph";
-import type { ArcView, NodeView, StateRole } from "./graph";
+import { GRAPH, ROLE_NOTE } from "./graph";
+import type { ArcView, NodeView } from "./graph";
 
 export interface Props {
   nodes: readonly NodeView[];
@@ -43,16 +50,6 @@ export interface Props {
 
 const { nodes, arcs, width, height, arrowId } = Astro.props;
 
-/**
- * What a card says about itself when the edge set leaves it stranded. `connected`
- * says nothing: the arrows on the card already speak for it.
- */
-const ROLE_NOTE: Readonly<Record<StateRole, string | null>> = {
-  connected: null,
-  terminal: "sin salida",
-  isolated: "sin movimientos",
-};
-
 /** Joins the custom properties an element needs, dropping the ones it has none of. */
 function styleOf(parts: readonly (string | null)[]): string {
   return parts.filter((part): part is string => part !== null).join(";");
@@ -66,16 +63,17 @@ const canvasStyle = styleOf([
 ]);
 ---
 
-<figure class="graph">
+<figure class="graph" data-graph>
   <div
     class="scroller"
     tabindex="0"
     role="group"
-    aria-label="Diagrama del flujo; los mismos movimientos están en la tabla siguiente"
+    aria-label="Diagrama del flujo; los mismos estados y movimientos están en las tablas siguientes"
   >
-    <div class="canvas" style={canvasStyle} aria-hidden="true">
+    <div class="canvas" data-canvas style={canvasStyle} aria-hidden="true">
       <svg
         class="arcs"
+        data-arcs
         viewBox={`0 0 ${width} ${height}`}
         width={width}
         height={height}
@@ -84,6 +82,7 @@ const canvasStyle = styleOf([
         <defs>
           <marker
             id={arrowId}
+            data-arrow-marker
             viewBox="0 0 10 10"
             refX="9"
             refY="5"
@@ -95,19 +94,21 @@ const canvasStyle = styleOf([
             <path d="M1 1 L9 5 L1 9 Z" fill="currentColor"></path>
           </marker>
         </defs>
-        {
-          arcs.map((arc) => (
-            <path
-              class="arc"
-              d={arc.path}
-              data-direction={arc.direction}
-              marker-end={`url(#${arrowId})`}
-            />
-          ))
-        }
+        <g data-arc-group>
+          {
+            arcs.map((arc) => (
+              <path
+                class="arc"
+                d={arc.path}
+                data-direction={arc.direction}
+                marker-end={`url(#${arrowId})`}
+              />
+            ))
+          }
+        </g>
       </svg>
 
-      <ul class="nodes">
+      <ul class="nodes" data-nodes>
         {
           nodes.map((node) => (
             <li
@@ -119,17 +120,25 @@ const canvasStyle = styleOf([
               ])}
               data-role={node.role}
             >
-              <span class="node-label title">{node.state.label}</span>
-              <span class="node-code figure">{node.state.code}</span>
-              {ROLE_NOTE[node.role] !== null && (
-                <span class="chip node-note">{ROLE_NOTE[node.role]}</span>
-              )}
+              <span class="node-label title" data-field="node-label">
+                {node.state.label}
+              </span>
+              <span class="node-code figure" data-field="node-code">
+                {node.state.code}
+              </span>
+              <span
+                class="chip node-note"
+                data-field="node-note"
+                hidden={ROLE_NOTE[node.role] === null}
+              >
+                {ROLE_NOTE[node.role]}
+              </span>
             </li>
           ))
         }
       </ul>
 
-      <ul class="captions">
+      <ul class="captions" data-captions>
         {
           arcs.map((arc) => (
             <li
@@ -137,8 +146,14 @@ const canvasStyle = styleOf([
               style={styleOf([`--x:${arc.labelX}px`, `--y:${arc.labelY}px`])}
             >
               <span class:list={["chip", arc.requiresReason && "tone-ambar"]}>
-                {arc.label}
-                {arc.requiresReason && <b class="mark">*</b>}
+                <span data-field="caption-label">{arc.label}</span>{" "}
+                <b
+                  class="mark"
+                  data-field="caption-mark"
+                  hidden={!arc.requiresReason}
+                >
+                  *
+                </b>
               </span>
             </li>
           ))
@@ -146,6 +161,31 @@ const canvasStyle = styleOf([
       </ul>
     </div>
   </div>
+
+  {/* The editor's hands: one card, one arrow, one caption. */}
+  <template data-template="graph-node">
+    <li class="node card" data-role="connected">
+      <span class="node-label title" data-field="node-label"></span>
+      <span class="node-code figure" data-field="node-code"></span>
+      <span class="chip node-note" data-field="node-note" hidden></span>
+    </li>
+  </template>
+
+  <template data-template="graph-arc">
+    <svg focusable="false"><path class="arc"></path></svg>
+  </template>
+
+  <template data-template="graph-caption">
+    <li class="caption">
+      <span class="chip">
+        <span data-field="caption-label"></span>{" "}<b
+          class="mark"
+          data-field="caption-mark"
+          hidden>*</b
+        >
+      </span>
+    </li>
+  </template>
 </figure>
 
 <style>
@@ -234,6 +274,14 @@ const canvasStyle = styleOf([
     margin-top: var(--space-1);
     text-transform: none;
     letter-spacing: 0;
+  }
+
+  /* `.node-note` is a flex item; an author rule beats the user agent's
+     `[hidden] { display: none }`, so a connected card would show an empty chip
+     without this. */
+  .node-note[hidden],
+  .mark[hidden] {
+    display: none;
   }
 
   .node[data-role="isolated"] {

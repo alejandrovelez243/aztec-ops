@@ -1,10 +1,12 @@
 /**
- * The header's two moving parts: the owner it lets you change, and the edit
- * somebody else made to this task.
+ * The header's two moving parts: the fields it lets you change — owner, due date,
+ * priority and what the task waits on — and the edit somebody else made to this
+ * task.
  *
- * They belong together because they are the same field seen from both sides — a
- * reassignment made here and one made from the project's task table land on the
- * same control, and it must end in the same state either way.
+ * They belong together because they are the same fields seen from both sides — a
+ * reassignment or a re-prioritisation made here and one made from the project's
+ * task table land on the same controls, through the same writes
+ * (`task-writes.ts`), and each must end in the same state either way.
  *
  * `task.updated` names the task and the fields that moved, but its payload
  * carries *codes and raw values* — a priority code, an assignee code — while
@@ -23,8 +25,16 @@ import { getTask } from "../../lib/api/client";
 import { getOperator } from "../../lib/auth/session";
 import { subscribe } from "../../lib/stream/store";
 import { mountOwnerMenus } from "../projects/owner-menu";
+import { mountPriorityMenus } from "../projects/priority-menu";
 import { mountDateFields } from "../ui/date-field";
-import { submitTaskDueDate, submitTaskOwner } from "./task-writes";
+import { mountMultiSelects } from "../ui/multi-select";
+import { findDependencyField, rememberDependencies } from "./dependency-field";
+import {
+  submitTaskDependencies,
+  submitTaskDueDate,
+  submitTaskOwner,
+  submitTaskPriority,
+} from "./task-writes";
 import { toast } from "../../lib/toast";
 import { isFresher } from "../projects/dom";
 import { markEvent } from "../projects/stale";
@@ -41,7 +51,9 @@ export function mountTaskHeader(header: HTMLElement): () => void {
   const code = header.dataset.taskCode ?? "";
 
   const offOwner = mountOwnerMenus(header, submitTaskOwner);
+  const offPriority = mountPriorityMenus(header, submitTaskPriority);
   const offDates = mountDateFields(header, submitTaskDueDate);
+  const offDependencies = mountDependencies(header, code);
 
   const operator = getOperator();
 
@@ -61,9 +73,32 @@ export function mountTaskHeader(header: HTMLElement): () => void {
 
   return () => {
     offOwner();
+    offPriority();
     offDates();
+    offDependencies();
     offStream();
   };
+}
+
+/**
+ * Wires the prerequisite picker, when the header rendered one.
+ *
+ * Saves on every chip, like every other control on this header: the owner, the
+ * date and the priority commit the moment they are chosen, and a set that needed
+ * a "Guardar" button beside it would be the one field on the screen whose answer
+ * can be lost by navigating away.
+ *
+ * A no-op when the picker is absent — the header falls back to read-only chips
+ * when the project's other tasks could not be read, and there is then nothing to
+ * offer and nothing legal to write.
+ */
+function mountDependencies(header: HTMLElement, code: string): () => void {
+  const control = findDependencyField(header);
+  if (control === null) return () => {};
+  rememberDependencies(control);
+  return mountMultiSelects(header, (changed) => {
+    void submitTaskDependencies(changed, code);
+  });
 }
 
 /**

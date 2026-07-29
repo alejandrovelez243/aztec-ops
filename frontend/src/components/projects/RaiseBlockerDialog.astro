@@ -1,0 +1,121 @@
+---
+/**
+ * Raising a blocker, asked in one modal.
+ *
+ * A modal and not the inline form this used to be: registering a blockage is a
+ * short, self-contained act started deliberately from a button, and the panel
+ * that offers it has no room to carry a two-field form under a list that can
+ * already be four cards tall — the operator scrolled past the open blockers to
+ * find it. `docs/standards/FRONTEND.md` §10 grants a modal exactly this case,
+ * and it is a real `<dialog>` opened with `showModal()` so modality, `Escape`,
+ * the focus trap and the backdrop stay the platform's.
+ *
+ * Tipo is a `MenuSelect`, never a `<select>`: the native popup is drawn by the
+ * operating system, so it cannot carry a token and its chrome is the OS locale
+ * rather than the Spanish this interface owes the operator. The four kinds are
+ * a *structural* vocabulary — they change by migration, not from the admin — so
+ * they come from `BLOCKER_KINDS`, which is typed total over the generated union
+ * and fails the build when a fifth one lands instead of silently offering three.
+ *
+ * The options are server-rendered, so the dialog has no loading arm and cannot
+ * open onto an empty picker. Presentational: it renders the question and lets
+ * `raise-blocker-dialog.ts` read the answer off the DOM.
+ */
+import MenuSelect from "../ui/MenuSelect.astro";
+import type { MenuOption } from "../ui/MenuSelect.astro";
+import { BLOCKER_KINDS, blockerKindLabel } from "./messages";
+
+export interface Props {
+  projectCode: string;
+}
+
+const { projectCode } = Astro.props;
+
+const kindOptions: MenuOption[] = BLOCKER_KINDS.map((kind) => ({
+  value: kind,
+  label: blockerKindLabel(kind),
+}));
+
+/** The first kind the vocabulary lists, never a code written down here. */
+const defaultKind = kindOptions[0]?.value ?? "";
+---
+
+<dialog class="dialog" data-raise-dialog aria-labelledby="raise-blocker-title">
+  <form data-raise-form>
+    <h2 class="h2" id="raise-blocker-title">
+      Nuevo bloqueo en {projectCode}
+    </h2>
+    <p class="small">
+      Un bloqueo es una fila con tipo, no una frase en una nota: pesa en la
+      prioridad del proyecto en cuanto el motor lo procesa.
+    </p>
+
+    <MenuSelect
+      facet="blocker-kind"
+      label="Tipo"
+      options={kindOptions}
+      value={defaultKind}
+    />
+
+    <label class="field">
+      <span class="label">Qué está detenido y por qué</span>
+      <textarea
+        class="input"
+        name="description"
+        rows="3"
+        required
+        placeholder="Ej.: esperamos las credenciales del cliente para el ambiente de pruebas"
+      ></textarea>
+    </label>
+
+    <p class="small error" data-field="raise-error" hidden></p>
+
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" type="button" data-action="close-raise">
+        Cancelar
+      </button>
+      <button class="btn btn-primary" type="submit" data-action="submit-raise">
+        Registrar bloqueo
+      </button>
+    </div>
+  </form>
+</dialog>
+
+<style>
+  /* The same paper the other dialogs on this screen are cut from; `.dialog` is
+     scoped per component, so the chrome is restated rather than inherited. */
+  .dialog {
+    width: min(460px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+  }
+
+  .dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .error {
+    color: var(--rojo-ink);
+  }
+
+  .error[hidden] {
+    display: none;
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+</style>

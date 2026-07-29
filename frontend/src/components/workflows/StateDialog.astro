@@ -1,0 +1,251 @@
+---
+/**
+ * Adding a state to a lifecycle, and editing one — the same dialog, opened from the section's
+ * header or from the state's own row.
+ *
+ * `code` is asked for once and never again: every project and task standing on the state holds
+ * that value, so renaming is what `label` is for. On an edit the code is shown, read-only,
+ * because it is what the operator will see in a payload and in the trail.
+ *
+ * **Category is a closed vocabulary and colour is a palette**, and both restrictions are the
+ * product being honest. `category` is what every risk rule and every priority signal branches
+ * on, so a sixth value would be an inert state rather than a new behaviour — the API rejects one.
+ * Colour is chosen from the semantic set because that is the only colour vocabulary this
+ * interface has: a free colour wheel would let somebody paint a blocked state green, and no
+ * screen would be able to read it.
+ *
+ * `order` is optional on a create and the emptiness is the feature: omitted **appends**, so a
+ * new column lands at the end of an arrangement somebody already made rather than at position
+ * zero in front of it.
+ */
+import Icon from "../ui/Icon.astro";
+import GraphPicker from "./GraphPicker.astro";
+import { CATEGORY_CHOICES, COLOR_CHOICES } from "./authoring";
+---
+
+<dialog class="dialog" data-state-dialog aria-labelledby="state-dialog-title">
+  <form data-state-form novalidate>
+    <h2 class="h2" id="state-dialog-title" data-field="state-dialog-title">
+      Nuevo estado
+    </h2>
+    <p class="small lead" data-field="state-dialog-lead">
+      El primer estado de un flujo vacío se convierte en su entrada: es donde
+      aterriza todo el trabajo nuevo.
+    </p>
+
+    <label class="field" data-field="state-code-field">
+      <span class="label">Código</span>
+      <input
+        class="input"
+        name="code"
+        maxlength="32"
+        required
+        autocomplete="off"
+        placeholder="Ej.: en_revision"
+      />
+      <span class="small hint">
+        Lo llevan encima los registros que pasen por aquí: no se puede cambiar
+        después.
+      </span>
+    </label>
+
+    <p class="field" data-field="state-code-line" hidden>
+      <span class="label">Código</span>
+      <code class="chip chip-code" data-field="state-code-value"></code>
+    </p>
+
+    <label class="field">
+      <span class="label">Etiqueta</span>
+      <input
+        class="input"
+        name="label"
+        maxlength="64"
+        required
+        autocomplete="off"
+        placeholder="Ej.: En revisión"
+      />
+      <span class="small hint"
+        >Lo que se lee en el diagrama y en el tablero.</span
+      >
+    </label>
+
+    <div class="pair">
+      <GraphPicker
+        facet="state-category"
+        label="Categoría"
+        options={CATEGORY_CHOICES}
+        value="BACKLOG"
+        placeholder="Pendiente"
+        hint="Es lo que leen los riesgos y la priorización; el código del estado no lo leen nunca."
+      />
+
+      <label class="field">
+        <span class="label">Orden</span>
+        <input
+          class="input"
+          type="number"
+          name="order"
+          min="0"
+          max="32767"
+          autocomplete="off"
+          inputmode="numeric"
+        />
+        <span class="small hint" data-field="state-order-hint">
+          Déjalo vacío para añadirlo al final.
+        </span>
+      </label>
+    </div>
+
+    <fieldset class="field colors">
+      <legend class="label">Color</legend>
+      <ul class="swatches">
+        {
+          COLOR_CHOICES.map((choice) => (
+            <li>
+              <label
+                class:list={["swatch", { plain: choice.value === "" }]}
+                style={
+                  choice.value === ""
+                    ? undefined
+                    : `--swatch: var(--${choice.value})`
+                }
+              >
+                <input
+                  type="radio"
+                  name="color"
+                  value={choice.value}
+                  checked={choice.value === ""}
+                />
+                <span class="chip">{choice.label}</span>
+              </label>
+            </li>
+          ))
+        }
+      </ul>
+      <p class="small hint">
+        Sin color propio, el estado se pinta con el de su categoría.
+      </p>
+    </fieldset>
+
+    <p class="small error" data-field="state-error" hidden></p>
+
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" type="button" data-action="close-dialog">
+        Cancelar
+      </button>
+      <button class="btn btn-primary" type="submit" data-action="submit-state">
+        <Icon name="check" size={16} />
+        <span data-field="state-submit">Añadir estado</span>
+      </button>
+    </div>
+  </form>
+</dialog>
+
+<style>
+  .dialog {
+    width: min(560px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+  }
+
+  .dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .lead {
+    color: var(--tinta-media);
+  }
+
+  .field[hidden],
+  .error[hidden] {
+    display: none;
+  }
+
+  .pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+    align-items: start;
+  }
+
+  .colors {
+    border: 0;
+    padding: 0;
+    margin: 0;
+  }
+
+  .swatches {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin: var(--space-1) 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* The radio itself is the control — kept in the accessibility tree and operable with the
+     arrow keys — while the chip beside it carries the colour. Hiding the input entirely would
+     take the keyboard with it. */
+  .swatch input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .swatch .chip {
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: 0;
+    background-color: color-mix(in srgb, var(--swatch) 14%, var(--carta));
+    color: color-mix(in srgb, var(--swatch) 72%, var(--tinta));
+    box-shadow: inset 0 0 0 var(--border-width) var(--hairline);
+  }
+
+  .swatch.plain .chip {
+    background-color: var(--pozo);
+    color: var(--tinta-media);
+  }
+
+  .swatch input:checked + .chip {
+    box-shadow: inset 0 0 0 2px var(--cobalto);
+    color: var(--tinta);
+  }
+
+  .swatch input:focus-visible + .chip {
+    outline: 2px solid var(--cobalto);
+    outline-offset: 2px;
+  }
+
+  .hint {
+    color: var(--tinta-media);
+  }
+
+  .error {
+    color: var(--rojo-ink);
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+
+  @media (max-width: 560px) {
+    .pair {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

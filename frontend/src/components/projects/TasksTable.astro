@@ -15,6 +15,11 @@
  * one the response carries, not the one that was clicked, so a row never claims
  * an owner the database refused.
  *
+ * **Re-prioritise it.** `PriorityMenu`, on the same footing: the priority chip
+ * *is* the picker, its options are the catalog's, and the chip repaints from the
+ * response. With the catalog read failed the chip still reports the priority and
+ * goes visibly dead with the reason named.
+ *
  * It stays a table: `<th scope="col">`, one row per task, controls inside cells.
  * A menu is a button and a list of buttons, so every row is fully keyboard
  * operable and the semantics a screen reader reads are unchanged.
@@ -23,13 +28,15 @@
  * (`raw_label`): 61 of the 82 source tasks describe their prerequisite in prose,
  * so an unresolved reference is the normal case, not a defect.
  */
+import ConfirmDialog from "../ui/ConfirmDialog.astro";
 import CreateTaskDialog from "./CreateTaskDialog.astro";
 import DateField from "../ui/DateField.astro";
 import Icon from "../ui/Icon.astro";
 import OwnerMenu from "./OwnerMenu.astro";
+import PriorityMenu from "./PriorityMenu.astro";
 import TaskMoveMenu from "./TaskMoveMenu.astro";
+import TaskRowMenu from "./TaskRowMenu.astro";
 import { taskMoves } from "./task-moves";
-import { taxonomyTone, toneStyle } from "./tone";
 import type {
   TaskItem,
   TaxonomyRef,
@@ -41,7 +48,11 @@ export interface Props {
   tasks: readonly TaskItem[];
   /** The project read's `updated_at`; the floor for live patches on the rows. */
   updatedAt: string;
-  /** Priorities the create dialog offers; empty when the catalog read failed. */
+  /**
+   * The catalog's priorities, offered by the create dialog and by every row's
+   * priority chip. Empty when the catalog read failed, which degrades both
+   * controls to visibly dead rather than taking the table down.
+   */
   priorities: readonly TaxonomyRef[];
   /** The roster the create dialog offers; empty when that read failed. */
   members: readonly TeamLoadEntry[];
@@ -89,6 +100,14 @@ function taskHref(code: string): string {
           <th class="label" scope="col">Responsable</th>
           <th class="label" scope="col">Vence</th>
           <th class="label" scope="col">Depende de</th>
+          {
+            /* The overflow column has no visible heading — its cells are one
+              icon button — but a column with a blank `<th>` is a column a screen
+              reader announces as nothing. */
+          }
+          <th class="label col-menu" scope="col">
+            <span class="visually-hidden">Acciones</span>
+          </th>
         </tr>
       </thead>
       <tbody data-task-rows>
@@ -114,16 +133,11 @@ function taskHref(code: string): string {
                 />
               </td>
               <td>
-                <span
-                  class:list={[
-                    "chip",
-                    taxonomyTone(task.priority.color).className,
-                  ]}
-                  style={toneStyle(taxonomyTone(task.priority.color))}
-                  data-priority-chip
-                >
-                  <span data-field="priority-label">{task.priority.label}</span>
-                </span>
+                <PriorityMenu
+                  code={task.code}
+                  current={task.priority}
+                  options={priorities}
+                />
               </td>
               <td>
                 <OwnerMenu
@@ -157,6 +171,9 @@ function taskHref(code: string): string {
                   </span>
                 ))}
               </td>
+              <td class="col-menu">
+                <TaskRowMenu code={task.code} title={task.title} />
+              </td>
             </tr>
           ))
         }
@@ -184,9 +201,11 @@ function taskHref(code: string): string {
         />
       </td>
       <td>
-        <span class="chip" data-priority-chip
-          ><span data-field="priority-label"></span></span
-        >
+        <PriorityMenu
+          code=""
+          current={{ code: "", label: "", color: null }}
+          options={priorities}
+        />
       </td>
       <td>
         <OwnerMenu scope="task" code="" alias={null} label={null} compact />
@@ -196,6 +215,9 @@ function taskHref(code: string): string {
         <span class="chip tone-rojo" data-field="overdue" hidden>vencida</span>
       </td>
       <td class="col-deps" data-field="dependencies"></td>
+      <td class="col-menu">
+        <TaskRowMenu code="" />
+      </td>
     </tr>
   </template>
 
@@ -227,6 +249,15 @@ function taskHref(code: string): string {
   members={members}
   tasks={tasks}
 />
+
+{
+  /* The removal confirmation, rendered beside the create dialog and outside
+    `[data-tasks]` for the same reason: `confirm-dialog.ts` finds it by document
+    query, and a `<dialog>` draws in the top layer wherever it sits. One per
+    surface — this table is the only place on the project screen that can destroy
+    something. */
+}
+<ConfirmDialog />
 
 <script>
   import { onPage } from "./island";
@@ -285,12 +316,24 @@ function taskHref(code: string): string {
     vertical-align: middle;
   }
 
+  /*
+   * These three stay `table-cell`. A `<td>` given `display: flex` stops being a
+   * cell for the table's column algorithm, and the browser then lays the row out
+   * around cells that no longer claim a track — which is how "Vence" and
+   * "Depende de" ended up drawn at the same x, with the row's kebab sitting
+   * under the "Depende de" header. The arrangement belongs to the contents.
+   */
   .col-title {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--space-1);
     min-width: 220px;
+  }
+
+  .col-title > .link {
+    display: flex;
+    width: fit-content;
+  }
+
+  .col-title > .chip-code {
+    margin-top: var(--space-1);
   }
 
   .link {
@@ -310,17 +353,19 @@ function taskHref(code: string): string {
   }
 
   .col-due {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
     white-space: nowrap;
   }
 
+  .col-due > * + * {
+    margin-left: var(--space-2);
+  }
+
   .col-deps {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-1);
     max-width: 260px;
+  }
+
+  .col-deps > * {
+    margin: 0 var(--space-1) var(--space-1) 0;
   }
 
   .dep {
@@ -332,5 +377,13 @@ function taskHref(code: string): string {
 
   .chip[hidden] {
     display: none;
+  }
+
+  /* Narrow and right-aligned: the overflow is the row's last resort, not a
+     column of content. */
+  .col-menu {
+    width: 1%;
+    text-align: right;
+    white-space: nowrap;
   }
 </style>

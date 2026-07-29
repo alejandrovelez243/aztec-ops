@@ -4,14 +4,26 @@
  *
  * One type at a time is a product decision, not a layout accident — two engagement types can
  * be bound to different workflows, so a single rail for both would either mix two vocabularies
- * or invent a union nobody works in. It is a real `<select>` rather than a row of pills
- * because it is a *choice among named alternatives*, it grows with the taxonomy instead of
- * with the toolbar, and it arrives on touch with the platform's own picker and hit target.
+ * or invent a union nobody works in.
  *
- * The count travels inside each option's text: `<option>` may not own an element, so the
- * runtime rewrites the whole label when the member filter changes what is on screen. The
- * label alone lives in `data-label`, so rewriting the count can never eat the name.
+ * It is a `MenuSelect`, never a `<select>` (`docs/standards/FRONTEND.md` §10): the native
+ * popup is drawn by the operating system, so it lands as a grey system list in the middle of a
+ * surface that is otherwise all paper and ink, no design token reaches inside it, and its
+ * chrome speaks the OS locale rather than the Spanish this interface owes the operator.
+ *
+ * The count travels inside each entry's text, because the field answers "which portfolio, and
+ * how much is in it" in one glance. It follows the member filter, so the island rewrites the
+ * whole list through `setMenuOptions` when the filter changes; the bare label it rebuilds each
+ * entry from comes from the rail panel's `data-engagement-label`, not from the text it is
+ * about to overwrite.
+ *
+ * Presentational: it renders entries and announces a choice through the DOM. What a choice
+ * means — swapping both halves, persisting the preference — belongs to `BoardCanvas`.
  */
+import MenuSelect from "../ui/MenuSelect.astro";
+import type { MenuOption } from "../ui/MenuSelect.astro";
+import { ENGAGEMENT_FACET } from "./board-dom";
+
 export interface Option {
   readonly code: string;
   readonly label: string;
@@ -26,52 +38,30 @@ export interface Props {
 }
 
 const { options, active } = Astro.props;
+
+const entries: MenuOption[] = options.map((option) => ({
+  value: option.code,
+  label: `${option.label} · ${option.count}`,
+}));
 ---
 
-<div class="eng">
-  <label class="label eng-label" for="board-engagement" lang="es">
-    Tipo de encargo
-  </label>
-  <select
-    class="input eng-select"
-    id="board-engagement"
-    data-engagement-select
-    lang="es"
-  >
-    {
-      options.map((option) => (
-        <option
-          value={option.code}
-          data-engagement-option
-          data-engagement-code={option.code}
-          data-label={option.label}
-          selected={option.code === active}
-        >
-          {`${option.label} · ${option.count}`}
-        </option>
-      ))
-    }
-  </select>
+<div class="eng" lang="es">
+  <MenuSelect
+    facet={ENGAGEMENT_FACET}
+    label="Tipo de encargo"
+    options={entries}
+    value={active}
+  />
 </div>
 
 <style>
   .eng {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
     min-width: 0;
   }
 
-  .eng-select {
-    /* Wide enough for "Mantenimiento o recurrente · 12" without truncating, and
-       capped so the toolbar keeps room for the roster beside it. */
+  /* Wide enough for "Mantenimiento o recurrente · 12" without truncating, and capped so the
+     toolbar keeps room for the roster beside it. */
+  .eng :global(.menu-select) {
     width: clamp(220px, 26vw, 320px);
-    /* The native arrow needs room the shared control padding does not leave. */
-    padding-right: var(--space-2);
-    cursor: pointer;
-  }
-
-  .eng-select:focus-visible {
-    border-color: var(--cobalto);
   }
 </style>

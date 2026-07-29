@@ -13,6 +13,12 @@
  * progress says that too, because those are exactly the tasks that slip
  * unnoticed.
  *
+ * "Depende de" is a picker, not a caption: the thing that reports what the task
+ * waits on is the thing that changes it, offering the project's other tasks and
+ * never this one. Its options are a second read, so it has a second rendering —
+ * the same chips, read-only, with the reason named — for the day that read fails
+ * (FRONTEND.md §8).
+ *
  * Every value here is patchable after the first paint: a colleague's edit
  * arrives as `task.updated`, the screen re-reads and `task-paint.ts` writes the
  * answer field by field. That is why each of them publishes a `data-field` or a
@@ -21,12 +27,22 @@
  * exactly one home, and a copy written in TypeScript is how it starts drifting.
  */
 import DateField from "../ui/DateField.astro";
+import LifecyclePlate from "../lifecycle/LifecyclePlate.astro";
+import MultiSelect from "../ui/MultiSelect.astro";
+import type { MultiOption } from "../ui/MultiSelect.astro";
 import OwnerMenu from "../projects/OwnerMenu.astro";
+import PriorityMenu from "../projects/PriorityMenu.astro";
 import StateChip from "../projects/StateChip.astro";
-import { taxonomyTone, toneStyle } from "../projects/tone";
 import TaskTransitionBar from "./TaskTransitionBar.astro";
+import { DEPENDENCIES_UNAVAILABLE } from "../projects/messages";
+import { DEPENDS_ON_FACET, dependencyValue } from "./dependency-field";
 import { dependencyLabel, dependencyTitle, projectHref } from "./presentation";
-import type { DependencyRef, Transition } from "../../lib/api/domain";
+import type {
+  DependencyRef,
+  TaxonomyRef,
+  Transition,
+  WorkflowRef,
+} from "../../lib/api/domain";
 
 export interface Props {
   code: string;
@@ -37,11 +53,21 @@ export interface Props {
   projectName: string;
   assigneeAlias: string | null;
   assigneeLabel: string | null;
-  priorityLabel: string;
-  priorityColor: string | null;
+  /** The priority in force; the chip that shows it is also the picker. */
+  priority: TaxonomyRef;
+  /**
+   * Every priority the catalog offers. Empty when that read failed, which leaves
+   * the chip reporting the task's priority and visibly unable to change it —
+   * the catalog is a separate read and must not take this screen down.
+   */
+  priorities: readonly TaxonomyRef[];
   stateLabel: string;
   stateCategory: string;
+  /** The state's `code`, which is what a lifecycle may or may not have a column for. */
+  stateCode: string;
   stateColor: string | null;
+  /** The graph `state` and `transitions` come from, and whether somebody chose it. */
+  workflow: WorkflowRef;
   dueDate: string | null;
   /** Derived server-side against the request's clock, never a stored column. */
   isOverdue: boolean;
@@ -49,6 +75,15 @@ export interface Props {
   lastProgress: string;
   /** What this task waits on; most references are prose, not codes. */
   dependencies: readonly DependencyRef[];
+  /**
+   * The project's other tasks, offered as prerequisites — `null` when that read
+   * failed, which degrades the field to read-only chips with the reason named
+   * instead of hiding it (FRONTEND.md §8).
+   *
+   * This task is never in the list: nothing may wait on itself, and offering it
+   * would put a refusal one click away for no reason.
+   */
+  dependencyOptions: readonly MultiOption[] | null;
   /** The only source of transition buttons (`docs/API.md` §2.2). */
   transitions: readonly Transition[];
   /** Task attributes that are currently empty, from the same read. */
@@ -65,21 +100,30 @@ const {
   projectName,
   assigneeAlias,
   assigneeLabel,
-  priorityLabel,
-  priorityColor,
+  priority,
+  priorities,
   stateLabel,
   stateCategory,
+  stateCode,
   stateColor,
+  workflow,
   dueDate,
   isOverdue,
   lastProgress,
   dependencies,
+  dependencyOptions,
   transitions,
   emptyFields,
   updatedAt,
 } = Astro.props;
 
-const priority = taxonomyTone(priorityColor);
+/**
+ * The set as the wire spells it: the task code when the reference resolved, the
+ * operation's own words when it did not. `PATCH` reads a prose entry back as the
+ * same `raw_label`, which is what lets an operator add one prerequisite without
+ * the save deleting the imported ones beside it.
+ */
+const chosenDependencies = dependencies.map(dependencyValue);
 ---
 
 <header
@@ -91,13 +135,7 @@ const priority = taxonomyTone(priorityColor);
   <div class="top">
     <span class="chip chip-code">{code}</span>
     <StateChip label={stateLabel} category={stateCategory} color={stateColor} />
-    <span
-      class:list={["chip", priority.className]}
-      style={toneStyle(priority)}
-      data-priority-chip
-    >
-      <span data-field="priority-label">{priorityLabel}</span>
-    </span>
+    <PriorityMenu code={code} current={priority} options={priorities} />
     <span class="chip tone-rojo" data-field="overdue" hidden={!isOverdue}>
       Vencida
     </span>
@@ -145,21 +183,41 @@ const priority = taxonomyTone(priorityColor);
     </div>
     <div class="fact">
       <dt class="label">Depende de</dt>
-      <dd class="deps" data-dependency-list>
+      <dd>
         {
-          dependencies.length === 0 && (
-            <span class="chip tone-piedra">Sin dependencias</span>
+          dependencyOptions === null ? (
+            /* The picker's options are the project's other tasks, a second read
+              that is allowed to fail without taking this screen down. The chips
+              came from the task's own read and are still true, so they stay —
+              read-only, with the reason named beside them. */
+            <Fragment>
+              <div class="deps" data-dependency-list>
+                {dependencies.length === 0 && (
+                  <span class="chip tone-piedra">Sin dependencias</span>
+                )}
+                {dependencies.map((dependency) => (
+                  <span
+                    class="chip chip-code dep"
+                    title={dependencyTitle(dependency)}
+                  >
+                    {dependencyLabel(dependency)}
+                  </span>
+                ))}
+              </div>
+              <p class="small unavailable">{DEPENDENCIES_UNAVAILABLE}</p>
+            </Fragment>
+          ) : (
+            <MultiSelect
+              facet={DEPENDS_ON_FACET}
+              label="Depende de"
+              labelHidden
+              options={dependencyOptions}
+              chosen={chosenDependencies}
+              addLabel="Añadir dependencia"
+              emptyLabel="Sin dependencias."
+              exhaustedNote="No queda ninguna otra tarea de este proyecto a la que depender."
+            />
           )
-        }
-        {
-          dependencies.map((dependency) => (
-            <span
-              class="chip chip-code dep"
-              title={dependencyTitle(dependency)}
-            >
-              {dependencyLabel(dependency)}
-            </span>
-          ))
         }
       </dd>
     </div>
@@ -176,6 +234,20 @@ const priority = taxonomyTone(priorityColor);
       </dd>
     </div>
   </dl>
+
+  {
+    /* Between the facts and the moves, because it is what explains the moves:
+      the chip above says where the task stands, the buttons below say where it
+      may go, and this names the graph both of them come from. Two tasks of one
+      project can legitimately follow different lifecycles. */
+  }
+  <LifecyclePlate
+    scope="task"
+    code={code}
+    workflow={workflow}
+    stateCode={stateCode}
+    stateLabel={stateLabel}
+  />
 
   <TaskTransitionBar
     taskCode={code}
@@ -274,6 +346,11 @@ const priority = taxonomyTone(priorityColor);
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-1);
+  }
+
+  .unavailable {
+    margin-top: var(--space-1);
+    color: var(--tinta-media);
   }
 
   .dep {

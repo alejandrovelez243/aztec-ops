@@ -31,6 +31,7 @@ import type {
   BlockerCreateIn,
   BlockerResolveIn,
   Catalog,
+  ClientDirectory,
   CredentialsIn,
   Member,
   MemberCreateIn,
@@ -41,10 +42,19 @@ import type {
   RoleCreateIn,
   RoleListQuery,
   RoleUpdateIn,
+  StateCreateIn,
+  StateUpdateIn,
+  TransitionCreateIn,
+  TransitionUpdateIn,
+  WorkflowAssignmentIn,
+  WorkflowCreateIn,
+  WorkflowShape,
+  WorkflowUpdateIn,
   NoteView,
   OverrideResult,
   PortfolioActivityQuery,
   PriorityOverrideIn,
+  ProjectCreateIn,
   ProjectDetail,
   ProjectTransitionIn,
   QueuePage,
@@ -184,7 +194,7 @@ function toQueryString(query: Record<string, QueryValue>): string {
 }
 
 interface RequestOptions {
-  method: "GET" | "POST" | "PATCH" | "DELETE";
+  method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   query?: Record<string, QueryValue>;
   body?: unknown;
   /** Skip the bearer token — only the token-obtain and refresh routes themselves. */
@@ -437,6 +447,22 @@ export async function getCatalog(): Promise<Result<Catalog>> {
 }
 
 /**
+ * Reads the counterparties a project can be registered against (`GET /api/v1/clients`).
+ *
+ * Not part of `getCatalog` because a client is a portfolio aggregate rather than one of the
+ * operator-editable taxonomies that document publishes — serving it there would make the catalog
+ * context read a model another context owns.
+ *
+ * Retired counterparties are absent, so an empty `items` is a legitimate answer and means the
+ * operation has nobody to register a project against yet. The creating surface owes that its own
+ * copy: a project cannot be created without a client, so an empty directory is a dead button with
+ * a reason, never a picker with no options.
+ */
+export async function getClients(): Promise<Result<ClientDirectory>> {
+  return request<ClientDirectory>("/api/v1/clients", { method: "GET" });
+}
+
+/**
  * Reads every role, retired ones included (`GET /api/v1/catalog/roles`).
  *
  * Ops lead. Separate from `getCatalog` on purpose: that one feeds the **pickers**, where a
@@ -571,6 +597,189 @@ export async function getWorkflows(): Promise<Result<WorkflowCatalog>> {
 }
 
 /**
+ * Reads the guard codes an edge may name (`GET /api/v1/workflows/guards`).
+ *
+ * Ops lead, like the writes it accompanies. Served from the backend registry rather than
+ * listed here, which is what keeps CLAUDE.md rule 8 true across the wire: a guard added as
+ * one function plus one decorator appears in the transition editor with no frontend edit.
+ */
+export async function getWorkflowGuards(): Promise<Result<string[]>> {
+  return request<string[]>("/api/v1/workflows/guards", { method: "GET" });
+}
+
+/**
+ * Creates a lifecycle (`POST /api/v1/workflows`).
+ *
+ * Ops lead only. The graph arrives **empty** — states and transitions are added afterwards,
+ * one request each — so the caller must walk the operator into its first state rather than
+ * leaving them at a blank diagram. A taken `code` is a `conflicting_state`, and so is an
+ * `engagement_types` entry already bound to another graph for the same kind of record:
+ * resolution has to be deterministic, so a type names exactly one lifecycle per kind.
+ */
+export async function postWorkflow(
+  body: WorkflowCreateIn,
+): Promise<Result<WorkflowShape>> {
+  return request<WorkflowShape>("/api/v1/workflows", { method: "POST", body });
+}
+
+/**
+ * Renames a lifecycle, retires it or puts it back in service
+ * (`PATCH /api/v1/workflows/{code}`). Absent means untouched.
+ *
+ * `code` and `applies_to` are not writable: the first is the address every binding names it
+ * by, the second would leave the records already inside governed by a lifecycle claiming to
+ * govern something else. `is_active: false` is a retirement, never a delete — the graph stops
+ * being offered to new work and keeps resolving for everything already in it.
+ */
+export async function patchWorkflow(
+  code: string,
+  body: WorkflowUpdateIn,
+): Promise<Result<WorkflowShape>> {
+  return request<WorkflowShape>(`/api/v1/workflows/${segment(code)}`, {
+    method: "PATCH",
+    body,
+  });
+}
+
+/**
+ * Adds a state to a lifecycle (`POST /api/v1/workflows/{code}/states`).
+ *
+ * `order` omitted **appends**, because a new column belongs at the end of an arrangement
+ * somebody already made. The first state of an empty graph becomes its entry node. A code the
+ * graph already carries is a `conflicting_state` **including when that state is retired** —
+ * restore it instead of creating a second one.
+ *
+ * Every write on this router answers with the whole graph re-read, so the caller repaints the
+ * diagram and the tables from one authoritative shape instead of guessing at the edit.
+ */
+export async function postWorkflowState(
+  code: string,
+  body: StateCreateIn,
+): Promise<Result<WorkflowShape>> {
+  return request<WorkflowShape>(`/api/v1/workflows/${segment(code)}/states`, {
+    method: "POST",
+    body,
+  });
+}
+
+/**
+ * Edits a state (`PATCH /api/v1/workflows/{code}/states/{state}`). Absent means untouched.
+ *
+ * The state's own `code` is not writable — every project and task standing on it holds that
+ * value, and renaming is what `label` is for. `is_active` accepts only `true`, which restores
+ * a retired state; retiring is {@link deleteWorkflowState}, because it can be refused by
+ * records this request knows nothing about.
+ */
+export async function patchWorkflowState(
+  code: string,
+  stateCode: string,
+  body: StateUpdateIn,
+): Promise<Result<WorkflowShape>> {
+  return request<WorkflowShape>(
+    `/api/v1/workflows/${segment(code)}/states/${segment(stateCode)}`,
+    { method: "PATCH", body },
+  );
+}
+
+/**
+ * Retires a state (`DELETE /api/v1/workflows/{code}/states/{state}`), deleting nothing.
+ *
+ * The row survives with `is_active: false` and every arrow touching it is withdrawn in the
+ * same transaction. **Refused while records occupy it**, with `conflicting_state` carrying
+ * `details.projects` and `details.tasks`: an operator told how many rows to move can act, one
+ * told "conflicting state" cannot — so the refusal must be rendered with those numbers.
+ */
+export async function deleteWorkflowState(
+  code: string,
+  stateCode: string,
+): Promise<Result<WorkflowShape>> {
+  return request<WorkflowShape>(
+    `/api/v1/workflows/${segment(code)}/states/${segment(stateCode)}`,
+    { method: "DELETE" },
+  );
+}
+
+/**
+ * Declares a move between two states of one graph
+ * (`POST /api/v1/workflows/{code}/transitions`).
+ *
+ * Both endpoints are resolved inside the workflow in the path, so an edge across two
+ * lifecycles is not expressible. `guard` must be one of {@link getWorkflowGuards}'s codes.
+ * Declaring an edge changes no record: whether a given project or task may take it is still
+ * decided per record. An existing pair is a `conflicting_state` — restore it with
+ * {@link patchWorkflowTransition} rather than creating a second row.
+ */
+export async function postWorkflowTransition(
+  code: string,
+  body: TransitionCreateIn,
+): Promise<Result<WorkflowShape>> {
+  return request<WorkflowShape>(
+    `/api/v1/workflows/${segment(code)}/transitions`,
+    { method: "POST", body },
+  );
+}
+
+/**
+ * Edits a move, or restores a withdrawn one
+ * (`PATCH .../transitions/{from}/{to}`). Absent means untouched.
+ *
+ * The ordered pair is the address and is not editable: an edge *is* its endpoints, so
+ * repointing an arrow is withdrawing one move and declaring another. `requires_fields` is sent
+ * whole, and `is_active: true` is the only way a withdrawn move comes back.
+ */
+export async function patchWorkflowTransition(
+  code: string,
+  fromState: string,
+  toState: string,
+  body: TransitionUpdateIn,
+): Promise<Result<WorkflowShape>> {
+  return request<WorkflowShape>(
+    `/api/v1/workflows/${segment(code)}/transitions/${segment(fromState)}/${segment(toState)}`,
+    { method: "PATCH", body },
+  );
+}
+
+/**
+ * Withdraws a move (`DELETE .../transitions/{from}/{to}`), deleting nothing.
+ *
+ * The row survives with `is_active: false` and disappears from `transitions` on the next read,
+ * because a withdrawn move is not a drawable arrow. Withdrawing the last move **out of** a
+ * state is allowed and is how a terminal state is declared.
+ */
+export async function deleteWorkflowTransition(
+  code: string,
+  fromState: string,
+  toState: string,
+): Promise<Result<WorkflowShape>> {
+  return request<WorkflowShape>(
+    `/api/v1/workflows/${segment(code)}/transitions/${segment(fromState)}/${segment(toState)}`,
+    { method: "DELETE" },
+  );
+}
+
+/**
+ * Registers a project in the portfolio (`POST /api/v1/projects`, 201).
+ *
+ * Neither `code` nor `workflow_state` is a body field. The service allocates the next `PRJ-NN`
+ * inside the creating transaction — a code chosen here could collide with one an already-published
+ * event names, and an event cannot be un-published — and places the project on the initial state of
+ * the workflow its **engagement type** binds to, which is why picking that type is a lifecycle
+ * decision and not a label.
+ *
+ * Failure modes worth branching on: `conflicting_state` is the allocation losing a race with a
+ * simultaneous creation and is safe to retry once, exactly because nothing was written;
+ * `validation` names the offending fields, `business_value` below zero and a `start_date` after
+ * `target_date` among them. The response is the project as its detail screen reads it, so the
+ * caller has its `transitions` and its freshly computed risk flags without a second GET — a
+ * project created with neither `next_step` nor `target_date` comes back already flagged.
+ */
+export async function postProject(
+  body: ProjectCreateIn,
+): Promise<Result<ProjectDetail>> {
+  return request<ProjectDetail>("/api/v1/projects", { method: "POST", body });
+}
+
+/**
  * Applies a partial edit to a project (`PATCH /api/v1/projects/{code}`).
  *
  * `workflow_state` is not a field of this payload under any name — a state moves through
@@ -610,6 +819,46 @@ export async function postProjectTransition(
       body,
     },
   );
+}
+
+/**
+ * Puts a project on a named lifecycle (`PUT /api/v1/projects/{code}/workflow`).
+ *
+ * Ops lead only, like the priority override. It changes the graph and never the state: the
+ * project keeps the state `code` it was standing on and is repointed at that state inside the
+ * target, so this cannot reach a state no edge leads to — moving is still
+ * {@link postProjectTransition}.
+ *
+ * `conflicting_state` when the target has no active state carrying the project's current state
+ * code, with `details.available` listing the ones it does offer, and when the target is retired
+ * (`details.current = "retired"`); `validation_error` on `fields.workflow` when the named graph
+ * governs tasks. The response is the project **re-read after the write**, so its `transitions`
+ * already come from the new graph.
+ */
+export async function putProjectWorkflow(
+  code: string,
+  body: WorkflowAssignmentIn,
+): Promise<Result<ProjectDetail>> {
+  return request<ProjectDetail>(`/api/v1/projects/${segment(code)}/workflow`, {
+    method: "PUT",
+    body,
+  });
+}
+
+/**
+ * Stops a project following its own lifecycle (`DELETE /api/v1/projects/{code}/workflow`).
+ *
+ * Removes the *assignment*, never a workflow and never the project: what comes back is the
+ * project following whatever the binding ladder hands it, with `workflow.source` flipped to
+ * `INHERITED`. The inherited graph is compatibility-checked exactly like a named one, so this
+ * carries the same `conflicting_state` — "heredado" is not a synonym for "safe".
+ */
+export async function deleteProjectWorkflow(
+  code: string,
+): Promise<Result<ProjectDetail>> {
+  return request<ProjectDetail>(`/api/v1/projects/${segment(code)}/workflow`, {
+    method: "DELETE",
+  });
 }
 
 /**
@@ -670,6 +919,25 @@ export async function patchTask(
 }
 
 /**
+ * Removes one task from the operation (`DELETE /api/v1/tasks/{code}`).
+ *
+ * A soft delete: the row's `is_archived` flips to true, so the task leaves every list
+ * and its own `GET` answers 404, while its blockers, its comments and every dependency
+ * edge naming it survive. The undo is therefore an ordinary edit —
+ * `patchTask(code, { is_archived: false })` — not a re-creation.
+ *
+ * Success carries no body, so `data` is `null`. An unknown code is `not_found`; a code
+ * already removed is `not_found` too, because the read it goes through no longer sees
+ * it, which makes a retry after a dropped response report "ya no existe" rather than
+ * failing silently.
+ */
+export async function deleteTask(code: string): Promise<Result<null>> {
+  return request<null>(`/api/v1/tasks/${segment(code)}`, {
+    method: "DELETE",
+  });
+}
+
+/**
  * Executes a workflow transition on a task (`POST /api/v1/tasks/{code}/transition`).
  *
  * Same body and error contract as the project transition, against the task workflow.
@@ -683,6 +951,39 @@ export async function postTaskTransition(
   return request<TaskItem>(`/api/v1/tasks/${segment(code)}/transition`, {
     method: "POST",
     body,
+  });
+}
+
+/**
+ * Puts a task on a named lifecycle (`PUT /api/v1/tasks/{code}/workflow`).
+ *
+ * The task counterpart of {@link putProjectWorkflow}, with the same contract: ops lead only, the
+ * graph changes and the state code does not, and the same `conflicting_state` when the target has
+ * no active state carrying the task's current one. The response is the task re-read after the
+ * write, `transitions` included.
+ */
+export async function putTaskWorkflow(
+  code: string,
+  body: WorkflowAssignmentIn,
+): Promise<Result<TaskDetail>> {
+  return request<TaskDetail>(`/api/v1/tasks/${segment(code)}/workflow`, {
+    method: "PUT",
+    body,
+  });
+}
+
+/**
+ * Stops a task following its own lifecycle (`DELETE /api/v1/tasks/{code}/workflow`).
+ *
+ * The task counterpart of {@link deleteProjectWorkflow}: the assignment is removed and the task
+ * goes back to the graph its project's engagement type binds, checked for compatibility exactly
+ * like a named one.
+ */
+export async function deleteTaskWorkflow(
+  code: string,
+): Promise<Result<TaskDetail>> {
+  return request<TaskDetail>(`/api/v1/tasks/${segment(code)}/workflow`, {
+    method: "DELETE",
   });
 }
 

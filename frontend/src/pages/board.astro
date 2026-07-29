@@ -2,6 +2,7 @@
 import BoardCanvas from "../islands/BoardCanvas.astro";
 import BoardNotice from "../components/board/BoardNotice.astro";
 import BoardSkeleton from "../components/board/BoardSkeleton.astro";
+import CreateTaskDialog from "../components/projects/CreateTaskDialog.astro";
 import Shell from "../layouts/Shell.astro";
 import {
   NO_MEMBER_PHOTOS,
@@ -16,9 +17,19 @@ import type {
   Tone,
 } from "../components/board/board-model";
 import { BOARD_PROJECT_PARAM } from "../components/board/board-dom";
-import { getQueue, getTeamLoad, getWorkflows } from "../lib/api/client";
+import {
+  getCatalog,
+  getQueue,
+  getTeamLoad,
+  getWorkflows,
+} from "../lib/api/client";
 import type { ApiErrorCode } from "../lib/api/errors";
-import type { QueuePage, WorkflowCatalog } from "../lib/api/domain";
+import type {
+  QueuePage,
+  TaxonomyRef,
+  TeamLoadEntry,
+  WorkflowCatalog,
+} from "../lib/api/domain";
 import { assertNever, toViewState } from "../lib/view-state";
 import type { ViewState } from "../lib/view-state";
 
@@ -32,8 +43,8 @@ import type { ViewState } from "../lib/view-state";
  * fetches anything for the first paint, and the island never refetches what this render
  * already produced.
  *
- * Three reads, in parallel, because the toolbar, the rail and the columns are one screen and
- * three round trips in series is a screen that paints in three parts:
+ * Four reads, in parallel, because the toolbar, the rail and the columns are one screen and
+ * four round trips in series is a screen that paints in four parts:
  *
  * - `GET /api/v1/queue` is the read model that already carries state, engagement type, owner,
  *   due date, risk flags and score per project — exactly the card — in one request.
@@ -43,7 +54,11 @@ import type { ViewState } from "../lib/view-state";
  *   card would have nowhere to be dropped. It publishes no transitions on purpose: legality
  *   still comes from the aggregate's own `transitions` (`docs/API.md` §2.18).
  * - `GET /api/v1/team/load` is the roster behind the "Miembros" bar; it also carries what each
- *   person is currently holding, which is what the avatar's accessible name says out loud.
+ *   person is currently holding, which is what the avatar's accessible name says out loud. It
+ *   is also the assignee picker of the create-task dialog this page renders.
+ * - `GET /api/v1/catalog` is that dialog's priority list. Read here rather than by the island,
+ *   because "Crear tarea" opens a modal in place now — a fetch on open would give the dialog a
+ *   loading arm for a list that never changes while the page is open.
  *
  * Only the queue can fail the page. A failed roster costs the owner filter and says so; a
  * failed workflow catalog costs the empty states — the bands fall back to the occupied ones —
@@ -165,10 +180,11 @@ function planBoard(
 
 const requestedProject = Astro.url.searchParams.get(BOARD_PROJECT_PARAM);
 
-const [result, teamResult, workflowResult] = await Promise.all([
+const [result, teamResult, workflowResult, catalogResult] = await Promise.all([
   getQueue({ page: 1, page_size: BOARD_PAGE_SIZE }),
   getTeamLoad(),
   getWorkflows(),
+  getCatalog(),
 ]);
 
 /**
@@ -199,6 +215,26 @@ const members: readonly MemberChipModel[] = teamResult.ok
   ? buildMembers(teamResult.data.items, NO_MEMBER_PHOTOS)
   : [];
 const membersNote = teamResult.ok ? null : MEMBERS_FAILED;
+
+/**
+ * What the create-task dialog offers.
+ *
+ * Neither read can take the board down: a portfolio whose catalog call failed is still a
+ * portfolio you must be able to read and move. So a failure degrades to an empty list and the
+ * dialog answers for itself — with no priority to send there is nothing to create, and its
+ * submit renders dead with the reason named rather than posting a task the server would refuse.
+ *
+ * The project is not decided here: `?project=` may name none, and the operator can change the
+ * selection without leaving the page. `create-task.ts` writes the selected code — and the
+ * dependency options, which are the tasks the board currently has painted — into the dialog as
+ * it opens it.
+ */
+const priorities: readonly TaxonomyRef[] = catalogResult.ok
+  ? catalogResult.data.priorities
+  : [];
+const roster: readonly TeamLoadEntry[] = teamResult.ok
+  ? teamResult.data.items
+  : [];
 ---
 
 <Shell
@@ -255,6 +291,22 @@ const membersNote = teamResult.ok ? null : MEMBERS_FAILED;
         membersNote={membersNote}
         workflowsNote={workflowsNote}
         selected={plan.selected}
+      />
+    )
+  }
+
+  {
+    /* The one create-task dialog of this page, rendered by the page rather than by the island:
+      the page is where reads happen, and a `<dialog>` is drawn in the top layer wherever it
+      sits. Only on the board arm — the other three have no project to create a task on. */
+  }
+  {
+    plan.kind === "board" && (
+      <CreateTaskDialog
+        projectCode=""
+        priorities={priorities}
+        members={roster}
+        tasks={[]}
       />
     )
   }

@@ -104,6 +104,7 @@ def create_project(
         business_value=command.business_value,
         currency=resolve_currency(command.currency_code),
         summary=command.summary,
+        description=command.description,
         next_step=command.next_step,
         imported_health=command.imported_health,
     )

@@ -37,6 +37,7 @@ from apps.events.domain.envelope import (
     TOPIC_PROJECT_PRIORITY_RECALCULATED,
     TOPIC_PROJECT_STATE_CHANGED,
     TOPIC_PROJECT_UPDATED,
+    TOPIC_TASK_ARCHIVE_CHANGED,
     TOPIC_TASK_CREATED,
     TOPIC_TASK_STATE_CHANGED,
     TOPIC_TASK_UPDATED,
@@ -78,6 +79,10 @@ ENGINE_TOPICS: Final[frozenset[str]] = frozenset(
         TOPIC_TASK_CREATED,
         TOPIC_TASK_UPDATED,
         TOPIC_TASK_STATE_CHANGED,
+        # Removing a task takes it out of every count the engine reads — open, overdue, urgent,
+        # blocked — so a portfolio where deleting the last overdue task left the score claiming
+        # overdue work would rank a cleaned-up project as a late one. Restoring it puts them back.
+        TOPIC_TASK_ARCHIVE_CHANGED,
         TOPIC_BLOCKER_RAISED,
         TOPIC_BLOCKER_RESOLVED,
         TOPIC_NOTE_ADDED,

@@ -25,8 +25,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from apps.prioritization.domain.views import OverrideView, RiskFlagView, ScoreView
 from apps.shared.refs import ActorRef, StateRef, TaxonomyRef
-from apps.work.domain.views import BlockerView, TaskView
-from apps.workflow.domain.views import TransitionOption
+from apps.work.domain.views import BlockerView, NoteView, TaskView
+from apps.workflow.domain.views import TransitionOption, WorkflowRef
 
 #: Display text for the three derived health values, in the source spreadsheet's own Spanish
 #: vocabulary (ARCHITECTURE §5) because the interface is Spanish (PRODUCT.md) — the same exception
@@ -142,6 +142,20 @@ class ProjectDetailView(BaseModel):
     one, between its ``project.created`` event and the recalculator's first pass. It is not
     flattened to zero, because "not scored yet" and "scored zero" rank the same and mean opposite
     things.
+
+    ``workflow`` names the graph that ``state`` and ``transitions`` come from, and whether an ops
+    lead assigned it to this project or it was inherited from the engagement type's binding. Two
+    projects of the same type may now follow different lifecycles, so "why does this one have a
+    button the other does not" is a question the payload has to be able to answer.
+
+    ``notes`` travels inside the detail for the reason
+    :class:`~apps.work.domain.views.TaskDetailView` already states: a surface that needs two
+    requests to render is two chances to render half a page, and two reads can straddle a write, so
+    a comment fetched separately can end up rendered beside a state it does not refer to. Newest
+    first, capped, and **including the notes written against this project's tasks** — the column is
+    copied onto them at write time and the ``note.added`` envelope names the project either way, so
+    excluding them would make a note vanish on reload after having appeared live. Empty means the
+    project has no commentary, never "we could not read it".
     """
 
     model_config = ConfigDict(frozen=True)
@@ -157,6 +171,7 @@ class ProjectDetailView(BaseModel):
     project_type: TaxonomyRef | None = None
     stage: TaxonomyRef | None = None
     state: StateRef
+    workflow: WorkflowRef
     health: HealthRef
     start_date: date | None = None
     target_date: date | None = None
@@ -174,6 +189,7 @@ class ProjectDetailView(BaseModel):
     tasks: tuple[TaskView, ...] = ()
     blockers: tuple[BlockerView, ...] = ()
     transitions: tuple[TransitionOption, ...] = ()
+    notes: tuple[NoteView, ...] = ()
     updated_at: datetime
 
 
@@ -231,3 +247,20 @@ class TeamLoadPage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     items: tuple[TeamLoadView, ...] = ()
+
+
+class ClientDirectoryView(BaseModel):
+    """The counterparties a project can be registered against, as ``GET /api/v1/clients`` returns.
+
+    An ``{items: [...]}`` object rather than a bare array, for the reason
+    :class:`TeamLoadPage` gives: a top-level list cannot grow a sibling key without breaking every
+    client that parsed it as one.
+
+    Each entry is a :class:`~apps.shared.refs.TaxonomyRef` even though a client is not a taxonomy
+    row, because on the wire it answers the same question — which of these do I choose — and a
+    fourth reference shape would be one more thing the frontend has to learn for no gain.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    items: tuple[TaxonomyRef, ...] = ()

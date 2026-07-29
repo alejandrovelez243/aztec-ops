@@ -62,10 +62,13 @@ const SKELETON_CARDS = [0, 1];
 
     <div class="tb-actions">
       {
-        /* The board does not own a creation dialog: it sends the operator to the project
-          detail, where the one "Crear tarea" flow lives. One creation flow, reached from two
-          places — a second copy here would be a second set of validation, of copy and of
-          failure modes for the same act, drifting apart the first time either is touched. */
+        /* Creation happens here, in place. One creation flow reached from two surfaces: the
+          dialog and every rule it enforces live in `CreateTaskDialog.astro` plus
+          `projects/create-task.ts`, which the page renders once and this button opens with the
+          selected project. Walking the operator to the project detail instead cost them the
+          board they were reading — the selection, the scroll and the columns — to answer five
+          fields; a second dialog of our own would have been a second set of validation, copy
+          and failure modes for the same act. */
       }
       <button
         type="button"

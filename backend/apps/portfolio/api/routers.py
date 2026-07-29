@@ -31,9 +31,16 @@ from apps.portfolio.domain.value_objects import (
     SnapshotQueueFilters,
     UpdateProjectCommand,
 )
-from apps.portfolio.domain.views import ProjectDetailView, QueueItemView, TeamLoadPage
+from apps.portfolio.domain.views import (
+    ClientDirectoryView,
+    ProjectDetailView,
+    QueueItemView,
+    TeamLoadPage,
+)
 from apps.portfolio.services import (
+    assign_project_workflow,
     create_project,
+    read_clients,
     read_project_detail,
     read_queue,
     read_team_load,
@@ -41,6 +48,7 @@ from apps.portfolio.services import (
     update_project,
 )
 from apps.shared.pagination import Page, PageWindow
+from apps.workflow.api.schemas import WorkflowAssignmentIn
 from config.auth import actor_code_of
 
 router = Router(tags=["portfolio"])
@@ -76,6 +84,21 @@ def get_queue(request: HttpRequest, filters: Query[QueueQuery]) -> Page[QueueIte
         ),
         now=timezone.now(),
     )
+
+
+@router.get("/clients", response=ClientDirectoryView, url_name="clients")
+def get_clients(request: HttpRequest) -> ClientDirectoryView:
+    """The counterparties a project can be registered against.
+
+    Here and not on ``GET /api/v1/catalog`` because ``Client`` is a portfolio aggregate, not one of
+    the operator-editable taxonomies that document publishes: serving it there would make the
+    catalog context read a model another context owns.
+
+    Retired counterparties are absent — the projects already pointing at one keep resolving through
+    their foreign key, but nobody can pick it again.
+    """
+    del request
+    return read_clients()
 
 
 @router.get(
@@ -118,6 +141,7 @@ def post_project(request: HttpRequest, payload: ProjectCreateIn) -> Status[Proje
             business_value=payload.business_value,
             currency_code=payload.currency,
             summary=payload.summary,
+            description=payload.description,
             next_step=payload.next_step,
         ),
         actor=actor_code_of(request),
@@ -169,6 +193,85 @@ def post_project_transition(
         to_state_code=payload.to_state,
         actor=actor_code_of(request),
         reason=payload.reason,
+        correlation_id=uuid4(),
+        now=now,
+    )
+    return read_project_detail(project_code=project_code, now=now)
+
+
+@router.put(
+    "/projects/{project_code}/workflow",
+    response=ProjectDetailView,
+    url_name="project_workflow_assign",
+)
+def put_project_workflow(
+    request: HttpRequest, project_code: str, payload: WorkflowAssignmentIn
+) -> ProjectDetailView:
+    """Put this project on a named lifecycle, overriding what its engagement type binds.
+
+    A route of its own rather than a field of ``PATCH /projects/{code}`` for two reasons that
+    survive the permission being the same as every other project write: it can be refused for a
+    cause no other field of a project edit has — the target graph not containing the state the
+    project stands on — and a service that both edited scalars and reassigned lifecycles would be
+    two use cases sharing one transaction boundary.
+
+    **Any member, deliberately.** This was an ops-lead write, on the argument that deciding which
+    lifecycle a record obeys is a lead's call. What made that untenable is that the same act reaches
+    the operation by a second door: changing a project's engagement type through
+    ``PATCH /projects/{code}`` re-resolves the binding and therefore the graph, and that field is
+    any member's. One act behind two doors, one locked and one open, is not a permission model —
+    it is a lock on the door nobody was using. Closing the other door instead would take the
+    engagement type away from the people who own it, so the gate came off this one.
+
+    **It changes the graph, never the state.** The project keeps the state ``code`` it was standing
+    on and is repointed at that state in the target graph, so this cannot be used to move a project
+    to a state no edge leads to. Moving remains ``POST /projects/{code}/transition``.
+
+    ``409 conflicting_state`` when the target has no active state carrying the project's current
+    state code, with ``details.available`` listing the states it does offer: either add the missing
+    column to the target (§2.19) or move the project first, then reassign.
+
+    Errors: ``404 not_found`` (no such project, or no such workflow), ``409 conflicting_state``
+    (incompatible state; or the target is retired), ``422 validation_error`` (the target governs
+    tasks, not projects).
+    """
+    now = timezone.now()
+    assign_project_workflow(
+        project_code=project_code,
+        workflow_code=payload.workflow,
+        actor=actor_code_of(request),
+        correlation_id=uuid4(),
+        now=now,
+    )
+    return read_project_detail(project_code=project_code, now=now)
+
+
+@router.delete(
+    "/projects/{project_code}/workflow",
+    response=ProjectDetailView,
+    url_name="project_workflow_clear",
+)
+def delete_project_workflow(request: HttpRequest, project_code: str) -> ProjectDetailView:
+    """Stop this project following its own lifecycle: it inherits one again.
+
+    ``DELETE`` removes the *assignment*, never a workflow and never the project. What comes back is
+    the project following whatever the binding ladder hands it — its engagement type's binding, the
+    per-kind default binding, or the default graph — and the detail's ``workflow.source`` flips from
+    ``DIRECT`` to ``INHERITED``.
+
+    The inherited graph is compatibility-checked exactly like a named one: if it does not contain
+    the state the project is standing on, this is the same ``409 conflicting_state``. "Inherited" is
+    not a synonym for "safe", and a project cannot be dropped back onto a lifecycle that has no
+    column for where it stands.
+
+    Errors: ``404 not_found``, ``409 conflicting_state``, ``422 validation_error`` (no binding and
+    no default workflow answers for projects).
+    """
+    now = timezone.now()
+    assign_project_workflow(
+        project_code=project_code,
+        workflow_code=None,
+        actor=actor_code_of(request),
         correlation_id=uuid4(),
         now=now,
     )

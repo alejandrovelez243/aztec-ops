@@ -125,3 +125,25 @@ class TransitionUpdateIn(BaseModel):
     guard: str | None = Field(default=None, max_length=GUARD_MAX_LENGTH)
     order: int | None = Field(default=None, ge=0, le=ORDER_MAX)
     is_active: Literal[True] | None = None
+
+
+class WorkflowAssignmentIn(BaseModel):
+    """Body of ``PUT /api/v1/projects/{code}/workflow`` and ``PUT /api/v1/tasks/{code}/workflow``.
+
+    One shape for both because it is one decision — "this record follows that lifecycle" — and the
+    only field it carries is a ``Workflow.code``, which is this context's vocabulary rather than the
+    portfolio's or the work context's. A copy in each of them would be two chances to disagree about
+    the length of a slug neither of them owns.
+
+    It lives among the *authoring* bodies while being posted to a *record*, and that is deliberate:
+    the write it feeds is neither a project edit nor a task edit but a statement about which graph
+    governs a record, ops-lead gated like everything else that decides how work is allowed to behave.
+
+    ``workflow`` is required. Going back to inheriting a lifecycle is ``DELETE`` on the same path,
+    not a ``null`` here: a body whose only field may be null makes two different decisions look like
+    one payload, so a client that forgot to fill it in would clear an assignment it meant to change.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    workflow: str = Field(min_length=1, max_length=WORKFLOW_CODE_MAX_LENGTH)

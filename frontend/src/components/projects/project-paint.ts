@@ -16,6 +16,7 @@
 
 import { applyTone, cloneTemplate, pulse, setField } from "./dom";
 import { renderDateControl } from "../ui/date-field";
+import { renderLifecyclePlate } from "../lifecycle/paint";
 import { joinFields, riskLabel } from "./messages";
 import { renderOwnerControl } from "./owner-menu";
 import { emptyAggregateFields } from "./presentation";
@@ -54,6 +55,10 @@ export function applyProjectDetail(project: ProjectDetail): void {
     if (owner !== null) renderOwnerControl(owner, project.owner ?? null);
 
     renderNextStep(header, project.next_step ?? null);
+    // The lifecycle and the state travel together on purpose: which graphs this
+    // project could be moved onto depends on the state it is standing on, so a
+    // transition has to reach the plate even though it changes no lifecycle.
+    renderLifecyclePlate(header, project);
     header.dataset.updatedAt = project.updated_at;
     pulse(header);
   }

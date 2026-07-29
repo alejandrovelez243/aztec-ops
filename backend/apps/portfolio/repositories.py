@@ -1,10 +1,13 @@
-"""The one query in this codebase that belongs to no model: owner load.
+"""A query that belongs to no model: owner load.
 
 Every other named query lives on its model's ``QuerySet`` and is reached through ``objects`` —
 ``Project.objects.with_relations().by_code(code)``, ``ProjectSnapshot.objects.in_attention()`` —
 because a query written as a free function returns a materialized list and therefore cannot be
 narrowed, so every new combination needs a new function. This module is the documented exception,
-and it is the *only* one. **Do not tidy this function onto a manager.** Doing so is what creates
+and there are exactly two in the codebase: this one, and
+:mod:`apps.workflow.repositories`, which counts how many records are standing on a workflow state.
+Both are cross-context *questions* rather than queries over one table, and both live in the context
+that consumes the answer. **Do not tidy this function onto a manager.** Doing so is what creates
 the coupling it exists to prevent:
 
 * It has two owners and no home. The numerator is an aggregate over ``work.Task`` rows keyed by
@@ -106,8 +109,12 @@ def _task_counts(*, codes: Iterable[str], as_of: date | None) -> dict[str, dict[
     # An absent ``as_of`` must count nothing, not everything: ``Q(pk__in=[])`` is the empty filter,
     # whereas omitting the predicate would count every open task as overdue.
     is_overdue = Q(due_date__lt=as_of) if as_of is not None else Q(pk__in=[])
+    # Scoped to the unremoved tasks (ADR 0012). Owner load is what the ``OWNER_OVERLOADED`` flag
+    # is computed from, so counting work that was removed would keep somebody flagged as
+    # overloaded for a backlog that no longer exists.
     rows = (
-        Task.objects.filter(assignee__code__in=codes)
+        Task.objects.active()
+        .filter(assignee__code__in=codes)
         .values("assignee__code")
         .annotate(
             open_task_count=Count("pk", filter=is_open),
