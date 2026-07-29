@@ -12,7 +12,8 @@
  * rather than recomputed inside a keystroke handler that runs over every row.
  */
 
-import type { QueueItem } from "../../lib/api/domain";
+import type { Override, ProjectDetail, QueueItem } from "../../lib/api/domain";
+import { formatInstant } from "./format";
 import { categoryLabel } from "./tone";
 
 /** One project as every list surface renders it. */
@@ -88,6 +89,59 @@ export function toPresentation(item: QueueItem): ProjectPresentation {
     updatedAt: item.updated_at,
     searchKey: `${item.code} ${item.name} ${item.client_alias}`.toLowerCase(),
   };
+}
+
+/**
+ * The aggregate attributes a transition's `requires_fields` can name, and
+ * whether each is currently empty on this project.
+ *
+ * A transition demanding a field the project has not filled in renders dead
+ * with the field named, which is the whole reason the API ships
+ * `requires_fields` even though it changes nothing about the request body.
+ *
+ * An attribute this build does not know counts as **empty**: the honest answer
+ * to a contract that grew is a button that refuses and says which field it is
+ * waiting for, not a button that posts and is refused by the server.
+ */
+export function emptyAggregateFields(project: ProjectDetail): readonly string[] {
+  const values: Readonly<Record<string, unknown>> = {
+    name: project.name,
+    summary: project.summary ?? null,
+    client: project.client,
+    owner: project.owner ?? null,
+    engagement_type: project.engagement_type,
+    project_type: project.project_type ?? null,
+    stage: project.stage ?? null,
+    start_date: project.start_date ?? null,
+    target_date: project.target_date ?? null,
+    business_value: project.business_value ?? null,
+    next_step: project.next_step ?? null,
+  };
+
+  const empty = new Set<string>();
+  for (const transition of project.transitions) {
+    for (const field of transition.requires_fields) {
+      const value = values[field];
+      if (value === undefined || value === null || value === "") empty.add(field);
+    }
+  }
+  return [...empty];
+}
+
+/**
+ * The one line describing a forced rank: what was forced, by whom, when.
+ *
+ * Shared by the server render and by the island that patches the plate after an
+ * override is saved — written twice, the two would eventually disagree about
+ * the very decision this line exists to record.
+ */
+export function overrideSummary(forced: Override | null): string {
+  if (forced === null) return "";
+  const amount =
+    forced.position !== null && forced.position !== undefined
+      ? `Posición ${forced.position}`
+      : `Impulso ${forced.boost ?? ""}`;
+  return `${amount} · ${forced.actor} · ${formatInstant(forced.created_at) ?? ""}`;
 }
 
 /**

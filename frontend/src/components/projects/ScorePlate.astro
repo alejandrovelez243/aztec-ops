@@ -20,6 +20,7 @@
 import Icon from "../ui/Icon.astro";
 import { barWidth, formatContribution, formatInstant, formatScore } from "./format";
 import { signalLabel } from "./messages";
+import { overrideSummary } from "./presentation";
 import type { Override, Score } from "../../lib/api/domain";
 
 export interface Props {
@@ -29,30 +30,17 @@ export interface Props {
   score: Score | null;
   /** The forced rank in effect, or `null`. */
   override: Override | null;
+  /** The project's `updated_at`; the floor every live patch is compared to. */
+  updatedAt: string;
 }
 
-const { projectCode, score, override } = Astro.props;
+const { projectCode, score, override, updatedAt } = Astro.props;
 
 const breakdown = score?.breakdown ?? [];
 const total = breakdown.reduce((sum, entry) => sum + Math.abs(entry.contribution), 0);
 const computedAt = formatInstant(score?.computed_at ?? null);
 
-/**
- * The one line that says *what* was forced, by whom and when. Built here rather
- * than in the template, where the branch between a fixed position and a boost
- * would be unreadable — and where it would have to be rewritten identically in
- * the island that patches it.
- */
-function overrideMeta(forced: Override | null): string {
-  if (forced === null) return "";
-  const amount =
-    forced.position !== null && forced.position !== undefined
-      ? `Posición ${forced.position}`
-      : `Impulso ${forced.boost ?? ""}`;
-  return `${amount} · ${forced.actor} · ${formatInstant(forced.created_at) ?? ""}`;
-}
-
-const overrideLine = overrideMeta(override);
+const overrideLine = overrideSummary(override);
 const overrideReason = override?.reason ?? "";
 ---
 
@@ -60,6 +48,7 @@ const overrideReason = override?.reason ?? "";
   class="plate card"
   data-score-plate
   data-project-code={projectCode}
+  data-updated-at={updatedAt}
   aria-label="Prioridad y su desglose"
 >
   <header class="head">
@@ -111,7 +100,7 @@ const overrideReason = override?.reason ?? "";
     {
       breakdown.map((entry) => (
         <li class="signal" data-signal={entry.code}>
-          <p class="title name">{signalLabel(entry.code)}</p>
+          <p class="title name" data-field="signal-name">{signalLabel(entry.code)}</p>
           <p class="figure contribution" data-field="contribution">
             {formatContribution(entry.contribution)}
           </p>

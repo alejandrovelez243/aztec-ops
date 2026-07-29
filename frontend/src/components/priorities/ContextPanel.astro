@@ -198,6 +198,7 @@ const trimmedNextStep = nextStep === null ? "" : nextStep.trim();
       type="button"
       data-action="open-override"
       data-ops-lead
+      aria-expanded="false"
       hidden
     >
       Ajustar prioridad
@@ -275,7 +276,12 @@ const trimmedNextStep = nextStep === null ? "" : nextStep.trim();
     display: none;
   }
 
-  .clear[hidden] {
+  /*
+   * `.btn` sets `display: inline-flex`, which outranks the UA's `[hidden]` rule —
+   * without this, every ops-lead control would ship visible to everybody.
+   */
+  .clear[hidden],
+  .actions .btn[hidden] {
     display: none;
   }
 

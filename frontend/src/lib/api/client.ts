@@ -61,10 +61,21 @@ export type Result<T> = { ok: true; data: T } | { ok: false; error: ApiError };
 type QueryValue =
   string | number | boolean | readonly string[] | null | undefined;
 
-const BASE_URL: string =
-  import.meta.env.INTERNAL_API_URL ??
-  import.meta.env.PUBLIC_API_URL ??
-  "http://localhost:8000";
+/**
+ * Where the API is, from where this code happens to be running.
+ *
+ * Two callers, two answers: a server render reaches the API by its compose
+ * service name over the internal network, while the browser reaches the same
+ * process through its published port on the host. Branching on `import.meta.env.SSR`
+ * rather than relying on `INTERNAL_API_URL` being undefined in the browser —
+ * which is true, since Astro only exposes `PUBLIC_*` — states the intent instead
+ * of depending on an absence.
+ */
+const BASE_URL: string = import.meta.env.SSR
+  ? (import.meta.env.INTERNAL_API_URL ??
+    import.meta.env.PUBLIC_API_URL ??
+    "http://localhost:8000")
+  : (import.meta.env.PUBLIC_API_URL ?? "http://localhost:8000");
 
 /** Event dispatched on `window` when the refresh token itself is rejected. */
 export const SESSION_EXPIRED_EVENT = "aztec:session-expired";
@@ -85,6 +96,13 @@ let refreshInFlight: Promise<string | null> | null = null;
  * (the refresh response re-sets it).
  */
 export async function ensureFreshAccess(): Promise<string | null> {
+  if (import.meta.env.SSR) {
+    // Server render: the credential is whatever the middleware pulled off this
+    // request's mirror cookie. Nothing to refresh — the refresh token stays in
+    // the browser by design (see src/middleware.ts).
+    const { getServerToken } = await import("../auth/server-token");
+    return getServerToken();
+  }
   const session = loadSession();
   if (session === null) return null;
   if (isAccessFresh(session)) return session.access;
@@ -101,7 +119,7 @@ async function refreshAccess(session: StoredSession): Promise<string | null> {
   if (!result.ok) {
     // Only a rejected credential ends the session; a network blip must not
     // sign the operator out of a tab that will reconnect on its own.
-    if (result.error.kind !== "network") {
+    if (result.error.kind === "auth" || result.error.kind === "validation") {
       clearSession();
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));

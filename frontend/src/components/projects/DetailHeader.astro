@@ -1,0 +1,176 @@
+---
+/**
+ * The identity card of one project: what it is, whose it is, where it stands,
+ * and the legal moves out of here.
+ *
+ * The title carries `transition:name` so the card the operator clicked on
+ * `/projects` becomes this heading instead of the page cutting to it — the
+ * shared element that makes the two surfaces feel like one object being opened.
+ *
+ * Absences are named, never blank: no deadline is an ámbar "Sin fecha", no next
+ * step is an ámbar chip saying so, and an unowned project says that too.
+ */
+import DueChip from "./DueChip.astro";
+import OwnerBadge from "./OwnerBadge.astro";
+import StateChip from "./StateChip.astro";
+import TransitionBar from "./TransitionBar.astro";
+import { healthTone, taxonomyTone, toneStyle } from "./tone";
+import type { Transition } from "../../lib/api/domain";
+
+export interface Props {
+  code: string;
+  name: string;
+  /** One-line description; `null` when nobody wrote one. */
+  summary: string | null;
+  clientLabel: string;
+  ownerAlias: string | null;
+  ownerLabel: string | null;
+  engagementLabel: string;
+  engagementColor: string | null;
+  stateLabel: string;
+  stateCategory: string;
+  stateColor: string | null;
+  healthCode: string;
+  healthLabel: string;
+  targetDate: string | null;
+  /** What happens next; `null` is the `NO_NEXT_STEP` signal itself. */
+  nextStep: string | null;
+  isArchived: boolean;
+  /** The read's `updated_at`; every live patch is compared against it. */
+  updatedAt: string;
+  /** The only source of transition buttons (`docs/API.md` §2.2). */
+  transitions: readonly Transition[];
+  /** Aggregate attributes that are currently empty, from the same read. */
+  emptyFields: readonly string[];
+}
+
+const {
+  code,
+  name,
+  summary,
+  clientLabel,
+  ownerAlias,
+  ownerLabel,
+  engagementLabel,
+  engagementColor,
+  stateLabel,
+  stateCategory,
+  stateColor,
+  healthCode,
+  healthLabel,
+  targetDate,
+  nextStep,
+  isArchived,
+  updatedAt,
+  transitions,
+  emptyFields,
+} = Astro.props;
+
+const engagement = taxonomyTone(engagementColor);
+const health = healthTone(healthCode);
+---
+
+<header class="head card" data-project-header data-updated-at={updatedAt}>
+  <div class="top">
+    <span class="chip chip-code">{code}</span>
+    <StateChip label={stateLabel} category={stateCategory} color={stateColor} />
+    <span class:list={["chip", health]} data-health-chip>{healthLabel}</span>
+    {isArchived && <span class="chip tone-piedra">Archivado</span>}
+  </div>
+
+  <h1 class="h1 name" transition:name={`proj-${code}`}>{name}</h1>
+  {summary !== null && summary !== "" && <p class="body-text summary">{summary}</p>}
+
+  <dl class="facts">
+    <div class="fact">
+      <dt class="label">Cliente</dt>
+      <dd class="title">{clientLabel}</dd>
+    </div>
+    <div class="fact">
+      <dt class="label">Responsable</dt>
+      <dd>
+        <OwnerBadge alias={ownerAlias} label={ownerLabel} />
+      </dd>
+    </div>
+    <div class="fact">
+      <dt class="label">Tipo de contrato</dt>
+      <dd>
+        <span class:list={["chip", engagement.className]} style={toneStyle(engagement)}>
+          {engagementLabel}
+        </span>
+      </dd>
+    </div>
+    <div class="fact">
+      <dt class="label">Fecha objetivo</dt>
+      <dd><DueChip date={targetDate} /></dd>
+    </div>
+    <div class="fact wide">
+      <dt class="label">Próximo paso</dt>
+      <dd data-next-step>
+        {
+          nextStep === null || nextStep === "" ? (
+            <span class="chip tone-ambar">Sin próximo paso</span>
+          ) : (
+            <span class="body-text">{nextStep}</span>
+          )
+        }
+      </dd>
+    </div>
+  </dl>
+
+  <TransitionBar
+    projectCode={code}
+    transitions={transitions}
+    emptyFields={emptyFields}
+    updatedAt={updatedAt}
+  />
+</header>
+
+<style>
+  .head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-5);
+  }
+
+  .top {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .name {
+    margin-top: var(--space-1);
+    overflow-wrap: anywhere;
+  }
+
+  .summary {
+    color: var(--tinta-media);
+  }
+
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--space-4);
+    margin-top: var(--space-2);
+    padding-top: var(--space-4);
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .fact {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .fact.wide {
+    grid-column: 1 / -1;
+  }
+
+  dd {
+    margin: 0;
+  }
+</style>

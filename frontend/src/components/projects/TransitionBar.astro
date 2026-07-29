@@ -1,0 +1,193 @@
+---
+/**
+ * The legal moves out of the current state — one button per entry in
+ * `project.transitions`, which is the **only** source of them
+ * (`docs/API.md` §2.2).
+ *
+ * The frontend holds no list of state codes and never guesses legality, so a
+ * workflow state added in the admin appears here with zero frontend changes,
+ * and an empty list renders no buttons rather than inventing one.
+ *
+ * A transition whose `requires_fields` names something the project has not
+ * filled in renders **visibly dead** — disabled, with the missing field named
+ * beside it and wired through `aria-describedby` — instead of disappearing or
+ * letting the operator discover the rule through a 422.
+ */
+import { joinFields } from "./messages";
+import type { Transition } from "../../lib/api/domain";
+
+export interface Props {
+  projectCode: string;
+  transitions: readonly Transition[];
+  /** Aggregate attributes currently empty on this project. */
+  emptyFields: readonly string[];
+  /** The read's `updated_at`; the floor for every live patch. */
+  updatedAt: string;
+}
+
+const { projectCode, transitions, emptyFields, updatedAt } = Astro.props;
+
+/** The fields this edge demands that the project has not got. */
+function missingFor(transition: Transition): readonly string[] {
+  return transition.requires_fields.filter((field) => emptyFields.includes(field));
+}
+
+const options = transitions.map((transition) => ({
+  transition,
+  missing: missingFor(transition),
+  describedBy: `req-${projectCode}-${transition.to_state.code}`,
+}));
+---
+
+<div
+  class="bar"
+  data-transition-bar
+  data-project-code={projectCode}
+  data-updated-at={updatedAt}
+>
+  <p class="label">Mover a</p>
+
+  <div class="options" data-transition-options>
+    {
+      options.map(({ transition, missing, describedBy }) => (
+        <span class="option">
+          <button
+            class="btn btn-secondary"
+            type="button"
+            data-transition
+            data-to-state={transition.to_state.code}
+            data-requires-reason={String(transition.requires_reason)}
+            disabled={missing.length > 0}
+            aria-describedby={missing.length > 0 ? describedBy : undefined}
+          >
+            <span data-field="transition-label">{transition.label}</span>
+          </button>
+          {missing.length > 0 && (
+            <span class="small missing" id={describedBy} data-field="transition-missing">
+              Falta {joinFields(missing)}
+            </span>
+          )}
+        </span>
+      ))
+    }
+  </div>
+
+  {/* Always rendered, so the island can reveal it when a move lands the
+      project in a terminal state and the button list becomes empty. */}
+  <p class="small" data-no-transitions hidden={transitions.length > 0}>
+    Este estado es terminal: no hay movimientos disponibles.
+  </p>
+
+  {/* One home for the option markup; the island clones it when the legal moves
+      change after a transition. */}
+  <template data-template="transition">
+    <span class="option">
+      <button class="btn btn-secondary" type="button" data-transition>
+        <span data-field="transition-label"></span>
+      </button>
+      <span class="small missing" data-field="transition-missing" hidden></span>
+    </span>
+  </template>
+
+  <dialog class="dialog" data-reason-dialog aria-labelledby="reason-title">
+    <form method="dialog" data-reason-form>
+      <h2 class="h2" id="reason-title">
+        Mover a <span data-field="reason-target"></span>
+      </h2>
+      <p class="small">
+        Esta transición exige un motivo. Queda en la bitácora del proyecto junto al cambio.
+      </p>
+      <label class="field">
+        <span class="label">Motivo</span>
+        <textarea
+          class="input"
+          name="reason"
+          rows="3"
+          required
+          placeholder="Qué obliga a este movimiento"></textarea>
+      </label>
+      <p class="small error" data-field="reason-error" hidden></p>
+      <div class="dialog-actions">
+        <button class="btn btn-ghost" type="button" data-action="close-reason">Cancelar</button>
+        <button class="btn btn-primary" type="submit" data-action="submit-reason">
+          Confirmar movimiento
+        </button>
+      </div>
+    </form>
+  </dialog>
+</div>
+
+<script>
+  import { onPage } from "./island";
+  import { mountTransitionBar } from "./transition-bar";
+
+  onPage("[data-transition-bar]", mountTransitionBar);
+</script>
+
+<style>
+  .bar {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin-top: var(--space-2);
+    padding-top: var(--space-4);
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  .option {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .missing {
+    color: var(--ambar-ink);
+  }
+
+  .missing[hidden] {
+    display: none;
+  }
+
+  .dialog {
+    width: min(460px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+  }
+
+  .dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .error {
+    color: var(--rojo-ink);
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+</style>

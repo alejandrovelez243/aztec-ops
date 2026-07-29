@@ -179,6 +179,86 @@ const height = Math.round((width * 3) / 4);
     stroke-width: 2;
   }
 
+  /*
+   * Idle motion. An empty state is where a person waits, so these keep a slow
+   * pulse of life — but every loop is long, small and out of phase, so the
+   * scene breathes instead of demanding attention. Nothing here conveys
+   * meaning: it is all suppressed under `prefers-reduced-motion` by the global
+   * rule in base.css, and the message reads identically without a single frame.
+   */
+  .illustration [data-piece],
+  .illustration .accent-verde,
+  .illustration .accent-stroke {
+    transform-box: fill-box;
+    transform-origin: center;
+  }
+
+  /* The settled card drifts as if the wall breathed. */
+  .sheet,
+  .accent-verde {
+    animation: flotar 7s ease-in-out infinite;
+  }
+
+  /* The one lit bead on an empty timeline: the only thing still awake. */
+  .accent-dot {
+    animation: latir 3.6s ease-in-out infinite;
+  }
+
+  /* The glass sweeps the wall it found nothing on. */
+  .accent-stroke {
+    animation: barrer 9s ease-in-out infinite;
+  }
+
+  /* The knocked-out card keeps falling, and never lands. */
+  .accent-fill {
+    animation: caer 6s ease-in-out infinite;
+  }
+
+  @keyframes flotar {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-4px);
+    }
+  }
+
+  @keyframes latir {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.55;
+      transform: scale(0.82);
+    }
+  }
+
+  @keyframes barrer {
+    0%,
+    100% {
+      transform: translate(0, 0) rotate(0deg);
+    }
+    35% {
+      transform: translate(9px, 4px) rotate(3deg);
+    }
+    70% {
+      transform: translate(-7px, 2px) rotate(-2deg);
+    }
+  }
+
+  @keyframes caer {
+    0%,
+    100% {
+      transform: rotate(0deg) translateY(0);
+    }
+    50% {
+      transform: rotate(-4deg) translateY(6px);
+    }
+  }
+
   .dashed {
     stroke-dasharray: 7 6;
   }

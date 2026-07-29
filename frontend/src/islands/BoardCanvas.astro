@@ -1,0 +1,1724 @@
+---
+import BoardColumn from "../components/board/BoardColumn.astro";
+import EngagementSwitcher from "../components/board/EngagementSwitcher.astro";
+import type { Option } from "../components/board/EngagementSwitcher.astro";
+import Icon from "../components/ui/Icon.astro";
+import { BOARD_ENGAGEMENT_KEY } from "../components/board/board-dom";
+import type { BoardPanelModel } from "../components/board/board-model";
+
+/**
+ * The board canvas: the one island of `/board`, and the home of the product's signature
+ * interaction — cards with mass.
+ *
+ * What it owns, and why it is one island rather than four:
+ *
+ * - **Drag.** Pointer events plus `setPointerCapture`, no drag library. The card lifts, tilts
+ *   toward its own velocity and *trails the hand* through a critically damped follower on
+ *   rAF; the board announces legality while it travels, and the drop is answered by the
+ *   server, never by the client.
+ * - **Its keyboard and touch twin.** Every card carries a "Mover a…" menu listing the same
+ *   legal moves and posting through the same path. Drag is the enhancement, never the only
+ *   way in (DESIGN.md, Do's).
+ * - **The stream.** `project.state_changed` from another operator travels the card across the
+ *   board with an attribution chip riding on it — the moment the product's multiplayer nature
+ *   is shown instead of implied.
+ *
+ * All three mutate the same cards, so they share one controller: split across islands they
+ * would race each other on the same DOM node with no owner of the truth.
+ *
+ * The first paint is server-rendered by the page; this island never fetches the board. It
+ * fetches exactly two things on demand — a project's legal moves, and the transition POST —
+ * and compares every envelope's `occurred_at` against the card's rendered `updated_at` before
+ * touching it (`docs/standards/PATTERNS_FRONTEND.md` §6).
+ */
+export interface Props {
+  panels: readonly BoardPanelModel[];
+  /** Engagement type painted first; the browser swaps to the operator's stored choice. */
+  defaultEngagement: string;
+  /**
+   * Connection arm the server rendered. `stale` is the `disconnected` view state: the board
+   * stays on screen, marked, with drags refused — never blanked (`FRONTEND.md` §1).
+   */
+  connection: "live" | "stale";
+  /** `occurred_at` of the last envelope the store saw, for the staleness sentence. */
+  lastEventAt: string | null;
+}
+
+const { panels, defaultEngagement, connection, lastEventAt } = Astro.props;
+
+const options: Option[] = panels.map((panel) => ({
+  code: panel.engagementType.code,
+  label: panel.engagementType.label,
+  tone: panel.tone,
+  count: panel.columns.reduce((total, column) => total + column.cards.length, 0),
+}));
+
+/** Server-side twin of the runtime's staleness sentence; both name the same moment. */
+const staleSentence =
+  lastEventAt === null
+    ? "Sin conexión en vivo. El tablero muestra los datos con los que se cargó la página."
+    : `Sin conexión en vivo. El tablero muestra los datos de las ${new Intl.DateTimeFormat(
+        "es",
+        { hour: "2-digit", minute: "2-digit" },
+      ).format(new Date(lastEventAt))}.`;
+---
+
+<div
+  class="board"
+  data-board
+  data-engagement={defaultEngagement}
+  data-connection={connection}
+  data-last-event-at={lastEventAt ?? ""}
+>
+  <div class="board-bar">
+    <EngagementSwitcher options={options} active={defaultEngagement} />
+    <p class="small board-hint" lang="es">
+      Arrastra una tarjeta a otra columna, o usa <strong>Mover a…</strong> en la
+      tarjeta.
+    </p>
+  </div>
+
+  <div
+    class="stale card tone-ambar"
+    data-board-stale
+    hidden={connection === "live"}
+    role="status"
+  >
+    <Icon name="alert" size={18} />
+    <p class="small" data-board-stale-text lang="es">{staleSentence}</p>
+    <button
+      type="button"
+      class="btn btn-secondary"
+      data-board-stale-action
+      data-mode="offline"
+      lang="es">Reconectar</button
+    >
+  </div>
+
+  {
+    panels.map((panel) => (
+      <section
+        class="panel"
+        id={`panel-${panel.engagementType.code}`}
+        data-panel
+        data-engagement-code={panel.engagementType.code}
+        hidden={panel.engagementType.code !== defaultEngagement}
+        aria-label={`Tablero de ${panel.engagementType.label}`}
+      >
+        <div class="columns">
+          {panel.columns.map((column) => (
+            <BoardColumn column={column} />
+          ))}
+        </div>
+      </section>
+    ))
+  }
+
+  <div class="move-menu card" id="board-move-menu" data-move-menu hidden>
+    <p
+      class="label move-menu-title"
+      id="board-move-menu-title"
+      data-move-menu-title
+      lang="es"
+    >
+    </p>
+    <div
+      class="move-menu-list"
+      data-move-menu-list
+      role="menu"
+      aria-labelledby="board-move-menu-title"
+    >
+    </div>
+  </div>
+
+  <dialog class="reason-dialog" data-reason-dialog aria-labelledby="reason-title">
+    <form method="dialog" data-reason-form>
+      <h2 class="h2" id="reason-title" lang="es">Motivo del cambio</h2>
+      <p class="small" data-reason-context lang="es"></p>
+      <label class="label reason-label" for="reason-input" lang="es"
+        >Motivo</label
+      >
+      <textarea
+        class="input"
+        id="reason-input"
+        data-reason-input
+        rows="3"
+        required
+        lang="es"></textarea>
+      <div class="reason-actions">
+        <button
+          type="button"
+          class="btn btn-secondary"
+          data-reason-cancel
+          lang="es">Cancelar</button
+        >
+        <button
+          type="submit"
+          class="btn btn-primary"
+          value="confirm"
+          data-reason-submit
+          disabled
+          lang="es">Confirmar</button
+        >
+      </div>
+    </form>
+  </dialog>
+</div>
+
+<script is:inline define:vars={{ key: BOARD_ENGAGEMENT_KEY }}>
+  // Applied before paint so the operator's board does not flash the alphabetically
+  // first engagement type on every navigation. The module below re-applies it (and
+  // owns every later switch); this is only the anti-flash pass.
+  try {
+    const stored = window.localStorage.getItem(key);
+    const script = document.currentScript;
+    const board = script === null ? null : script.previousElementSibling;
+    const panel =
+      stored === null || board === null
+        ? null
+        : board.querySelector(
+            `[data-panel][data-engagement-code="${CSS.escape(stored)}"]`,
+          );
+    if (board !== null && panel !== null && stored !== null) {
+      board.setAttribute("data-engagement", stored);
+      for (const candidate of board.querySelectorAll("[data-panel]")) {
+        if (candidate === panel) candidate.removeAttribute("hidden");
+        else candidate.setAttribute("hidden", "");
+      }
+      for (const pill of board.querySelectorAll("[data-engagement-pill]")) {
+        pill.setAttribute(
+          "aria-pressed",
+          pill.getAttribute("data-engagement-code") === stored
+            ? "true"
+            : "false",
+        );
+      }
+    }
+  } catch {
+    /* storage disabled: the server's default type stays selected */
+  }
+</script>
+
+<script>
+  import type { ProjectDetail } from "../lib/api/domain";
+  import { getOperator } from "../lib/auth/session";
+  import {
+    countUp,
+    flip,
+    prefersReducedMotion,
+    sampleSpring,
+    shake,
+    travelBy,
+  } from "../lib/motion/spring";
+  import { onReset, onStatus, retry, subscribe } from "../lib/stream/store";
+  import type { Envelope } from "../lib/stream/store";
+  import { toast } from "../lib/toast";
+  import {
+    BOARD_ENGAGEMENT_KEY,
+    SEL,
+    bodyOf,
+    cardsOf,
+    columnOf,
+    columnsOf,
+    findCard,
+    findColumn,
+    isNewer,
+    isPending,
+    labelOf,
+    markUpdatedAt,
+    panelOf,
+    patchStateChip,
+    refreshColumn,
+    rideAttribution,
+    setPending,
+  } from "../components/board/board-dom";
+  import { fieldList } from "../components/board/board-model";
+  import {
+    invalidateMoves,
+    loadMoves,
+    moveErrorCopy,
+    submitMove,
+    type MoveOption,
+    type MovesResult,
+  } from "../components/board/board-moves";
+
+  /** Movement past which a press becomes a drag instead of a click. */
+  const DRAG_THRESHOLD_PX = 4;
+  /** Follower spring: stiff enough to obey, soft enough that the card visibly trails. */
+  const FOLLOW_STIFFNESS = 260;
+  /** Critical damping (2√k, mass 1): lag without wobble — mass, not jelly. */
+  const FOLLOW_DAMPING = 2 * Math.sqrt(FOLLOW_STIFFNESS);
+  /** Frame clamp, so a backgrounded tab does not integrate one enormous step. */
+  const MAX_FRAME_SECONDS = 0.032;
+  const FALLBACK_FRAME_SECONDS = 1 / 60;
+  /** Tilt ceiling of DESIGN.md's grab step. */
+  const MAX_TILT_DEG = 3;
+  /** Degrees of tilt per px/s of horizontal velocity. */
+  const TILT_PER_VELOCITY = 0.004;
+  /** Grab scale of DESIGN.md's card lifecycle. */
+  const GRAB_SCALE = 1.03;
+  /**
+   * How long a confirmed POST waits for its `project.state_changed` envelope before the card
+   * settles from the response instead. Without it a dropped stream leaves a card spinning
+   * forever over a change the server already made.
+   */
+  const CONFIRM_DEADLINE_MS = 8_000;
+  /** How long the remote-move ring stays on the card. */
+  const REMOTE_RING_MS = 900;
+  const MENU_GAP_PX = 6;
+  const VIEWPORT_MARGIN_PX = 8;
+
+  /** Why a card refuses to be picked up while the stream is down. */
+  const STALE_DRAG_HINT =
+    "Sin conexión en vivo: no puedes arrastrar tarjetas hasta reconectar.";
+  const RESET_SENTENCE =
+    "La conexión se reinició y no se pueden recuperar los eventos perdidos. Actualiza el tablero para volver a la verdad del servidor.";
+
+  /** A press that has not yet travelled far enough to become a drag. */
+  interface ArmedPress {
+    readonly card: HTMLElement;
+    readonly pointerId: number;
+    readonly originX: number;
+    readonly originY: number;
+  }
+
+  /** One live drag. Everything the follower, the legality paint and the drop need. */
+  interface DragSession {
+    readonly card: HTMLElement;
+    readonly panel: HTMLElement;
+    readonly originColumn: HTMLElement;
+    /** Holds the card's place in its origin column, so the hole stays visible. */
+    readonly placeholder: HTMLElement;
+    readonly pointerId: number;
+    readonly cardHeight: number;
+    /** Pointer offset inside the card at grab; the card hangs from this point. */
+    readonly grabX: number;
+    readonly grabY: number;
+    readonly baseLeft: number;
+    readonly baseTop: number;
+    targetX: number;
+    targetY: number;
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    lastFrame: number;
+    frame: number | null;
+    /** Legal moves by target state code; `null` until the lookup answers. */
+    options: Map<string, MoveOption> | null;
+    readonly slots: HTMLElement[];
+  }
+
+  /**
+   * How a gesture ended.
+   *
+   * `refused` is kept apart from `released` because they mean different things to the hand:
+   * a card dropped on a column that will not take it answers with the reject shake, while a
+   * card released over nothing simply goes home (DESIGN.md §Motion, steps 3 and 4).
+   */
+  type DropOutcome =
+    | { readonly kind: "accepted"; readonly column: HTMLElement }
+    | { readonly kind: "refused" }
+    | { readonly kind: "released" };
+
+  /** Where the card physically sits while its transition is in flight. */
+  type CardPlacement =
+    | { readonly kind: "moved"; readonly from: HTMLElement }
+    | { readonly kind: "waiting" };
+
+  /**
+   * One transition in flight, waiting for the envelope that confirms it.
+   *
+   * Registered before the POST departs, because the envelope can outrun the response: an
+   * unregistered confirmation would leave the card spinning over a change already made.
+   * `detail` and `timer` therefore arrive later, when (and if) the response does.
+   */
+  interface PendingMove {
+    readonly card: HTMLElement;
+    readonly code: string;
+    readonly toStateCode: string;
+    readonly targetLabel: string;
+    readonly placement: CardPlacement;
+    /** The server's answer, once it lands; `null` while the POST is still in flight. */
+    detail: ProjectDetail | null;
+    /** The confirmation deadline, armed only after the server accepted. */
+    timer: number | null;
+  }
+
+  /** One requested move, from either input path. */
+  interface MoveRequest {
+    readonly card: HTMLElement;
+    readonly code: string;
+    readonly option: MoveOption;
+    readonly targetLabel: string;
+    readonly placement: CardPlacement;
+  }
+
+  /** Teardown of the currently mounted board; drained on `astro:before-swap`. */
+  let cleanups: Array<() => void> = [];
+
+  document.addEventListener("astro:page-load", () => {
+    const board = document.querySelector<HTMLElement>(SEL.board);
+    if (board === null || board.dataset["ready"] === "true") return;
+    board.dataset["ready"] = "true";
+    mount(board);
+  });
+
+  document.addEventListener("astro:before-swap", () => {
+    for (const off of cleanups) off();
+    cleanups = [];
+  });
+
+  /**
+   * Wires one board. Everything below closes over `board`, so nothing survives a navigation
+   * except through {@link cleanups} — a subscription left behind would keep patching cards
+   * that are no longer in the document.
+   */
+  function mount(board: HTMLElement): void {
+    const operator = getOperator();
+    const operatorAlias = operator === null ? null : operator.alias;
+
+    const menu = board.querySelector<HTMLElement>(SEL.moveMenu);
+    const menuList = board.querySelector<HTMLElement>(SEL.moveMenuList);
+    const menuTitle = board.querySelector<HTMLElement>(SEL.moveMenuTitle);
+    const dialog = board.querySelector<HTMLDialogElement>("[data-reason-dialog]");
+    const reasonInput = board.querySelector<HTMLTextAreaElement>(
+      "[data-reason-input]",
+    );
+    const reasonSubmit = board.querySelector<HTMLButtonElement>(
+      "[data-reason-submit]",
+    );
+    const reasonCancel = board.querySelector<HTMLButtonElement>(
+      "[data-reason-cancel]",
+    );
+    const reasonContext = board.querySelector<HTMLElement>("[data-reason-context]");
+    const staleBanner = board.querySelector<HTMLElement>(SEL.staleBanner);
+    const staleText = board.querySelector<HTMLElement>(SEL.staleText);
+    const staleAction = board.querySelector<HTMLButtonElement>(SEL.staleAction);
+
+    const pendings = new Map<string, PendingMove>();
+    let armed: ArmedPress | null = null;
+    let drag: DragSession | null = null;
+    let menuOwner: HTMLElement | null = null;
+    let resolveReason: ((reason: string | null) => void) | null = null;
+    let staleMode: "offline" | "reset" | null =
+      board.dataset["connection"] === "stale" ? "offline" : null;
+    const renderedLastEvent = board.dataset["lastEventAt"] ?? "";
+    let lastEventAt: string | null =
+      renderedLastEvent === "" ? null : renderedLastEvent;
+
+    // --- Engagement panels -------------------------------------------------
+
+    /**
+     * Shows one engagement type's board. The choice is persisted because an operations lead
+     * lives in one type for a whole morning, and re-picking it on every visit is a tax.
+     */
+    function selectEngagement(code: string, persist: boolean): void {
+      const target = board.querySelector<HTMLElement>(
+        `${SEL.panel}[data-engagement-code="${CSS.escape(code)}"]`,
+      );
+      if (target === null) return;
+      board.dataset["engagement"] = code;
+      for (const panel of board.querySelectorAll<HTMLElement>(SEL.panel)) {
+        panel.hidden = panel !== target;
+      }
+      for (const pill of board.querySelectorAll<HTMLElement>(SEL.switcherPill)) {
+        pill.setAttribute(
+          "aria-pressed",
+          pill.dataset["engagementCode"] === code ? "true" : "false",
+        );
+      }
+      if (!persist) return;
+      try {
+        window.localStorage.setItem(BOARD_ENGAGEMENT_KEY, code);
+      } catch {
+        /* storage disabled: the choice simply does not outlive the visit */
+      }
+    }
+
+    try {
+      const stored = window.localStorage.getItem(BOARD_ENGAGEMENT_KEY);
+      if (stored !== null) selectEngagement(stored, false);
+    } catch {
+      /* storage disabled: the server's default type stays selected */
+    }
+
+    // --- Drag: grab --------------------------------------------------------
+
+    function onPointerDown(event: PointerEvent): void {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      if (board.dataset["connection"] === "stale") return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      // Links and controls keep their own gestures; the rest of the card is the grip.
+      if (target.closest("a, button, textarea, input") !== null) return;
+      const card = target.closest<HTMLElement>(SEL.card);
+      if (card === null || isPending(card)) return;
+      closeMenu();
+      // Stops the press from starting a text selection that would fight the drag; the
+      // interactive parts of the card were excluded above, so nothing loses its focus.
+      event.preventDefault();
+      armed = {
+        card,
+        pointerId: event.pointerId,
+        originX: event.clientX,
+        originY: event.clientY,
+      };
+      card.setPointerCapture(event.pointerId);
+    }
+
+    function onPointerMove(event: PointerEvent): void {
+      const session = drag;
+      if (session === null) {
+        const press = armed;
+        if (press === null || press.pointerId !== event.pointerId) return;
+        const travelled = Math.hypot(
+          event.clientX - press.originX,
+          event.clientY - press.originY,
+        );
+        if (travelled < DRAG_THRESHOLD_PX) return;
+        beginDrag(press, event);
+        return;
+      }
+      if (event.pointerId !== session.pointerId) return;
+      session.targetX = event.clientX - session.grabX - session.baseLeft;
+      session.targetY = event.clientY - session.grabY - session.baseTop;
+      updateHover(session, event.clientX, event.clientY);
+    }
+
+    function onPointerUp(event: PointerEvent): void {
+      armed = null;
+      const session = drag;
+      if (session === null || event.pointerId !== session.pointerId) return;
+      const column = columnAt(session, event.clientX, event.clientY);
+      if (column === null) {
+        concludeDrag(session, { kind: "released" });
+        return;
+      }
+      if (column.dataset["drop"] === "legal") {
+        concludeDrag(session, { kind: "accepted", column });
+        return;
+      }
+      concludeDrag(session, { kind: "refused" });
+    }
+
+    function onPointerCancel(event: PointerEvent): void {
+      armed = null;
+      const session = drag;
+      if (session === null || event.pointerId !== session.pointerId) return;
+      concludeDrag(session, { kind: "released" });
+    }
+
+    /**
+     * Lifts the card out of flow and starts the follower.
+     *
+     * The card becomes `position: fixed` at exactly the rect it occupied, and a placeholder
+     * takes its place, so the origin column keeps the hole the card came out of instead of
+     * closing over it — you can always see where you are moving *from*.
+     */
+    function beginDrag(press: ArmedPress, event: PointerEvent): void {
+      armed = null;
+      const card = press.card;
+      const column = columnOf(card);
+      const panel = panelOf(card);
+      if (column === null || panel === null) return;
+
+      const rect = card.getBoundingClientRect();
+      const placeholder = document.createElement("div");
+      placeholder.className = "drop-slot is-origin";
+      placeholder.style.height = `${rect.height}px`;
+      card.before(placeholder);
+
+      card.style.position = "fixed";
+      card.style.left = `${rect.left}px`;
+      card.style.top = `${rect.top}px`;
+      card.style.width = `${rect.width}px`;
+      card.style.margin = "0";
+      card.dataset["dragging"] = "true";
+      document.documentElement.dataset["boardDragging"] = "true";
+
+      const session: DragSession = {
+        card,
+        panel,
+        originColumn: column,
+        placeholder,
+        pointerId: press.pointerId,
+        cardHeight: rect.height,
+        grabX: event.clientX - rect.left,
+        grabY: event.clientY - rect.top,
+        baseLeft: rect.left,
+        baseTop: rect.top,
+        targetX: 0,
+        targetY: 0,
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        lastFrame: performance.now(),
+        frame: null,
+        options: null,
+        slots: [],
+      };
+      drag = session;
+      session.frame = requestAnimationFrame(step);
+      void announceLegality(session);
+    }
+
+    /**
+     * One frame of the follower: a critically damped spring pulling the card toward the
+     * pointer, plus a tilt proportional to its own horizontal velocity.
+     *
+     * The lag *is* the mass — the card arrives after the hand, which is what makes it read as
+     * an object rather than a cursor decoration. Under reduced motion the card tracks the
+     * pointer exactly and neither tilts nor scales.
+     */
+    function step(now: number): void {
+      const session = drag;
+      if (session === null) return;
+      const elapsed = (now - session.lastFrame) / 1000;
+      const dt =
+        elapsed > 0 ? Math.min(MAX_FRAME_SECONDS, elapsed) : FALLBACK_FRAME_SECONDS;
+      session.lastFrame = now;
+
+      const reduced = prefersReducedMotion();
+      if (reduced) {
+        session.x = session.targetX;
+        session.y = session.targetY;
+        session.vx = 0;
+        session.vy = 0;
+      } else {
+        const ax =
+          FOLLOW_STIFFNESS * (session.targetX - session.x) -
+          FOLLOW_DAMPING * session.vx;
+        const ay =
+          FOLLOW_STIFFNESS * (session.targetY - session.y) -
+          FOLLOW_DAMPING * session.vy;
+        session.vx += ax * dt;
+        session.vy += ay * dt;
+        session.x += session.vx * dt;
+        session.y += session.vy * dt;
+      }
+
+      const tilt = reduced
+        ? 0
+        : clamp(session.vx * TILT_PER_VELOCITY, -MAX_TILT_DEG, MAX_TILT_DEG);
+      const scale = reduced ? 1 : GRAB_SCALE;
+      session.card.style.transform = `translate3d(${session.x.toFixed(2)}px, ${session.y.toFixed(2)}px, 0) scale(${scale}) rotate(${tilt.toFixed(2)}deg)`;
+      session.frame = requestAnimationFrame(step);
+    }
+
+    // --- Drag: the board announces legality --------------------------------
+
+    /**
+     * Asks the project which moves it may take and paints the answer on the columns.
+     *
+     * A failed lookup does not abort the gesture: every column simply refuses, the drop
+     * springs back, and the operator reads why in a toast. Aborting mid-gesture would yank
+     * the card out of a hand that is still holding it.
+     */
+    async function announceLegality(session: DragSession): Promise<void> {
+      const code = session.card.dataset["code"] ?? "";
+      const result = await loadMoves(code);
+      if (drag !== session) return;
+      if (result.kind === "error") {
+        session.options = new Map();
+        toast({ kind: "error", title: result.title, detail: result.detail });
+      } else {
+        session.options = new Map(
+          result.options.map((option) => [option.toStateCode, option]),
+        );
+      }
+      paintLegality(session);
+    }
+
+    function paintLegality(session: DragSession): void {
+      const options = session.options;
+      if (options === null) return;
+      const originLabel = labelOf(session.originColumn);
+      for (const column of columnsOf(session.panel)) {
+        if (column === session.originColumn) {
+          column.dataset["drop"] = "origin";
+          continue;
+        }
+        const option = options.get(column.dataset["stateCode"] ?? "");
+        if (option === undefined) {
+          lockColumn(column, "illegal", `Sin transición desde ${originLabel}`);
+          continue;
+        }
+        if (option.missingFields.length > 0) {
+          lockColumn(
+            column,
+            "blocked",
+            `Falta ${fieldList(option.missingFields)} en el proyecto`,
+          );
+          continue;
+        }
+        openSlot(session, column);
+      }
+    }
+
+    /** A column that cannot take the card says so, in words, and steps back. */
+    function lockColumn(
+      column: HTMLElement,
+      drop: "illegal" | "blocked",
+      reason: string,
+    ): void {
+      column.dataset["drop"] = drop;
+      const text = column.querySelector<HTMLElement>(SEL.columnLockText);
+      if (text !== null) text.textContent = reason;
+      const chip = column.querySelector<HTMLElement>(SEL.columnLock);
+      if (chip !== null) chip.hidden = false;
+    }
+
+    /** A legal column opens a dashed slot the height of the card, and its cards make room. */
+    function openSlot(session: DragSession, column: HTMLElement): void {
+      column.dataset["drop"] = "legal";
+      const body = bodyOf(column);
+      if (body === null) return;
+      const slot = document.createElement("div");
+      slot.className = "drop-slot";
+      slot.dataset["dropSlot"] = "true";
+      slot.style.height = `${session.cardHeight}px`;
+      const siblings = cardsOf(column);
+      void flip(siblings, () => {
+        body.prepend(slot);
+      });
+      if (!prefersReducedMotion()) {
+        const { duration, easing } = sampleSpring("carta");
+        slot.animate(
+          [
+            { opacity: 0, transform: "scaleY(0.4)" },
+            { opacity: 1, transform: "none" },
+          ],
+          { duration, easing },
+        );
+      }
+      session.slots.push(slot);
+    }
+
+    function clearLegality(session: DragSession): void {
+      for (const column of columnsOf(session.panel)) {
+        column.dataset["drop"] = "idle";
+        delete column.dataset["hover"];
+        const chip = column.querySelector<HTMLElement>(SEL.columnLock);
+        if (chip !== null) chip.hidden = true;
+      }
+      for (const slot of session.slots) slot.remove();
+      session.slots.length = 0;
+    }
+
+    function updateHover(session: DragSession, x: number, y: number): void {
+      const hovered = columnAt(session, x, y);
+      for (const column of columnsOf(session.panel)) {
+        if (column === hovered && column.dataset["drop"] === "legal") {
+          column.dataset["hover"] = "true";
+        } else {
+          delete column.dataset["hover"];
+        }
+      }
+    }
+
+    /**
+     * The column under the pointer, by rect arithmetic rather than `elementFromPoint`: the
+     * dragged card is captured and floating above everything, so hit testing through it is
+     * exactly what we must not rely on.
+     *
+     * A column is claimed by its horizontal band across the whole height of the board, not by
+     * its own box. Columns are as tall as their contents, and a card released below a short
+     * column is unmistakably aimed at that column — refusing it because the box ended two
+     * hundred pixels higher would be the interface being pedantic about its own layout.
+     */
+    function columnAt(
+      session: DragSession,
+      x: number,
+      y: number,
+    ): HTMLElement | null {
+      const boxes = columnsOf(session.panel).map((column) => ({
+        column,
+        rect: column.getBoundingClientRect(),
+      }));
+      if (boxes.length === 0) return null;
+      const top = Math.min(...boxes.map((box) => box.rect.top));
+      const bottom = Math.max(...boxes.map((box) => box.rect.bottom));
+      if (y < top || y > bottom) return null;
+      for (const box of boxes) {
+        if (x >= box.rect.left && x <= box.rect.right) return box.column;
+      }
+      return null;
+    }
+
+    // --- Drag: drop and reject ---------------------------------------------
+
+    /**
+     * Ends the gesture: the card returns to flow — in the column that accepted it, or in the
+     * hole it came out of — and travels there along one arc.
+     *
+     * Layout is mutated first and animated after, which is the contract of
+     * `lib/motion/spring.ts`: measure, mutate, then play the journey from the old rect. Doing
+     * it the other way round leaves reduced-motion users looking at stale positions.
+     */
+    function concludeDrag(session: DragSession, outcome: DropOutcome): void {
+      drag = null;
+      if (session.frame !== null) cancelAnimationFrame(session.frame);
+      delete document.documentElement.dataset["boardDragging"];
+      if (session.card.hasPointerCapture(session.pointerId)) {
+        session.card.releasePointerCapture(session.pointerId);
+      }
+
+      const target = outcome.kind === "accepted" ? outcome.column : null;
+      const from = session.card.getBoundingClientRect();
+      const affected = affectedCards(session, target);
+
+      void flip(affected, () => {
+        unfix(session.card);
+        if (target === null) {
+          session.placeholder.replaceWith(session.card);
+        } else {
+          const slot = session.slots.find(
+            (candidate) => columnOf(candidate) === target,
+          );
+          if (slot !== undefined) {
+            slot.replaceWith(session.card);
+          } else {
+            const body = bodyOf(target);
+            if (body !== null) body.prepend(session.card);
+          }
+          session.placeholder.remove();
+        }
+        clearLegality(session);
+      });
+
+      const to = session.card.getBoundingClientRect();
+      const journey = glide(session.card, from, to);
+
+      refreshColumn(session.originColumn);
+      if (target === null) {
+        // The wall refusing the card is a physical answer, after it lands, not during.
+        if (outcome.kind === "refused") {
+          void journey.then(() => shake(session.card));
+        }
+        return;
+      }
+      refreshColumn(target);
+
+      const options = session.options;
+      const option =
+        options === null
+          ? undefined
+          : options.get(target.dataset["stateCode"] ?? "");
+      if (option === undefined) return;
+      void performMove({
+        card: session.card,
+        code: session.card.dataset["code"] ?? "",
+        option,
+        targetLabel: labelOf(target),
+        placement: { kind: "moved", from: session.originColumn },
+      });
+    }
+
+    /** Every card whose position the drop changes — the FLIP set. */
+    function affectedCards(
+      session: DragSession,
+      target: HTMLElement | null,
+    ): HTMLElement[] {
+      const columns = new Set<HTMLElement>([session.originColumn]);
+      for (const slot of session.slots) {
+        const column = columnOf(slot);
+        if (column !== null) columns.add(column);
+      }
+      if (target !== null) columns.add(target);
+      const cards: HTMLElement[] = [];
+      for (const column of columns) {
+        for (const card of cardsOf(column)) {
+          if (card !== session.card) cards.push(card);
+        }
+      }
+      return cards;
+    }
+
+    function unfix(card: HTMLElement): void {
+      card.style.position = "";
+      card.style.left = "";
+      card.style.top = "";
+      card.style.width = "";
+      card.style.margin = "";
+      card.style.transform = "";
+      delete card.dataset["dragging"];
+    }
+
+    /**
+     * Plays a card from where it was to where it now sits: an arc on the `carta` spring, or
+     * a 120ms crossfade when the operator asked for reduced motion. Resolves when it settles,
+     * so a caller can chain the reject shake instead of animating over the journey.
+     */
+    async function glide(
+      card: HTMLElement,
+      from: DOMRect,
+      to: DOMRect,
+    ): Promise<void> {
+      if (prefersReducedMotion()) {
+        await crossfade(card);
+        return;
+      }
+      await travelBy(card, from.left - to.left, from.top - to.top);
+    }
+
+    async function crossfade(card: HTMLElement): Promise<void> {
+      const animation = card.animate([{ opacity: 0 }, { opacity: 1 }], {
+        duration: 120,
+      });
+      await animation.finished.catch(() => undefined);
+    }
+
+    // --- The move itself (shared by the drag and the menu) -----------------
+
+    /**
+     * Runs one transition: reason if the edge demands one, POST, then wait for the stream.
+     *
+     * Nothing is painted as done here. The card enters the pending state and the *server's*
+     * envelope is what repaints it (`PATTERNS_FRONTEND.md` §8); a refusal sends the card
+     * home along its own path with a shake and a toast naming the rule that refused it.
+     */
+    async function performMove(request: MoveRequest): Promise<void> {
+      const { card, code, option, targetLabel, placement } = request;
+      let reason = "";
+      if (option.requiresReason) {
+        const given = await askReason(code, targetLabel);
+        if (given === null) {
+          if (placement.kind === "moved") moveCard(card, placement.from, "travel");
+          return;
+        }
+        reason = given;
+      }
+
+      setPending(card, true);
+      const pending: PendingMove = {
+        card,
+        code,
+        toStateCode: option.toStateCode,
+        targetLabel,
+        placement,
+        detail: null,
+        timer: null,
+      };
+      pendings.set(code, pending);
+
+      const result = await submitMove(code, option.toStateCode, reason);
+      // The stream may have confirmed (or superseded) this move while we waited; whoever
+      // holds the entry now owns the card, and it is no longer us.
+      if (pendings.get(code) !== pending) return;
+
+      if (!result.ok) {
+        pendings.delete(code);
+        setPending(card, false);
+        if (placement.kind === "moved") moveCard(card, placement.from, "travel");
+        void shake(card);
+        const copy = moveErrorCopy(result.error, code, targetLabel);
+        toast({ kind: "error", title: copy.title, detail: copy.detail });
+        return;
+      }
+
+      pending.detail = result.data;
+      pending.timer = window.setTimeout(() => {
+        settleWithoutEnvelope(code);
+      }, CONFIRM_DEADLINE_MS);
+    }
+
+    /**
+     * Applies the confirmed state to a card: it lands in its column, the chip snaps, the
+     * counts follow.
+     *
+     * `occurredAt` is the envelope's instant when there was one, so the stale-patch watermark
+     * advances to the event rather than to the moment we happened to render it.
+     */
+    function settle(pending: PendingMove, occurredAt: string | null): void {
+      if (pending.timer !== null) window.clearTimeout(pending.timer);
+      pendings.delete(pending.code);
+      setPending(pending.card, false);
+      const stamp =
+        occurredAt ?? (pending.detail === null ? null : pending.detail.updated_at);
+      if (stamp !== null) markUpdatedAt(pending.card, stamp);
+      invalidateMoves(pending.code);
+
+      const panel = panelOf(pending.card);
+      const column =
+        panel === null ? null : findColumn(panel, pending.toStateCode);
+      if (column === null) {
+        dropFromBoard(pending.card, pending.code, pending.targetLabel);
+        return;
+      }
+      if (columnOf(pending.card) !== column) moveCard(pending.card, column, "travel");
+      patchStateChip(pending.card, column);
+    }
+
+    function confirmFromEnvelope(pending: PendingMove, envelope: Envelope): void {
+      settle(pending, envelope.occurred_at);
+      toast({
+        kind: "success",
+        title: `${pending.code} → ${pending.targetLabel}`,
+        detail: "Confirmado por el servidor.",
+      });
+    }
+
+    /**
+     * The confirmation deadline: the POST was accepted but no envelope arrived (a stream that
+     * is down, or a fan-out that lost the frame). The change is real — the response proved
+     * it — so the card settles and the toast says the live confirmation is what is missing.
+     */
+    function settleWithoutEnvelope(code: string): void {
+      const pending = pendings.get(code);
+      if (pending === undefined) return;
+      settle(pending, null);
+      toast({
+        kind: "info",
+        title: `${code} → ${pending.targetLabel}`,
+        detail: "El servidor lo aceptó, pero el aviso en vivo no llegó.",
+      });
+    }
+
+    /**
+     * Moves a card into a column and animates the journey.
+     *
+     * The DOM move happens inside `flip`, so the cards that make room travel with the same
+     * spring as the card itself; the card's own glide is measured around it.
+     */
+    function moveCard(
+      card: HTMLElement,
+      column: HTMLElement,
+      motion: "travel" | "none",
+    ): void {
+      const body = bodyOf(column);
+      if (body === null) return;
+      const previous = columnOf(card);
+      const from = card.getBoundingClientRect();
+      const affected = [
+        ...cardsOf(column),
+        ...(previous === null ? [] : cardsOf(previous)),
+      ].filter((candidate) => candidate !== card);
+
+      void flip(affected, () => {
+        body.prepend(card);
+      });
+
+      const to = card.getBoundingClientRect();
+      if (previous !== null) refreshColumn(previous);
+      refreshColumn(column);
+      if (motion === "travel") void glide(card, from, to);
+    }
+
+    /**
+     * A project moved into a state that has no column here — the board draws the states that
+     * are occupied, and nobody was in that one. The card leaves rather than lying about where
+     * the project is, and the toast says what happened.
+     */
+    function dropFromBoard(
+      card: HTMLElement,
+      code: string,
+      stateLabel: string,
+    ): void {
+      const column = columnOf(card);
+      const siblings =
+        column === null
+          ? []
+          : cardsOf(column).filter((candidate) => candidate !== card);
+      void flip(siblings, () => {
+        card.remove();
+      });
+      if (column !== null) refreshColumn(column);
+      toast({
+        kind: "info",
+        title: `${code} salió del tablero`,
+        detail: `Pasó a ${stateLabel}, un estado que hoy no tiene columna. Actualiza el tablero para verlo.`,
+      });
+    }
+
+    // --- Reason dialog ------------------------------------------------------
+
+    /**
+     * Collects the reason an edge marked `requires_reason` demands, before the request.
+     *
+     * A modal is correct here and nowhere else on this surface: it is a confirmation the
+     * operator asked for by dropping the card, and the transition cannot proceed without it
+     * (DESIGN.md, Don'ts). Cancelling resolves `null` and the card goes home.
+     */
+    function askReason(code: string, targetLabel: string): Promise<string | null> {
+      if (dialog === null || reasonInput === null) return Promise.resolve(null);
+      reasonInput.value = "";
+      if (reasonSubmit !== null) reasonSubmit.disabled = true;
+      if (reasonContext !== null) {
+        reasonContext.textContent = `${code} pasa a ${targetLabel}. Esta transición exige un motivo.`;
+      }
+      dialog.showModal();
+      reasonInput.focus();
+      return new Promise<string | null>((resolve) => {
+        resolveReason = resolve;
+      });
+    }
+
+    function onDialogClose(): void {
+      const resolve = resolveReason;
+      resolveReason = null;
+      if (resolve === null) return;
+      const confirmed = dialog !== null && dialog.returnValue === "confirm";
+      const typed = reasonInput === null ? "" : reasonInput.value.trim();
+      resolve(confirmed && typed !== "" ? typed : null);
+    }
+
+    function onReasonInput(): void {
+      if (reasonSubmit === null || reasonInput === null) return;
+      reasonSubmit.disabled = reasonInput.value.trim() === "";
+    }
+
+    // --- "Mover a…": the keyboard and touch twin ---------------------------
+
+    async function openMenu(trigger: HTMLElement): Promise<void> {
+      if (menu === null || menuList === null) return;
+      const card = trigger.closest<HTMLElement>(SEL.card);
+      if (card === null) return;
+      const code = card.dataset["code"] ?? "";
+
+      closeMenu();
+      menuOwner = trigger;
+      trigger.setAttribute("aria-expanded", "true");
+      trigger.classList.add("is-loading");
+      if (menuTitle !== null) menuTitle.textContent = `Mover ${code} a…`;
+      menuList.replaceChildren(buildNote("Consultando movimientos…"));
+      menu.hidden = false;
+      positionMenu(trigger);
+
+      const result = await loadMoves(code);
+      trigger.classList.remove("is-loading");
+      if (menuOwner !== trigger) return;
+      renderMenu(result, card, code);
+      positionMenu(trigger);
+      focusFirstItem();
+    }
+
+    function renderMenu(
+      result: MovesResult,
+      card: HTMLElement,
+      code: string,
+    ): void {
+      if (menuList === null) return;
+      if (result.kind === "error") {
+        menuList.replaceChildren(buildNote(`${result.title}. ${result.detail}`));
+        return;
+      }
+      if (result.options.length === 0) {
+        menuList.replaceChildren(
+          buildNote(`Sin movimientos legales desde ${result.stateLabel}.`),
+        );
+        return;
+      }
+      menuList.replaceChildren(
+        ...result.options.map((option, index) =>
+          buildMenuItem(option, card, code, index),
+        ),
+      );
+    }
+
+    /**
+     * One target state as a menu item. A transition whose `requires_fields` are empty on the
+     * project renders present and visibly dead, naming the field — the same rule the drag
+     * paints as a locked column (`FRONTEND.md` §8).
+     */
+    function buildMenuItem(
+      option: MoveOption,
+      card: HTMLElement,
+      code: string,
+      index: number,
+    ): HTMLElement {
+      const item = document.createElement("div");
+      item.className = "move-item";
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "move-option";
+      button.setAttribute("role", "menuitem");
+      button.lang = "es";
+      button.textContent = option.label;
+      item.append(button);
+
+      if (option.missingFields.length > 0) {
+        const noteId = `move-missing-${index}`;
+        button.disabled = true;
+        button.setAttribute("aria-describedby", noteId);
+        const note = document.createElement("span");
+        note.className = "small move-missing";
+        note.id = noteId;
+        note.lang = "es";
+        note.textContent = `Falta ${fieldList(option.missingFields)}`;
+        item.append(note);
+        return item;
+      }
+
+      button.addEventListener("click", () => {
+        dismissMenu();
+        const panel = panelOf(card);
+        const column = panel === null ? null : findColumn(panel, option.toStateCode);
+        void performMove({
+          card,
+          code,
+          option,
+          targetLabel: column === null ? option.label : labelOf(column),
+          placement: { kind: "waiting" },
+        });
+      });
+      return item;
+    }
+
+    function buildNote(text: string): HTMLElement {
+      const note = document.createElement("p");
+      note.className = "small move-note";
+      note.lang = "es";
+      note.textContent = text;
+      return note;
+    }
+
+    function positionMenu(trigger: HTMLElement): void {
+      if (menu === null) return;
+      const anchor = trigger.getBoundingClientRect();
+      const width = menu.offsetWidth;
+      const height = menu.offsetHeight;
+      const maxLeft = window.innerWidth - width - VIEWPORT_MARGIN_PX;
+      const left = Math.max(
+        VIEWPORT_MARGIN_PX,
+        Math.min(anchor.right - width, maxLeft),
+      );
+      const below = anchor.bottom + MENU_GAP_PX;
+      const fitsBelow = below + height <= window.innerHeight - VIEWPORT_MARGIN_PX;
+      const top = fitsBelow
+        ? below
+        : Math.max(VIEWPORT_MARGIN_PX, anchor.top - height - MENU_GAP_PX);
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
+    }
+
+    function menuItems(): HTMLButtonElement[] {
+      if (menuList === null) return [];
+      return [
+        ...menuList.querySelectorAll<HTMLButtonElement>(".move-option:not(:disabled)"),
+      ];
+    }
+
+    function focusFirstItem(): void {
+      const first = menuItems()[0];
+      if (first !== undefined) first.focus();
+    }
+
+    function closeMenu(): void {
+      if (menu !== null) menu.hidden = true;
+      if (menuOwner !== null) {
+        menuOwner.setAttribute("aria-expanded", "false");
+        menuOwner.classList.remove("is-loading");
+      }
+      menuOwner = null;
+    }
+
+    /** Closes the menu and hands focus back to the control that opened it. */
+    function dismissMenu(): void {
+      const owner = menuOwner;
+      closeMenu();
+      if (owner !== null) owner.focus();
+    }
+
+    function onMenuKeyDown(event: KeyboardEvent): void {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      const items = menuItems();
+      if (items.length === 0) return;
+      const active = document.activeElement;
+      const current = items.findIndex((item) => item === active);
+      const delta = event.key === "ArrowDown" ? 1 : -1;
+      const next = items[(current + delta + items.length) % items.length];
+      if (next === undefined) return;
+      event.preventDefault();
+      next.focus();
+    }
+
+    // --- Stream -------------------------------------------------------------
+
+    /**
+     * A project changed state somewhere. Three cases, in order:
+     *
+     * 1. it is the move this tab is waiting for → confirm it;
+     * 2. it is a move this tab did not make → the card travels across the board with the
+     *    author's name riding on it (the signature moment);
+     * 3. it names a state with no column here → the card leaves, and says so.
+     */
+    function onStateChanged(envelope: Envelope): void {
+      lastEventAt = envelope.occurred_at;
+      const code = envelope.entity.id;
+      const card = findCard(board, code);
+      if (card === null) return;
+      if (!isNewer(card, envelope.occurred_at)) return;
+      const toStateCode = readString(envelope.payload, "to");
+      if (toStateCode === null) return;
+
+      markUpdatedAt(card, envelope.occurred_at);
+      invalidateMoves(code);
+
+      const pending = pendings.get(code);
+      if (pending !== undefined) {
+        if (pending.toStateCode === toStateCode) {
+          confirmFromEnvelope(pending, envelope);
+          return;
+        }
+        // Somebody moved it elsewhere while we waited: our pending mark is void.
+        if (pending.timer !== null) window.clearTimeout(pending.timer);
+        pendings.delete(code);
+        setPending(card, false);
+      }
+
+      const panel = panelOf(card);
+      const column = panel === null ? null : findColumn(panel, toStateCode);
+      if (column === null) {
+        dropFromBoard(card, code, toStateCode);
+        return;
+      }
+      if (columnOf(card) === column) {
+        patchStateChip(card, column);
+        return;
+      }
+
+      moveCard(card, column, "travel");
+      patchStateChip(card, column);
+      card.dataset["remote"] = "true";
+      window.setTimeout(() => {
+        delete card.dataset["remote"];
+      }, REMOTE_RING_MS);
+      if (envelope.actor !== operatorAlias) {
+        rideAttribution(card, `${envelope.actor} → ${labelOf(column)}`);
+      }
+    }
+
+    /**
+     * A recomputed priority: the figure counts to its new value and its breakdown sentence is
+     * rewritten from the envelope, because a number whose tooltip still argues the old case
+     * is worse than no tooltip at all (CLAUDE.md rule 7).
+     */
+    function onPriorityRecalculated(envelope: Envelope): void {
+      lastEventAt = envelope.occurred_at;
+      const card = findCard(board, envelope.entity.id);
+      if (card === null) return;
+      const value = envelope.payload["value"];
+      if (typeof value !== "number") return;
+      const figure = card.querySelector<HTMLElement>(SEL.cardScore);
+      if (figure === null) return;
+
+      const previous = Number.parseFloat(figure.textContent ?? "");
+      const description = describeScore(value, envelope.payload);
+      figure.dataset["scoreState"] = "computed";
+      figure.classList.remove("chip", "tone-ambar");
+      figure.classList.add("figure");
+      figure.title = description;
+      figure.setAttribute("aria-label", description);
+      countUp(figure, Number.isNaN(previous) ? value : previous, value);
+    }
+
+    /** Rebuilds the Spanish breakdown sentence from the envelope's own signal lines. */
+    function describeScore(
+      value: number,
+      payload: Record<string, unknown>,
+    ): string {
+      const rounded = Math.round(value);
+      const raw = payload["breakdown"];
+      const version = readString(payload, "policy_version");
+      const head = `Prioridad ${rounded} de 100${version === null ? "" : ` · política ${version}`}`;
+      if (!Array.isArray(raw)) {
+        return `${head} · desglose completo en Prioridades`;
+      }
+      const lines: string[] = [];
+      for (const entry of raw) {
+        if (!isRecord(entry)) continue;
+        const code = entry["code"];
+        const contribution = entry["contribution"];
+        if (typeof code !== "string" || typeof contribution !== "number") continue;
+        const points = Math.round(contribution);
+        lines.push(`${code} ${points >= 0 ? "+" : ""}${points}`);
+      }
+      return lines.length === 0
+        ? `${head} · desglose completo en Prioridades`
+        : `${head} · ${lines.join(" · ")}`;
+    }
+
+    // --- Connection ---------------------------------------------------------
+
+    function staleSentence(): string {
+      if (lastEventAt === null) {
+        return "Sin conexión en vivo. El tablero muestra los datos con los que se cargó la página.";
+      }
+      const time = new Intl.DateTimeFormat("es", {
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(new Date(lastEventAt));
+      return `Sin conexión en vivo. El tablero muestra los datos de las ${time}.`;
+    }
+
+    function showStale(mode: "offline" | "reset"): void {
+      staleMode = mode;
+      if (staleText !== null) {
+        staleText.textContent = mode === "offline" ? staleSentence() : RESET_SENTENCE;
+      }
+      if (staleAction !== null) {
+        staleAction.textContent =
+          mode === "offline" ? "Reconectar" : "Actualizar tablero";
+        staleAction.dataset["mode"] = mode;
+      }
+      if (staleBanner !== null) staleBanner.hidden = false;
+    }
+
+    function hideStale(): void {
+      staleMode = null;
+      if (staleBanner !== null) staleBanner.hidden = true;
+    }
+
+    /**
+     * Drags are refused while the stream is down: a move whose confirmation can never arrive
+     * would leave a card pending with no way back. The menu stays open on purpose — it is the
+     * explicit path, and its deadline settles it from the response.
+     */
+    function applyConnection(stale: boolean): void {
+      board.dataset["connection"] = stale ? "stale" : "live";
+      for (const card of board.querySelectorAll<HTMLElement>(SEL.card)) {
+        if (stale) card.title = STALE_DRAG_HINT;
+        else card.removeAttribute("title");
+      }
+      if (!stale) {
+        if (staleMode !== "reset") hideStale();
+        return;
+      }
+      if (drag !== null) concludeDrag(drag, { kind: "released" });
+      if (staleMode !== "reset") showStale("offline");
+    }
+
+    function onStaleAction(): void {
+      if (staleAction === null) return;
+      if (staleAction.dataset["mode"] === "reset") {
+        window.location.reload();
+        return;
+      }
+      retry();
+    }
+
+    // --- Wiring -------------------------------------------------------------
+
+    function onBoardClick(event: MouseEvent): void {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const pill = target.closest<HTMLElement>(SEL.switcherPill);
+      if (pill !== null) {
+        const code = pill.dataset["engagementCode"] ?? "";
+        if (code !== "") selectEngagement(code, true);
+        return;
+      }
+      const trigger = target.closest<HTMLElement>(SEL.moveTrigger);
+      if (trigger !== null) {
+        if (menuOwner === trigger) dismissMenu();
+        else void openMenu(trigger);
+      }
+    }
+
+    function onDocumentClick(event: MouseEvent): void {
+      if (menuOwner === null) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest(SEL.moveMenu) !== null) return;
+      if (target.closest(SEL.moveTrigger) !== null) return;
+      closeMenu();
+    }
+
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key !== "Escape") return;
+      if (drag !== null) {
+        event.preventDefault();
+        concludeDrag(drag, { kind: "released" });
+        return;
+      }
+      if (menuOwner !== null) dismissMenu();
+    }
+
+    function onViewportChange(): void {
+      if (menuOwner !== null) closeMenu();
+    }
+
+    board.addEventListener("pointerdown", onPointerDown);
+    board.addEventListener("pointermove", onPointerMove);
+    board.addEventListener("pointerup", onPointerUp);
+    board.addEventListener("pointercancel", onPointerCancel);
+    board.addEventListener("click", onBoardClick);
+    document.addEventListener("click", onDocumentClick);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    if (menuList !== null) menuList.addEventListener("keydown", onMenuKeyDown);
+    if (dialog !== null) dialog.addEventListener("close", onDialogClose);
+    if (reasonInput !== null) reasonInput.addEventListener("input", onReasonInput);
+    if (reasonCancel !== null && dialog !== null) {
+      reasonCancel.addEventListener("click", () => dialog.close("cancel"));
+    }
+    if (staleAction !== null) staleAction.addEventListener("click", onStaleAction);
+
+    const offState = subscribe("project.state_changed", onStateChanged);
+    const offPriority = subscribe(
+      "project.priority.recalculated",
+      onPriorityRecalculated,
+    );
+    const offStatus = onStatus((status) => {
+      applyConnection(status === "disconnected");
+    });
+    const offReset = onReset(() => {
+      showStale("reset");
+    });
+
+    cleanups.push(() => {
+      board.removeEventListener("pointerdown", onPointerDown);
+      board.removeEventListener("pointermove", onPointerMove);
+      board.removeEventListener("pointerup", onPointerUp);
+      board.removeEventListener("pointercancel", onPointerCancel);
+      board.removeEventListener("click", onBoardClick);
+      document.removeEventListener("click", onDocumentClick);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+      if (menuList !== null) menuList.removeEventListener("keydown", onMenuKeyDown);
+      if (dialog !== null) dialog.removeEventListener("close", onDialogClose);
+      for (const pending of pendings.values()) {
+        if (pending.timer !== null) window.clearTimeout(pending.timer);
+      }
+      pendings.clear();
+      if (drag !== null) concludeDrag(drag, { kind: "released" });
+      offState();
+      offPriority();
+      offStatus();
+      offReset();
+    });
+  }
+
+  function clamp(value: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function readString(
+    payload: Record<string, unknown>,
+    key: string,
+  ): string | null {
+    const value = payload[key];
+    return typeof value === "string" && value !== "" ? value : null;
+  }
+
+  function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null;
+  }
+</script>
+
+<style>
+  .board {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .board-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+  }
+
+  .board-hint {
+    margin-left: auto;
+  }
+
+  .stale {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background-color: var(--tone-wash);
+    border-color: var(--tone-solid);
+    color: var(--tone-ink);
+  }
+
+  .stale[hidden] {
+    display: none;
+  }
+
+  .stale p {
+    color: var(--tone-ink);
+  }
+
+  .stale button {
+    margin-left: auto;
+  }
+
+  .panel[hidden] {
+    display: none;
+  }
+
+  .columns {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(268px, 1fr);
+    gap: var(--space-4);
+    align-items: start;
+    overflow-x: auto;
+    padding-bottom: var(--space-2);
+  }
+
+  /* The board goes stale, not blank: it stays readable and refuses the hand. */
+  .board[data-connection="stale"] .columns {
+    opacity: 0.72;
+  }
+
+  .board[data-connection="stale"] :global([data-card]) {
+    cursor: not-allowed;
+  }
+
+  /* While a card is in the air the whole page is a grabbing hand, and nothing
+     selects text under it — a drag that highlights paragraphs is not an object. */
+  :global(html[data-board-dragging="true"] body) {
+    cursor: grabbing;
+    user-select: none;
+  }
+
+  /* --- Drop slots: built by the runtime, so global --- */
+
+  .board :global(.drop-slot) {
+    border: 2px dashed var(--cobalto);
+    border-radius: var(--radius-card);
+    background-color: var(--cobalto-papel);
+    flex: none;
+  }
+
+  /* The hole the card came out of: neutral, not an invitation. */
+  .board :global(.drop-slot.is-origin) {
+    border-color: var(--tinta-suave);
+    border-style: dashed;
+    background-color: transparent;
+  }
+
+  /* --- Attribution chip riding a remote move --- */
+
+  .board :global(.card-attribution) {
+    position: absolute;
+    top: calc(var(--space-3) * -1);
+    left: var(--space-3);
+    box-shadow: var(--shadow-resting);
+    transition: opacity var(--motion-panel-duration) var(--motion-panel-ease);
+  }
+
+  .board :global(.card-attribution[data-leaving="true"]) {
+    opacity: 0;
+  }
+
+  /* --- "Mover a…" menu --- */
+
+  .move-menu {
+    position: fixed;
+    z-index: var(--z-drawer);
+    min-width: 232px;
+    max-width: 320px;
+    padding: var(--space-2);
+    box-shadow: var(--shadow-raised);
+  }
+
+  .move-menu[hidden] {
+    display: none;
+  }
+
+  .move-menu-title {
+    padding: var(--space-2) var(--space-2) var(--space-1);
+  }
+
+  .move-menu-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .move-menu :global(.move-item) {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-bottom: var(--space-1);
+  }
+
+  .move-menu :global(.move-option) {
+    display: flex;
+    align-items: center;
+    min-height: 40px;
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-control);
+    font-size: var(--text-title-size);
+    font-weight: var(--text-title-weight);
+    text-align: left;
+    color: var(--tinta);
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .move-menu :global(.move-option:hover:not(:disabled)) {
+    background-color: var(--pozo);
+  }
+
+  .move-menu :global(.move-option:disabled) {
+    color: var(--tinta-suave);
+  }
+
+  .move-menu :global(.move-missing) {
+    padding-inline: var(--space-3);
+    color: var(--ambar-ink);
+  }
+
+  .move-menu :global(.move-note) {
+    padding: var(--space-2) var(--space-3);
+  }
+
+  /* --- Reason dialog --- */
+
+  .reason-dialog {
+    width: min(440px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    color: var(--tinta);
+    box-shadow: var(--shadow-lifted);
+  }
+
+  .reason-dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .reason-dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .reason-label {
+    margin-bottom: calc(var(--space-2) * -1);
+  }
+
+  .reason-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
+
+  @media (max-width: 767px) {
+    .board-hint {
+      margin-left: 0;
+    }
+
+    .columns {
+      grid-auto-columns: min(84vw, 300px);
+      scroll-snap-type: x mandatory;
+      margin-inline: calc(var(--space-4) * -1);
+      padding-inline: var(--space-4);
+    }
+
+    .panel :global(.column) {
+      scroll-snap-align: start;
+    }
+  }
+</style>

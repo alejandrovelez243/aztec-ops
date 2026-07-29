@@ -109,7 +109,7 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
 
     <div class="state card" data-empty-arm>
       <span class="state-icon tone-piedra" aria-hidden="true">
-        <Icon name="users" size={22} />
+        <Icon name="users" />
       </span>
       <h2 class="h2">Todavía no hay nadie en el equipo</h2>
       <p class="body-text" data-empty-copy>{EMPTY_MESSAGE}</p>
@@ -122,7 +122,7 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
 
     <div class="state card" data-error-arm>
       <span class="state-icon tone-rojo" aria-hidden="true">
-        <Icon name="alert" size={22} />
+        <Icon name="alert" />
       </span>
       <h2 class="h2">No pudimos leer la carga del equipo</h2>
       <p class="body-text" data-error-copy>{errorMessage}</p>
@@ -590,6 +590,9 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
 
     lastEventAt = null;
     refreshFailed = false;
+    // The server just answered, so nothing is missing yet: an outage from a previous visit
+    // must not make this paint refetch data that is one round trip old.
+    missedEvents = false;
 
     cleanups.push(onStatus(handleStatus));
     cleanups.push(

@@ -1,0 +1,183 @@
+---
+import BoardCanvas from "../islands/BoardCanvas.astro";
+import BoardNotice from "../components/board/BoardNotice.astro";
+import BoardSkeleton from "../components/board/BoardSkeleton.astro";
+import Shell from "../layouts/Shell.astro";
+import { buildPanels } from "../components/board/board-model";
+import type { BoardPanelModel } from "../components/board/board-model";
+import { getQueue } from "../lib/api/client";
+import type { ApiErrorCode } from "../lib/api/errors";
+import type { QueuePage } from "../lib/api/domain";
+import { assertNever, toViewState } from "../lib/view-state";
+import type { ViewState } from "../lib/view-state";
+
+/**
+ * `/board` — "Tablero": the wall, one engagement type at a time.
+ *
+ * This file is a container and nothing else (`PATTERNS_FRONTEND.md` §5): it fetches the
+ * queue once on the server, turns it into the board's view model, and hands that to
+ * `islands/BoardCanvas.astro`, which owns every interaction from there. No component below
+ * fetches anything, and the island never refetches what this render already produced.
+ *
+ * Why the queue and not a board endpoint: `GET /api/v1/queue` is the read model that already
+ * carries state, engagement type, owner, due date and score per project — exactly the card —
+ * in one request. The cost is that the board can only draw the states somebody is currently
+ * in; see the unresolved note in the empty-column comment below.
+ */
+
+/**
+ * One page big enough to hold the whole portfolio.
+ *
+ * The server clamps to `MAX_PAGE_SIZE` (200), and a board is not a paginated surface: half a
+ * wall is not a wall. A portfolio that outgrows this needs per-column paging, which is a
+ * different design, not a bigger number.
+ */
+const BOARD_PAGE_SIZE = 200;
+
+/** What the page decided to render, after the fetch and before the markup. */
+type BoardRender =
+  | { kind: "loading" }
+  | { kind: "empty"; detail: string }
+  | { kind: "error"; detail: string }
+  | {
+      kind: "board";
+      panels: BoardPanelModel[];
+      defaultEngagement: string;
+      connection: "live" | "stale";
+      lastEventAt: string | null;
+    };
+
+const EMPTY_DETAIL =
+  "El tablero dibuja una columna por cada estado ocupado del flujo. En cuanto exista un proyecto activo, aparecerá aquí.";
+
+/**
+ * Spanish copy per failure code. `error.message` is generated English prose meant for logs
+ * (`docs/API.md` §4.2), so the view maps the machine code and never renders the message.
+ */
+function errorDetail(code: ApiErrorCode): string {
+  switch (code) {
+    case "network_error":
+      return "No pudimos hablar con el servidor. Revisa la conexión y vuelve a intentarlo.";
+    case "not_found":
+      return "La cola de proyectos no respondió a esta petición.";
+    case "validation_error":
+      return "El servidor rechazó los parámetros con los que pedimos el tablero.";
+    case "transition_not_allowed":
+    case "conflicting_state":
+    case "unknown_error":
+      return "El servidor respondió con un error inesperado al armar el tablero.";
+    default:
+      return "El servidor respondió con un error inesperado al armar el tablero.";
+  }
+}
+
+/**
+ * Maps the view state onto what the markup renders, exhaustively.
+ *
+ * `ready` and `disconnected` share the board arm on purpose: the disconnected state keeps the
+ * data on screen and marks it stale, because blanking a board an operator is reading is the
+ * one failure mode this surface must not have (`FRONTEND.md` §1).
+ */
+function planBoard(state: ViewState<QueuePage>, now: Date): BoardRender {
+  switch (state.kind) {
+    case "loading":
+      return { kind: "loading" };
+    case "empty":
+      return { kind: "empty", detail: state.message };
+    case "error":
+      return { kind: "error", detail: errorDetail(state.code) };
+    case "ready":
+    case "disconnected": {
+      const panels = buildPanels(state.data.items, now);
+      const first = panels[0];
+      if (first === undefined) return { kind: "empty", detail: EMPTY_DETAIL };
+      return {
+        kind: "board",
+        panels,
+        defaultEngagement: first.engagementType.code,
+        connection: state.kind === "ready" ? "live" : "stale",
+        lastEventAt: state.lastEventAt,
+      };
+    }
+    default:
+      return assertNever(state);
+  }
+}
+
+const result = await getQueue({ page: 1, page_size: BOARD_PAGE_SIZE });
+
+/**
+ * `"connecting"` is the honest stream status during a server render: the browser has not
+ * opened the connection yet, so the board is neither live nor known to be stale. The island
+ * corrects it within a frame of hydrating, from the store's own status.
+ */
+const state = toViewState(result, "connecting", {
+  isEmpty: (page) => page.items.length === 0,
+  emptyMessage: EMPTY_DETAIL,
+  lastEventAt: null,
+});
+
+const plan = planBoard(state, new Date());
+---
+
+<Shell
+  title="Tablero"
+  active="board"
+  crumbs={[{ label: "Inicio", href: "/" }, { label: "Tablero" }]}
+>
+  <header class="head">
+    <h1 class="h1" lang="es">Tablero</h1>
+    <p class="body-text" lang="es">
+      Una columna por estado del flujo. Mueve una tarjeta y el servidor decide si
+      el movimiento es legal; cuando alguien más mueve una, la ves viajar.
+    </p>
+  </header>
+
+  {plan.kind === "loading" && <BoardSkeleton />}
+
+  {
+    plan.kind === "empty" && (
+      <BoardNotice
+        kind="empty"
+        title="Todavía no hay nada en el muro"
+        detail={plan.detail}
+        link={{ label: "Ir a Proyectos", href: "/projects" }}
+      />
+    )
+  }
+
+  {
+    plan.kind === "error" && (
+      <BoardNotice
+        kind="error"
+        title="No pudimos cargar el tablero"
+        detail={plan.detail}
+        retryLabel="Reintentar"
+      />
+    )
+  }
+
+  {
+    plan.kind === "board" && (
+      <BoardCanvas
+        panels={plan.panels}
+        defaultEngagement={plan.defaultEngagement}
+        connection={plan.connection}
+        lastEventAt={plan.lastEventAt}
+      />
+    )
+  }
+</Shell>
+
+<style>
+  .head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    margin-bottom: var(--space-5);
+  }
+
+  .head p {
+    color: var(--tinta-media);
+  }
+</style>

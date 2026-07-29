@@ -17,13 +17,15 @@
  * no card on the page has rendered — its Spanish label is not in the payload, so
  * inventing one would put words in the operator's mouth.
  *
- * **Why this module also reads.** The first paint is rendered in page
- * frontmatter, which runs without the operator's session. When that read comes
- * back refused, the region ships its error arm and this module re-runs exactly
- * the same call from the browser, where the session exists. It is the error
- * arm's own retry, fired automatically instead of waiting to be clicked; nothing
- * else re-fetches, and a region that painted fine on the server is never
- * re-read.
+ * **Why this module also reads.** The first paint happens in page frontmatter,
+ * where `src/middleware.ts` supplies the access token from the mirror cookie but
+ * deliberately cannot renew it — the refresh token never leaves the browser. An
+ * expired token therefore comes back as a refused read, the region ships its
+ * error arm, and this module re-runs exactly the same call from the one place
+ * that can renew: the browser. It is the error arm's own retry, fired
+ * automatically instead of waiting to be clicked. Nothing else re-fetches, and a
+ * region that painted rows on the server is never re-read — an island that
+ * fetches its own initial data is the smell §6 of the pattern catalog names.
  */
 
 import { getQueue, getTeamLoad } from "../../lib/api/client";

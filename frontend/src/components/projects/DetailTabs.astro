@@ -1,0 +1,128 @@
+---
+/**
+ * The detail's four sections as in-page tabs: tareas, bloqueos, notas,
+ * actividad.
+ *
+ * In-page rather than routed, because all four describe the *same* project and
+ * a URL per section would make the back button undo a glance. Every panel is
+ * server-rendered, so switching costs nothing and the operator can print or
+ * search the whole record.
+ *
+ * Real ARIA tabs: roving `tabindex`, arrow-key navigation, `aria-selected` and
+ * `aria-controls`. A row of `<div>`s with a class on the active one is not a
+ * tablist to anything that is not a mouse.
+ */
+export interface Props {
+  taskCount: number;
+  blockerCount: number;
+  activityCount: number;
+}
+
+const { taskCount, blockerCount, activityCount } = Astro.props;
+
+/** Order is deliberate: the work, what stops it, what was said, what happened. */
+const TABS = [
+  { key: "tasks", label: "Tareas", count: taskCount },
+  { key: "blockers", label: "Bloqueos", count: blockerCount },
+  { key: "notes", label: "Notas", count: null },
+  { key: "activity", label: "Actividad", count: activityCount },
+] as const;
+---
+
+<div class="tabs" data-tabs>
+  <div class="tablist" role="tablist" aria-label="Secciones del proyecto">
+    {
+      TABS.map((tab, index) => (
+        <button
+          class="tab chip pill"
+          type="button"
+          role="tab"
+          id={`tab-${tab.key}`}
+          data-tab={tab.key}
+          aria-controls={`panel-${tab.key}`}
+          aria-selected={index === 0 ? "true" : "false"}
+          tabindex={index === 0 ? 0 : -1}
+        >
+          {tab.label}
+          {tab.count !== null && (
+            <span class="figure count" data-field={`${tab.key}-count`}>
+              {tab.count}
+            </span>
+          )}
+        </button>
+      ))
+    }
+  </div>
+
+  {
+    TABS.map((tab, index) => (
+      <section
+        class="panel"
+        role="tabpanel"
+        id={`panel-${tab.key}`}
+        data-panel={tab.key}
+        aria-labelledby={`tab-${tab.key}`}
+        hidden={index !== 0}
+      >
+        <slot name={tab.key} />
+      </section>
+    ))
+  }
+</div>
+
+<script>
+  import { onPage } from "./island";
+  import { mountTabs } from "./tabs";
+
+  onPage("[data-tabs]", mountTabs);
+</script>
+
+<style>
+  .tabs {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .tablist {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding-bottom: var(--space-1);
+  }
+
+  .tab {
+    min-height: 40px;
+    padding: var(--space-2) var(--space-4);
+    background-color: var(--carta);
+    border: var(--border-width) solid var(--hairline);
+    color: var(--tinta-media);
+    transition:
+      background-color var(--motion-micro-duration) var(--motion-micro-ease),
+      border-color var(--motion-micro-duration) var(--motion-micro-ease),
+      color var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .tab:hover {
+    color: var(--tinta);
+    border-color: var(--tinta-suave);
+  }
+
+  .tab[aria-selected="true"] {
+    background-color: var(--cobalto-papel);
+    border-color: var(--cobalto);
+    color: var(--cobalto);
+  }
+
+  .count {
+    color: var(--tinta-suave);
+  }
+
+  .tab[aria-selected="true"] .count {
+    color: var(--cobalto);
+  }
+
+  .panel[hidden] {
+    display: none;
+  }
+</style>

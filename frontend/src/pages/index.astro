@@ -34,6 +34,8 @@ import { getQueue, getTeamLoad } from "../lib/api/client";
 import { toViewState } from "../lib/view-state";
 import "../components/overview/overview.css";
 
+export const prerender = false;
+
 /** One reference instant for the whole render, so two cards cannot straddle midnight. */
 const now = new Date();
 
@@ -63,10 +65,10 @@ const teamState = toViewState(teamResult, "connecting", {
 /**
  * Regions the island must read again from the browser.
  *
- * This render runs without the operator's session — tokens live in the browser —
- * so an authenticated read can come back refused here and succeed there. Only a
- * region that actually failed is listed; one that painted rows is never
- * re-fetched.
+ * `src/middleware.ts` hands this render the access token from the mirror cookie
+ * but cannot renew it — the refresh token stays in the browser by design — so an
+ * expired token is refused here and repaired there. Only a region that actually
+ * failed is listed; one that painted rows is never re-fetched.
  */
 const hydrate: RegionKey[] = [];
 if (queueState.kind === "error") hydrate.push("queue");

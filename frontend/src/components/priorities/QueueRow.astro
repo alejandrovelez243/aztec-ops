@@ -82,7 +82,9 @@ const ownerName = ownerLabel ?? "Sin responsable";
     <span class="title name" transition:name={`proj-${code}`}>{name}</span>
     <span class="meta">
       <span class="small client">{clientAlias}</span>
-      {hasOverride && <span class="chip tone-ambar manual">Ajuste manual</span>}
+      <span class="chip tone-ambar manual" data-slot="manual" hidden={!hasOverride}>
+        Ajuste manual
+      </span>
     </span>
   </span>
 
@@ -133,6 +135,8 @@ const ownerName = ownerLabel ?? "Sin responsable";
     min-height: calc(var(--space-6) + var(--space-5));
     padding: var(--space-3) var(--space-4);
     text-align: left;
+    /* Anchors the ▲/▼ delta chip the live island pops on a reorder. */
+    position: relative;
     transition:
       background-color var(--motion-micro-duration) var(--motion-micro-ease),
       box-shadow var(--motion-micro-duration) var(--motion-micro-ease),
@@ -173,6 +177,10 @@ const ownerName = ownerLabel ?? "Sin responsable";
 
   .manual {
     flex: none;
+  }
+
+  .manual[hidden] {
+    display: none;
   }
 
   /*

@@ -25,25 +25,30 @@ const { flags } = Astro.props;
 
 <div class="risks" data-risk-list>
   <h2 class="label">Riesgos</h2>
-  {
-    flags.length === 0 ? (
-      <p class="chip tone-verde none">Sin riesgos detectados</p>
-    ) : (
-      <ul>
-        {flags.map((flag) => (
-          <li class:list={["risk", severityTone(flag.severity)]}>
-            <span class="dot" aria-hidden="true" />
-            <div class="body">
-              <p class="title">{riskLabel(flag.code)}</p>
-              <p class="small reason" lang="en">
-                {flag.reason}
-              </p>
-            </div>
-          </li>
-        ))}
-      </ul>
-    )
-  }
+
+  {/* Both arms always render, so the island can flip between them when a
+      transition raises or clears a flag. */}
+  <p class="chip tone-verde none" data-risk-none hidden={flags.length > 0}>
+    Sin riesgos detectados
+  </p>
+
+  <ul data-risk-items hidden={flags.length === 0}>
+    {
+      flags.map((flag) => (
+        <li class:list={["risk", severityTone(flag.severity)]}>
+          <span class="dot" aria-hidden="true" />
+          <div class="body">
+            <p class="title" data-field="risk-name">
+              {riskLabel(flag.code)}
+            </p>
+            <p class="small reason" lang="en" data-field="risk-reason">
+              {flag.reason}
+            </p>
+          </div>
+        </li>
+      ))
+    }
+  </ul>
 
   {/* Cloned by the island when a re-read brings a flag that was not raised at
       first paint; the markup therefore has one home. */}
@@ -94,5 +99,11 @@ const { flags } = Astro.props;
 
   .none {
     align-self: flex-start;
+  }
+
+  /* `hidden` must beat the flex displays above, or both arms show at once. */
+  .risks ul[hidden],
+  .risks .none[hidden] {
+    display: none;
   }
 </style>

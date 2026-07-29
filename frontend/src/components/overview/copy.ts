@@ -114,8 +114,18 @@ export function failureText(code: ApiErrorCode): string {
       return "La API rechazó la operación por una regla de flujo de trabajo.";
     case "conflicting_state":
       return "El estado en la API ya no es el que teníamos a la vista.";
+    case "domain_error":
+      return "Una regla de negocio rechazó la operación.";
+    case "authentication_required":
+      return "Tu sesión no viajó con la petición. Vuelve a iniciar sesión para ver la cartera.";
+    case "invalid_token":
+      return "Tu sesión caducó. Estamos reintentando con credenciales renovadas.";
+    case "invalid_credentials":
+      return "Las credenciales no son válidas. Inicia sesión de nuevo.";
+    case "permission_denied":
+      return "Te falta la capacidad de líder de operaciones para esta acción.";
     case "unknown_error":
-      return "La API respondió con un error inesperado. Si acabas de entrar, vuelve a iniciar sesión.";
+      return "La API respondió con un error inesperado.";
     default:
       return assertNever(code);
   }

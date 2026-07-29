@@ -105,6 +105,16 @@ export function isFresher(
   return occurredAt > renderedAt;
 }
 
+/**
+ * Narrows an `unknown` JSON value to a plain object.
+ *
+ * A type predicate rather than a cast: `as` would assert the shape, this one
+ * checks it, and arrays and `null` — both `typeof "object"` — are excluded.
+ */
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** Reads a string field out of an envelope payload; `null` when absent. */
 export function readString(
   payload: Record<string, unknown>,

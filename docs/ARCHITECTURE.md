@@ -208,8 +208,8 @@ backend/apps/<context>/
 
 ```mermaid
 flowchart TD
-  HTTP(["HTTP request"]) --> API
-  BUS(["delivered event"]) --> H
+  HTTP["HTTP request"] --> API
+  BUS["delivered event"] --> H
 
   API["api/<br/>routers.py + schemas.py"]
   H["handlers.py<br/>event reactors"]
@@ -226,10 +226,10 @@ flowchart TD
   S --> R
   M --> DB
   R --> DB
-  M -->|"to_result / to_view / to_entry"| D
+  M -->|"to_result, to_view, to_entry"| D
 
-  API -.->|"FORBIDDEN: never imports"| M
-  D -.->|"FORBIDDEN: never imports"| M
+  API -.->|"FORBIDDEN - never imports"| M
+  D -.->|"FORBIDDEN - never imports"| M
 ```
 
 The two crossed links are the illegal arrows, and they are the whole rule:
@@ -612,7 +612,7 @@ flowchart TD
     SC[("PriorityScore<br/>persisted because PRIORITY_CHANGED<br/>needs a previous value")]
   end
 
-  HEALTH -.->|"no table, no column,<br/>no change event, no WHERE clause"| NONE(["response payload only"])
+  HEALTH -.->|"no table, no column,<br/>no change event, no WHERE clause"| NONE["response payload only"]
 ```
 
 - `IsBlocked` — an open blocker, or state category `BLOCKED`, or a task in a `BLOCKED` state.

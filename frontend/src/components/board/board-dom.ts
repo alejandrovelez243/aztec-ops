@@ -38,6 +38,15 @@ export const SEL = {
 /** How long the attribution chip of a remote move stays legible before it fades. */
 export const ATTRIBUTION_LINGER_MS = 1_800;
 
+/**
+ * Where the chosen engagement type is remembered.
+ *
+ * Read twice on purpose: by the inline pre-paint script (so the board never flashes the
+ * wrong wall) and by the island that owns every later switch. Both import this constant, so
+ * the two readers can never drift onto different keys.
+ */
+export const BOARD_ENGAGEMENT_KEY = "aztec.ui.board.engagement";
+
 /** The card of one project inside `root`, or `null` when it is not on this board. */
 export function findCard(root: ParentNode, code: string): HTMLElement | null {
   return root.querySelector<HTMLElement>(`${SEL.card}[data-code="${cssEscape(code)}"]`);
@@ -123,15 +132,18 @@ export function isPending(card: HTMLElement): boolean {
  */
 export function patchStateChip(card: HTMLElement, column: HTMLElement): void {
   const chip = card.querySelector<HTMLElement>(SEL.cardState);
-  const label = labelOf(column);
   card.dataset["stateCode"] = column.dataset["stateCode"] ?? "";
   if (chip === null) return;
   const text = chip.querySelector<HTMLElement>("[data-card-state-text]");
-  if (text !== null) text.textContent = label;
+  if (text !== null) text.textContent = labelOf(column);
+  // Tone classes are swapped one by one rather than by rewriting `className`: the element
+  // also carries Astro's scope class, and dropping it strips the component's own styles.
+  for (const existing of [...chip.classList]) {
+    if (existing.startsWith("tone-")) chip.classList.remove(existing);
+  }
   const toneClass = column.dataset["toneClass"] ?? "";
-  const toneStyle = column.dataset["toneStyle"] ?? "";
-  chip.className = `chip card-state ${toneClass}`.trim();
-  chip.setAttribute("style", toneStyle);
+  if (toneClass !== "") chip.classList.add(toneClass);
+  chip.setAttribute("style", column.dataset["toneStyle"] ?? "");
 }
 
 /**

@@ -19,9 +19,10 @@ import type { RegionKey } from "../components/overview/markup";
 
 export interface Props {
   /**
-   * Regions whose first paint was refused and must be re-read from the browser,
-   * where the operator's session lives. A region that rendered on the server is
-   * absent from this list and is never re-read, so this is a recovery and not a
+   * Regions whose first paint was refused and must be re-read from the browser —
+   * the one place that holds the refresh token the server render cannot use
+   * (`src/middleware.ts`). A region that rendered rows on the server is absent
+   * from this list and is never re-read, so this is a recovery and not a
    * duplicate of the request the page already made.
    */
   hydrate: readonly RegionKey[];

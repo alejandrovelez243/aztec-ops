@@ -134,7 +134,9 @@ import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
         if (error.kind === "validation") {
           return "Escribe tu usuario y tu contraseña.";
         }
-        if (error.kind === "unknown" && error.backendCode === "invalid_credentials") {
+        if (error.kind === "auth") {
+          // One answer for unknown user, wrong password and inactive account:
+          // the API refuses to distinguish them, and so does this form.
           return "Usuario o contraseña incorrectos, o la cuenta está desactivada.";
         }
         return "No se pudo iniciar sesión. Intenta de nuevo.";
