@@ -1,0 +1,80 @@
+/**
+ * The data-table grammar, shared by every surface that lays records out in rows.
+ *
+ * Extracted from the Equipo roster, which established it: a card that is its own
+ * horizontal scroll container, a sticky header on paper, hairline row rules, one
+ * padding rhythm, and a hover that follows the pointer down the page. The
+ * activity feed reads the same way because it is the same act — comparing lines
+ * rather than reading paragraphs — and a second copy of these selectors would
+ * drift the moment one of the two surfaces was adjusted.
+ *
+ * Consumers add `.data-table` to the `<table>` and `.table-wrap` to the card
+ * around it, then keep only what is genuinely theirs: column widths, which
+ * columns drop at which breakpoint, and the meaning of their own cells.
+ *
+ * Colours, spacing and radii are tokens (`styles/tokens.css`); this file
+ * contains no literal value.
+ */
+
+/* The card *is* the scroll container, which is what lets the header stick to it
+   rather than to the page: any `top` other than 0 would park the header that far
+   down inside the card, on top of the first row. */
+.table-wrap {
+  overflow-x: auto;
+  padding: 0;
+}
+
+.data-table {
+  width: 100%;
+}
+
+.data-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background-color: var(--carta);
+  text-align: left;
+  padding: var(--space-3);
+  border-bottom: var(--border-width) solid var(--hairline);
+}
+
+/**
+ * A header whose cell *is* a control — the roster's sort buttons — hands its
+ * padding to the button, so the hit target fills the cell instead of leaving a
+ * dead border around it.
+ *
+ * Keyed on `:has(button)` rather than on the opt-in class alone: the two headers
+ * of that same table that hold no control (Estado, Acciones) must keep the
+ * shared padding, and spelling them out per surface would mean every table
+ * re-deciding a rule that follows from what the cell contains.
+ */
+.data-table.head-controls thead th:has(button) {
+  padding: 0;
+}
+
+.data-table tbody tr {
+  border-bottom: var(--border-width) solid var(--hairline);
+  background-color: var(--carta);
+  transition: background-color var(--motion-micro-duration)
+    var(--motion-micro-ease);
+}
+
+.data-table tbody tr:hover {
+  background-color: var(--pozo);
+}
+
+.data-table tbody tr:last-child {
+  border-bottom: 0;
+}
+
+.data-table td {
+  padding: var(--space-3);
+  vertical-align: middle;
+}
+
+/** Figures align on their last digit; the header above them follows. */
+.data-table .right,
+.data-table td.right,
+.data-table th.right {
+  text-align: right;
+}

@@ -1,0 +1,242 @@
+---
+/**
+ * `/tasks/{code}` — one task, and everything you can do to it.
+ *
+ * The container: this frontmatter performs the single read of the first paint
+ * and hands it to presentational components; the islands underneath own the
+ * writes and the live patches. One read is the whole screen because the API
+ * answers it that way — the task, its project, its legal moves and its comments
+ * arrive together, so this page can never render half of itself while a second
+ * request is in flight.
+ *
+ * Layering, in one sentence each. `transitions` from that read is the only
+ * source of transition buttons, so a task state added in the admin needs no
+ * frontend change. Nothing repaints a state change until the stream confirms
+ * it — the server owns legality, and a rollback the operator has already read
+ * past is worse than a wait. And a code that resolves to nothing renders the
+ * "no encontrada" arm with the way back to its project, never a crash: a task
+ * code is a link people paste to each other, so a stale one is an ordinary
+ * event on this route rather than an exceptional one.
+ */
+import Shell from "../../layouts/Shell.astro";
+import ReasonDialog from "../../components/projects/ReasonDialog.astro";
+import RegionMessage from "../../components/projects/RegionMessage.astro";
+import StaleBanner from "../../components/projects/StaleBanner.astro";
+import {
+  regionFailureCopy,
+  type FailureCopy,
+} from "../../components/projects/messages";
+import CommentsPanel from "../../components/tasks/CommentsPanel.astro";
+import TaskHeader from "../../components/tasks/TaskHeader.astro";
+import {
+  emptyTaskFields,
+  projectCodeOf,
+  projectHref,
+} from "../../components/tasks/presentation";
+import EmptyState from "../../components/ui/EmptyState.astro";
+import { getTask, type Result } from "../../lib/api/client";
+import type { ApiError } from "../../lib/api/errors";
+import type { TaskDetail } from "../../lib/api/domain";
+import { assertNever, toViewState, type ViewState } from "../../lib/view-state";
+
+const code = Astro.params.code;
+
+/** A route reached without a code cannot be read; it is a `not_found`, not a crash. */
+const MISSING_CODE: ApiError = {
+  kind: "not_found",
+  code: "not_found",
+  message: "The URL carries no task code.",
+  details: {},
+};
+
+const result: Result<TaskDetail> =
+  code === undefined ? { ok: false, error: MISSING_CODE } : await getTask(code);
+
+const failure: ApiError | null = result.ok ? null : result.error;
+
+/**
+ * What this screen renders, one arm at a time.
+ *
+ * `missing` is its own arm rather than an error with a nicer sentence: a task
+ * that is not there is answered with a way back to its project, while a task
+ * that could not be *read* is answered with a retry. Collapsing the two would
+ * offer a retry for something no amount of retrying will produce.
+ */
+type DetailPlan =
+  | { mode: "data"; task: TaskDetail }
+  | { mode: "missing" }
+  | { mode: "error"; copy: FailureCopy }
+  | { mode: "loading" };
+
+/**
+ * SSR has no stream, so the status is "connecting": a successful read is
+ * `ready` and a failed one is `error`; `disconnected` is a client-side arm that
+ * `StaleBanner` owns, and `loading` belongs to a fetch that has not returned —
+ * which on this route can only be the skeleton geometry below.
+ */
+const state: ViewState<TaskDetail> = toViewState(result, "connecting", {
+  // A task detail is never empty: the API either answers with the whole task or
+  // with a 404. The empty arm on this screen belongs to the comments region,
+  // which owns its own.
+  isEmpty: () => false,
+  emptyMessage: "",
+  lastEventAt: null,
+});
+
+function planFor(view: ViewState<TaskDetail>): DetailPlan {
+  switch (view.kind) {
+    case "ready":
+    case "disconnected":
+      return { mode: "data", task: view.data };
+    case "error":
+      if (view.code === "not_found") return { mode: "missing" };
+      return {
+        mode: "error",
+        copy:
+          failure === null
+            ? {
+                title: "No pudimos cargar la tarea",
+                detail: "Vuelve a intentarlo.",
+              }
+            : regionFailureCopy(failure, "la tarea"),
+      };
+    // A single-resource read has no empty payload; were one ever to arrive, the
+    // honest reading is that the task is not there.
+    case "empty":
+      return { mode: "missing" };
+    case "loading":
+      return { mode: "loading" };
+    default:
+      return assertNever(view);
+  }
+}
+
+const plan = planFor(state);
+const task = plan.mode === "data" ? plan.task : null;
+
+/**
+ * Which project the breadcrumb and the way back point at. The task's own answer
+ * when it loaded; otherwise the one its code names, because a dead link should
+ * still return the operator to the wall it came from.
+ */
+const parentCode = task?.project.code ?? projectCodeOf(code ?? "");
+
+const crumbs = [
+  { label: "Inicio", href: "/" },
+  { label: "Proyectos", href: "/projects" },
+  ...(parentCode === null
+    ? []
+    : [{ label: parentCode, href: projectHref(parentCode) }]),
+  { label: task?.code ?? code ?? "Tarea" },
+];
+
+const title = task === null ? "Tarea no encontrada" : task.title;
+---
+
+<Shell title={title} active="projects" crumbs={crumbs}>
+  <div class="detail">
+    <StaleBanner />
+
+    {
+      plan.mode === "data" && (
+        <Fragment>
+          <TaskHeader
+            code={plan.task.code}
+            title={plan.task.title}
+            detail={plan.task.detail}
+            projectCode={plan.task.project.code}
+            projectName={plan.task.project.name}
+            assigneeAlias={plan.task.assignee?.alias ?? null}
+            assigneeLabel={plan.task.assignee?.label ?? null}
+            priorityLabel={plan.task.priority.label}
+            priorityColor={plan.task.priority.color ?? null}
+            stateLabel={plan.task.state.label}
+            stateCategory={plan.task.state.category}
+            stateColor={plan.task.state.color ?? null}
+            dueDate={plan.task.due_date ?? null}
+            isOverdue={plan.task.is_overdue}
+            lastProgress={plan.task.last_progress}
+            dependencies={plan.task.dependencies}
+            transitions={plan.task.transitions}
+            emptyFields={emptyTaskFields(plan.task)}
+            updatedAt={plan.task.updated_at}
+          />
+
+          <CommentsPanel
+            taskCode={plan.task.code}
+            projectCode={plan.task.project.code}
+            comments={plan.task.notes}
+          />
+
+          {/* The motive a transition can demand, asked once for the whole
+              screen: `requires_reason` is a property of a transition edge, so a
+              task and a project ask the same question and must not ask it in
+              two different forms. */}
+          <ReasonDialog />
+        </Fragment>
+      )
+    }
+
+    {
+      plan.mode === "missing" && (
+        <section class="card">
+          <EmptyState
+            scene="lost"
+            title="No encontramos esta tarea"
+            description="El código puede estar mal escrito, o la tarea cambió de proyecto. Vuelve al proyecto y sigue desde ahí."
+          >
+            <a
+              class="btn btn-primary"
+              href={parentCode === null ? "/projects" : projectHref(parentCode)}
+            >
+              {parentCode === null
+                ? "Ir a Proyectos"
+                : `Volver a ${parentCode}`}
+            </a>
+          </EmptyState>
+        </section>
+      )
+    }
+
+    {
+      plan.mode === "error" && (
+        <RegionMessage
+          kind="error"
+          title={plan.copy.title}
+          detail={plan.copy.detail}
+          actionLabel="Reintentar"
+        >
+          <a class="btn btn-ghost" href="/projects">
+            Volver a Proyectos
+          </a>
+        </RegionMessage>
+      )
+    }
+
+    {
+      plan.mode === "loading" && (
+        <Fragment>
+          <p class="skeleton loading-head" />
+          <p class="skeleton loading-block" />
+        </Fragment>
+      )
+    }
+  </div>
+</Shell>
+
+<style>
+  .detail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+
+  /* Skeletons in the geometry of the loaded screen, never a page spinner. */
+  .loading-head {
+    height: var(--space-8);
+  }
+
+  .loading-block {
+    height: var(--space-7);
+  }
+</style>

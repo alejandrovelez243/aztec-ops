@@ -1,23 +1,27 @@
 /**
- * The team, as the owner pickers read it — `GET /api/v1/team/load`.
+ * The team, as every person picker reads it — `GET /api/v1/team/load`.
  *
- * Fetched in the browser rather than baked into the page: this route is
- * pre-rendered (there is no SSR adapter), so a roster embedded at build time
- * would offer whoever was on the team the day the image was built. It is read
- * the first time a picker opens, which is also the first moment it is needed.
+ * Fetched in the browser rather than baked into the page, and read the first
+ * time a picker opens, which is also the first moment it is needed.
  *
- * One read serves every picker on the page — the header's and one per task row —
- * through the single-flight promise below. Twenty rows must not mean twenty
- * requests for a list of five people.
+ * One read serves every picker on the page — the project header's, one per task
+ * row, the activity feed's actor filter — through the single-flight promise
+ * below. Twenty controls must not mean twenty requests for a list of five
+ * people.
  *
  * Success and emptiness are cached for the life of the page; a failure is not,
  * so closing and reopening the menu is a retry rather than a second look at the
  * same error.
+ *
+ * The `error` arm carries the typed `ApiError`, never rendered prose: each
+ * surface maps it to its own words (`failureCopy` on the projects surfaces,
+ * `errorCopy` elsewhere), which is what lets this module live in `lib/` and be
+ * shared instead of owning one view's vocabulary.
  */
 
-import { getTeamLoad } from "../../lib/api/client";
-import { failureCopy, type FailureCopy } from "./messages";
-import type { TeamLoadEntry } from "../../lib/api/domain";
+import { getTeamLoad } from "../api/client";
+import type { ApiError } from "../api/errors";
+import type { TeamLoadEntry } from "../api/domain";
 
 /**
  * The four arms every fetching surface owes its reader
@@ -28,7 +32,7 @@ export type RosterState =
   | { readonly kind: "loading" }
   | { readonly kind: "ready"; readonly members: readonly TeamLoadEntry[] }
   | { readonly kind: "empty" }
-  | { readonly kind: "error"; readonly copy: FailureCopy };
+  | { readonly kind: "error"; readonly error: ApiError };
 
 /** The settled answer, kept for the life of the page. */
 let cached: RosterState | null = null;
@@ -56,7 +60,7 @@ async function fetchRoster(): Promise<RosterState> {
   const result = await getTeamLoad();
   if (!result.ok) {
     // Deliberately not cached: the next open should try again.
-    return { kind: "error", copy: failureCopy(result.error) };
+    return { kind: "error", error: result.error };
   }
   const members = result.data.items;
   cached =

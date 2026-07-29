@@ -57,6 +57,10 @@ class Settings(BaseSettings):
         default="postgres://aztec:aztec@localhost:5432/aztec", alias="DATABASE_URL"
     )
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
+
+    #: Appended to the test database's name, so two suites running at once do not share one
+    #: database and drop it from under each other. Empty in the ordinary single-run case.
+    test_db_suffix: str = Field(default="", alias="TEST_DB_SUFFIX")
     cors_origins: list[str] = Field(default=["http://localhost:4321"], alias="CORS_ALLOWED_ORIGINS")
 
     #: How often the ticker emits ``clock.ticked``. This is the upper bound on how stale a
@@ -106,16 +110,26 @@ class Settings(BaseSettings):
 
         One URL is easier to pass through Compose and a deploy target than six separate
         variables that can disagree with each other.
+
+        ``TEST['NAME']`` is a suffix Django would otherwise derive as ``test_<name>`` for
+        everybody, which makes two simultaneous runs share one database: the second run's
+        setup drops the first run's database out from under it, and the failure arrives as
+        ``database "test_aztec" does not exist`` on a test that has nothing wrong with it.
+        Setting ``TEST_DB_SUFFIX`` gives a run its own database, so a second suite (a
+        parallel agent, a colleague on the same host, two shells) cannot collide with it.
+        Empty by default, which keeps the ordinary single-run name unchanged.
         """
         url = urlparse(self.database_url)
+        name = url.path.lstrip("/")
         return {
             "ENGINE": "django.db.backends.postgresql",
-            "NAME": url.path.lstrip("/"),
+            "NAME": name,
             "USER": url.username,
             "PASSWORD": url.password,
             "HOST": url.hostname,
             "PORT": url.port or 5432,
             "CONN_MAX_AGE": 60 if self.is_production else 0,
+            "TEST": {"NAME": f"test_{name}{self.test_db_suffix}"},
         }
 
 

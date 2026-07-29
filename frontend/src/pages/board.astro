@@ -6,58 +6,56 @@ import Shell from "../layouts/Shell.astro";
 import {
   NO_MEMBER_PHOTOS,
   buildMembers,
-  buildPanels,
+  buildSurfaces,
   findCardLocation,
 } from "../components/board/board-model";
 import type {
-  BoardPanelModel,
+  BoardSurfaceModel,
   MemberChipModel,
   ProjectCardModel,
   Tone,
 } from "../components/board/board-model";
 import { BOARD_PROJECT_PARAM } from "../components/board/board-dom";
-import { getQueue, getTeamLoad } from "../lib/api/client";
+import { getQueue, getTeamLoad, getWorkflows } from "../lib/api/client";
 import type { ApiErrorCode } from "../lib/api/errors";
-import type { QueuePage } from "../lib/api/domain";
+import type { QueuePage, WorkflowCatalog } from "../lib/api/domain";
 import { assertNever, toViewState } from "../lib/view-state";
 import type { ViewState } from "../lib/view-state";
 
 /**
- * `/board` — "Tablero": the wall, one engagement type at a time, full-bleed.
+ * `/board` — "Tablero": the portfolio as a rail of workflow states, and the selected
+ * project's work as the board beside it. Full-bleed.
  *
  * This file is a container and nothing else (`PATTERNS_FRONTEND.md` §5): it fetches on the
- * server, turns the answers into the board's view model, and hands that to
+ * server, turns the answers into the surface's view model, and hands that to
  * `islands/BoardCanvas.astro`, which owns every interaction from there. No component below
  * fetches anything for the first paint, and the island never refetches what this render
  * already produced.
  *
- * Two reads, in parallel, because the toolbar and the wall are one screen and two round trips
- * in series is a screen that paints in two halves:
+ * Three reads, in parallel, because the toolbar, the rail and the columns are one screen and
+ * three round trips in series is a screen that paints in three parts:
  *
  * - `GET /api/v1/queue` is the read model that already carries state, engagement type, owner,
- *   due date and score per project — exactly the card — in one request.
+ *   due date, risk flags and score per project — exactly the card — in one request.
+ * - `GET /api/v1/workflows` is what makes an *unoccupied* state renderable, and therefore
+ *   droppable. Without it the bands could only be the states projects happen to sit in, so an
+ *   empty "Bloqueado" would have no band, the rail could not say nothing is blocked, and a
+ *   card would have nowhere to be dropped. It publishes no transitions on purpose: legality
+ *   still comes from the aggregate's own `transitions` (`docs/API.md` §2.18).
  * - `GET /api/v1/team/load` is the roster behind the "Miembros" bar; it also carries what each
  *   person is currently holding, which is what the avatar's accessible name says out loud.
- *   A failure here does not fail the board: the bar names the absence and the wall renders.
  *
- * **The surface's known gap, and why it is still here.** The queue reports the state each
- * project is *in*, so the board can only draw the states somebody currently occupies. A
- * workflow state that exists in the admin but holds no project has no column, which means it
- * cannot be dropped into either. The obvious fix would be to read the states from the
- * taxonomy, and `GET /api/v1/catalog` deliberately does not carry them — its own docstring
- * says so, because a state is scoped to its workflow and legality lives in the project's
- * `transitions`. No `workflows/{code}/states` route exists either (checked against the live
- * OpenAPI document). Closing this needs that endpoint; until it exists, the runtime says out
- * loud what happened rather than pretending, and every column that *is* drawn renders its
- * "Sin proyectos" placeholder so an empty zone still reads as empty rather than as missing.
+ * Only the queue can fail the page. A failed roster costs the owner filter and says so; a
+ * failed workflow catalog costs the empty states — the bands fall back to the occupied ones —
+ * and says so too. Neither is worth blanking a board an operator is reading (`FRONTEND.md` §1).
  */
 
 /**
  * One page big enough to hold the whole portfolio.
  *
  * The server clamps to `MAX_PAGE_SIZE` (200), and a board is not a paginated surface: half a
- * wall is not a wall. A portfolio that outgrows this needs per-column paging, which is a
- * different design, not a bigger number.
+ * portfolio is not a portfolio. A portfolio that outgrows this needs per-band paging, which is
+ * a different design, not a bigger number.
  */
 const BOARD_PAGE_SIZE = 200;
 
@@ -68,7 +66,7 @@ type BoardRender =
   | { kind: "error"; detail: string }
   | {
       kind: "board";
-      panels: BoardPanelModel[];
+      surfaces: BoardSurfaceModel[];
       defaultEngagement: string;
       connection: "live" | "stale";
       lastEventAt: string | null;
@@ -76,10 +74,13 @@ type BoardRender =
     };
 
 const EMPTY_DETAIL =
-  "El tablero dibuja una columna por cada estado ocupado del flujo. En cuanto exista un proyecto activo, aparecerá aquí.";
+  "El carril dibuja una banda por cada estado del flujo. En cuanto exista un proyecto activo, aparecerá aquí.";
 
 const MEMBERS_FAILED =
   "No pudimos cargar el equipo, así que el filtro por responsable no está disponible.";
+
+const WORKFLOWS_FAILED =
+  "No pudimos leer los flujos de trabajo, así que solo se dibujan los estados que hoy tienen trabajo: puede faltar alguna banda o columna vacía.";
 
 /**
  * Spanish copy per failure code. `error.message` is generated English prose meant for logs
@@ -116,12 +117,13 @@ function errorDetail(code: ApiErrorCode): string {
  * data on screen and marks it stale, because blanking a board an operator is reading is the
  * one failure mode this surface must not have (`FRONTEND.md` §1).
  *
- * `requestedProject` decides two things at once: which card renders selected, and which wall
- * is on screen — a link to a project of another engagement type must open the board that
- * project actually lives on, not the alphabetically first one.
+ * `requestedProject` decides two things at once: which card renders selected, and which
+ * portfolio is on screen — a link to a project of another engagement type must open the rail
+ * that project actually lives on, not the alphabetically first one.
  */
 function planBoard(
   state: ViewState<QueuePage>,
+  catalog: WorkflowCatalog | null,
   requestedProject: string | null,
   now: Date,
 ): BoardRender {
@@ -134,26 +136,26 @@ function planBoard(
       return { kind: "error", detail: errorDetail(state.code) };
     case "ready":
     case "disconnected": {
-      const panels = buildPanels(state.data.items, now);
-      const first = panels[0];
+      const surfaces = buildSurfaces(state.data.items, catalog, now);
+      const first = surfaces[0];
       if (first === undefined) return { kind: "empty", detail: EMPTY_DETAIL };
       const located =
         requestedProject === null
           ? null
-          : findCardLocation(panels, requestedProject);
+          : findCardLocation(surfaces, requestedProject);
       return {
         kind: "board",
-        panels,
+        surfaces,
         defaultEngagement:
           located === null
             ? first.engagementType.code
-            : located.panel.engagementType.code,
+            : located.surface.engagementType.code,
         connection: state.kind === "ready" ? "live" : "stale",
         lastEventAt: state.lastEventAt,
         selected:
           located === null
             ? null
-            : { card: located.card, tone: located.column.tone },
+            : { card: located.card, tone: located.section.tone },
       };
     }
     default:
@@ -163,9 +165,10 @@ function planBoard(
 
 const requestedProject = Astro.url.searchParams.get(BOARD_PROJECT_PARAM);
 
-const [result, teamResult] = await Promise.all([
+const [result, teamResult, workflowResult] = await Promise.all([
   getQueue({ page: 1, page_size: BOARD_PAGE_SIZE }),
   getTeamLoad(),
+  getWorkflows(),
 ]);
 
 /**
@@ -179,7 +182,12 @@ const state = toViewState(result, "connecting", {
   lastEventAt: null,
 });
 
-const plan = planBoard(state, requestedProject, new Date());
+const catalog: WorkflowCatalog | null = workflowResult.ok
+  ? workflowResult.data
+  : null;
+const workflowsNote = workflowResult.ok ? null : WORKFLOWS_FAILED;
+
+const plan = planBoard(state, catalog, requestedProject, new Date());
 
 /**
  * The roster, or nothing plus a sentence saying why.
@@ -202,8 +210,9 @@ const membersNote = teamResult.ok ? null : MEMBERS_FAILED;
   <header class="head">
     <h1 class="h1" lang="es">Tablero</h1>
     <p class="body-text" lang="es">
-      Una columna por estado del flujo. Mueve una tarjeta y el servidor decide
-      si el movimiento es legal; elige una y verás sus tareas al lado.
+      A la izquierda, cada proyecto en su estado: arrástralo hacia arriba o
+      hacia abajo para moverlo de fase. Elige uno y a la derecha aparecen sus
+      tareas, una columna por estado, para moverlas de izquierda a derecha.
     </p>
   </header>
 
@@ -238,12 +247,13 @@ const membersNote = teamResult.ok ? null : MEMBERS_FAILED;
   {
     plan.kind === "board" && (
       <BoardCanvas
-        panels={plan.panels}
+        surfaces={plan.surfaces}
         defaultEngagement={plan.defaultEngagement}
         connection={plan.connection}
         lastEventAt={plan.lastEventAt}
         members={members}
         membersNote={membersNote}
+        workflowsNote={workflowsNote}
         selected={plan.selected}
       />
     )

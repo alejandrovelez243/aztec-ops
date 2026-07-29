@@ -32,7 +32,7 @@ import { QUEUE_PAGE_SIZE } from "../components/overview/model";
 import OverviewLive from "../islands/OverviewLive.astro";
 import Shell from "../layouts/Shell.astro";
 import { ACTIVITY_TEASER_SIZE } from "../lib/activity/filters";
-import { buildProjectIndex, toRows } from "../lib/activity/model";
+import { buildDirectory, toRows } from "../lib/activity/model";
 import { getPortfolioActivity, getQueue, getTeamLoad } from "../lib/api/client";
 import { toViewState } from "../lib/view-state";
 import "../components/overview/overview.css";
@@ -67,15 +67,23 @@ const teamState = toViewState(teamResult, "connecting", {
 /**
  * The trail's last movements, already mapped onto rows.
  *
- * Project codes resolve to names through the queue this page already read: the
+ * Codes resolve to names through the two reads this page already made: the
  * record stores a business code because it outlives the row it describes, and a
- * denormalized name on the wire would be a second source of truth for it.
+ * denormalized name on the wire would be a second source of truth for it. A
+ * record's kind decides which list answers for it — a person is looked up among
+ * people, never matched against project codes.
  */
-const activityIndex = buildProjectIndex(
+const activityDirectory = buildDirectory(
   queueResult.ok
     ? queueResult.data.items.map((item) => ({
         code: item.code,
         name: item.name,
+      }))
+    : [],
+  teamResult.ok
+    ? teamResult.data.items.map((person) => ({
+        alias: person.alias,
+        label: person.label,
       }))
     : [],
 );
@@ -84,7 +92,7 @@ const activityState = toViewState(
   activityResult.ok
     ? {
         ok: true as const,
-        data: toRows(activityResult.data.items, activityIndex, now),
+        data: toRows(activityResult.data.items, activityDirectory, now),
       }
     : activityResult,
   "connecting",

@@ -59,6 +59,14 @@ so the lockfile can never drift from `pyproject.toml`. Install the hooks once, b
 1. **No business enums in code.** States, priorities, types and transitions live in the
    database and are edited from the admin. Code compares against `code` or `category`,
    never against labels.
+   One taxonomy is also editable from the product: **roles**, through
+   `POST`/`PATCH /api/v1/catalog/roles`, behind the ops-lead check and writing an `ActivityRecord`
+   for every change. The exception is narrow on purpose — a role is the one vocabulary somebody
+   needs *while doing something else*, registering a person who does a job nobody has typed yet,
+   and a trip to `/admin/` mid-form is how that person gets filed under the wrong role
+   permanently. An engagement type or a workflow stage is a decision about how the business works
+   and is still made deliberately, in the admin. Adding a second writable taxonomy is a decision,
+   not a precedent.
 2. **State changes only through transitions.** No API route assigns `workflow_state`
    directly. Everything goes through the transition service, which validates against
    `WorkflowTransition`.

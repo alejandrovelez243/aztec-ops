@@ -229,6 +229,10 @@ class ActivityRecord(models.Model):
         TASK = "task", "Task"
         BLOCKER = "blocker", "Blocker"
         MEMBER = "member", "Member"
+        # The vocabulary itself. A taxonomy row is what every other context compares against, so
+        # renaming or retiring one changes what half the product means; the trail is what makes
+        # that editable from the product at all rather than only from the admin.
+        ROLE = "role", "Role"
 
     class Verb(models.TextChoices):
         """The closed set of facts the trail can state (DATA_MODEL §5).

@@ -1,13 +1,13 @@
 ---
-import BoardColumn from "../components/board/BoardColumn.astro";
-import EngagementSwitcher from "../components/board/EngagementSwitcher.astro";
-import type { Option } from "../components/board/EngagementSwitcher.astro";
+import EngagementSelect from "../components/board/EngagementSelect.astro";
+import type { Option } from "../components/board/EngagementSelect.astro";
 import Icon from "../components/ui/Icon.astro";
 import MemberBar from "../components/board/MemberBar.astro";
-import TaskPanel from "../components/board/TaskPanel.astro";
+import ProjectRail from "../components/board/ProjectRail.astro";
+import TaskBoard from "../components/board/TaskBoard.astro";
 import { BOARD_ENGAGEMENT_KEY } from "../components/board/board-dom";
 import type {
-  BoardPanelModel,
+  BoardSurfaceModel,
   MemberChipModel,
   ProjectCardModel,
   Tone,
@@ -15,35 +15,48 @@ import type {
 
 /**
  * The board canvas: the one island of `/board`, and the home of the product's signature
- * interaction — cards with mass.
+ * interaction — cards with mass, on two surfaces at once.
  *
- * What it owns, and why it is one island rather than five:
+ * The screen is two halves that cross axes:
  *
- * - **Drag.** Pointer events plus `setPointerCapture`, no drag library. The card lifts, tilts
- *   toward its own velocity and *trails the hand* through a critically damped follower on
- *   rAF; the board announces legality while it travels, the slider auto-scrolls when the card
- *   nears an edge, and the drop is answered by the server, never by the client.
- * - **Its keyboard and touch twin.** Every card carries a "Mover a…" menu listing the same
- *   legal moves and posting through the same path. Drag is the enhancement, never the only
- *   way in (DESIGN.md, Do's).
- * - **Selection and the task panel.** A card is also a control: picking one fills the panel
- *   with that project's tasks, grouped by task state. The choice lives in `?project=CODE`, so
- *   a reload and the back button both land where the operator was.
- * - **The member filter.** Pressing a face narrows the wall to that person's projects.
- * - **The stream.** `project.state_changed` from another operator travels the card across the
- *   board with an attribution chip riding on it — the moment the product's multiplayer nature
- *   is shown instead of implied — and the `task.*` topics refresh the open panel.
+ * - the **rail** on the left is the portfolio, one band per project workflow state, and a
+ *   project is dragged **up and down** from one state into another;
+ * - the **board** on the right is the selected project's work, one column per task workflow
+ *   state, and a task is dragged **left and right**.
+ *
+ * What this island owns, and why it is one island rather than five:
+ *
+ * - **Drag, on both surfaces, through one controller.** Pointer events plus
+ *   `setPointerCapture`, no drag library. The card lifts, tilts toward its own velocity and
+ *   *trails the hand* through a critically damped follower on rAF; the surface announces
+ *   legality while it travels, the container auto-scrolls along whichever axis it can scroll
+ *   when the card nears an edge, and the drop is answered by the server, never by the client.
+ *   The two surfaces differ by a {@link Surface} descriptor — where the zones are, how
+ *   legality is learned, which endpoint the move is posted to — and by nothing else, so a
+ *   third surface would be one more descriptor and no new controller.
+ * - **Its keyboard and touch twin.** Every card, project or task, carries a "Mover a…" menu
+ *   listing the same targets and posting through the same path. Drag is the enhancement,
+ *   never the only way in (DESIGN.md, Do's).
+ * - **Selection.** A project card is also a control: picking one fills the board with that
+ *   project's tasks. The choice lives in `?project=CODE`, so a reload and the back button both
+ *   land where the operator was.
+ * - **The engagement field and the member filter.** The select swaps which portfolio — and
+ *   therefore which workflow's bands and columns — is on screen; pressing a face narrows the
+ *   rail to that person's projects.
+ * - **The stream.** `project.state_changed` and `task.state_changed` from another operator
+ *   travel the card across its own surface with an attribution chip riding on it — the moment
+ *   the product's multiplayer nature is shown instead of implied.
  *
  * All of them mutate the same cards, so they share one controller: split across islands they
  * would race each other on the same DOM node with no owner of the truth.
  *
- * The first paint is server-rendered by the page; this island never fetches the board. It
+ * The first paint is server-rendered by the page; this island never fetches the rail. It
  * fetches exactly three things on demand — a project's legal moves, the transition POST, and
  * the selected project's tasks — and compares every envelope's `occurred_at` against the
  * card's rendered `updated_at` before touching it (`docs/standards/PATTERNS_FRONTEND.md` §6).
  */
 export interface Props {
-  panels: readonly BoardPanelModel[];
+  surfaces: readonly BoardSurfaceModel[];
   /** Engagement type painted first; the browser swaps to the operator's stored choice. */
   defaultEngagement: string;
   /**
@@ -57,28 +70,27 @@ export interface Props {
   members: readonly MemberChipModel[];
   /** Why the roster is missing, when it is. */
   membersNote: string | null;
-  /** The project `?project=` named, already located on the board; `null` when none. */
+  /** Why the bands and columns are only the occupied states, when the workflow read failed. */
+  workflowsNote: string | null;
+  /** The project `?project=` named, already located on the rail; `null` when none. */
   selected: { card: ProjectCardModel; tone: Tone } | null;
 }
 
 const {
-  panels,
+  surfaces,
   defaultEngagement,
   connection,
   lastEventAt,
   members,
   membersNote,
+  workflowsNote,
   selected,
 } = Astro.props;
 
-const options: Option[] = panels.map((panel) => ({
-  code: panel.engagementType.code,
-  label: panel.engagementType.label,
-  tone: panel.tone,
-  count: panel.columns.reduce(
-    (total, column) => total + column.cards.length,
-    0,
-  ),
+const options: Option[] = surfaces.map((surface) => ({
+  code: surface.engagementType.code,
+  label: surface.engagementType.label,
+  count: surface.count,
 }));
 
 const selectedCode = selected === null ? null : selected.card.code;
@@ -102,12 +114,22 @@ const staleSentence =
   data-selected={selectedCode ?? undefined}
 >
   <div class="board-bar">
-    <EngagementSwitcher options={options} active={defaultEngagement} />
+    <EngagementSelect options={options} active={defaultEngagement} />
     <MemberBar members={members} failureNote={membersNote} />
     <p class="small board-hint" lang="es">
-      Arrastra una tarjeta a otra columna, o usa <strong>Mover a…</strong> en la tarjeta.
+      Arrastra un proyecto entre estados en el carril, o una tarea entre
+      columnas. También puedes usar <strong>Mover a…</strong> en cualquier tarjeta.
     </p>
   </div>
+
+  {
+    workflowsNote !== null && (
+      <p class="card tone-ambar board-note" role="status" lang="es">
+        <Icon name="alert" size={16} />
+        {workflowsNote}
+      </p>
+    )
+  }
 
   <div
     class="stale card tone-ambar"
@@ -127,30 +149,16 @@ const staleSentence =
   </div>
 
   <div class="board-stage">
-    <div class="board-slider">
-      {
-        panels.map((panel) => (
-          <section
-            class="panel"
-            id={`panel-${panel.engagementType.code}`}
-            data-panel
-            data-engagement-code={panel.engagementType.code}
-            hidden={panel.engagementType.code !== defaultEngagement}
-            aria-label={`Tablero de ${panel.engagementType.label}`}
-          >
-            <div class="columns" data-columns>
-              {panel.columns.map((column) => (
-                <BoardColumn column={column} selectedCode={selectedCode} />
-              ))}
-            </div>
-          </section>
-        ))
-      }
-    </div>
-
-    <div class="tpanel-slot">
-      <TaskPanel selected={selected} />
-    </div>
+    <ProjectRail
+      surfaces={surfaces}
+      active={defaultEngagement}
+      selectedCode={selectedCode}
+    />
+    <TaskBoard
+      surfaces={surfaces}
+      active={defaultEngagement}
+      selected={selected}
+    />
   </div>
 
   <div class="move-menu card" id="board-move-menu" data-move-menu hidden>
@@ -176,7 +184,11 @@ const staleSentence =
     aria-labelledby="reason-title"
   >
     <form method="dialog" data-reason-form>
-      <h2 class="h2" id="reason-title" lang="es">Motivo del cambio</h2>
+      <!-- Titled with the transition's own label once a move is in hand; the static text is
+        what a person would read if the dialog were ever opened before that. -->
+      <h2 class="h2" id="reason-title" data-reason-title lang="es">
+        Motivo del cambio
+      </h2>
       <p class="small" data-reason-context lang="es"></p>
       <label class="label reason-label" for="reason-input" lang="es"
         >Motivo</label
@@ -209,10 +221,10 @@ const staleSentence =
 </div>
 
 <script is:inline define:vars={{ key: BOARD_ENGAGEMENT_KEY }}>
-  // Applied before paint so the operator's board does not flash the alphabetically
+  // Applied before paint so the operator's portfolio does not flash the alphabetically
   // first engagement type on every navigation. The module below re-applies it (and
   // owns every later switch); this is only the anti-flash pass. It steps aside when
-  // the URL names a project: the page already opened the wall that card lives on,
+  // the URL names a project: the page already opened the portfolio that card lives on,
   // and a stored preference must not fight a link somebody was sent.
   try {
     const stored = window.localStorage.getItem(key);
@@ -220,25 +232,29 @@ const staleSentence =
     const board = script === null ? null : script.previousElementSibling;
     const pinned =
       board !== null && board.getAttribute("data-selected") !== null;
-    const panel =
+    const panels =
       stored === null || board === null || pinned
-        ? null
-        : board.querySelector(
+        ? []
+        : board.querySelectorAll(
             `[data-panel][data-engagement-code="${CSS.escape(stored)}"]`,
           );
-    if (board !== null && panel !== null && stored !== null) {
+    if (board !== null && stored !== null && panels.length > 0) {
       board.setAttribute("data-engagement", stored);
       for (const candidate of board.querySelectorAll("[data-panel]")) {
-        if (candidate === panel) candidate.removeAttribute("hidden");
-        else candidate.setAttribute("hidden", "");
+        if (candidate.getAttribute("data-engagement-code") === stored) {
+          candidate.removeAttribute("hidden");
+        } else {
+          candidate.setAttribute("hidden", "");
+        }
       }
-      for (const pill of board.querySelectorAll("[data-engagement-pill]")) {
-        pill.setAttribute(
-          "aria-pressed",
-          pill.getAttribute("data-engagement-code") === stored
-            ? "true"
-            : "false",
-        );
+      // The field follows through its options' `selected` attribute: nothing has been
+      // scripted or typed into it yet, so its selectedness still tracks the markup.
+      for (const option of board.querySelectorAll("[data-engagement-option]")) {
+        if (option.getAttribute("data-engagement-code") === stored) {
+          option.setAttribute("selected", "");
+        } else {
+          option.removeAttribute("selected");
+        }
       }
     }
   } catch {
@@ -247,7 +263,8 @@ const staleSentence =
 </script>
 
 <script>
-  import type { ProjectDetail } from "../lib/api/domain";
+  import { navigate } from "astro:transitions/client";
+  import type { ApiError } from "../lib/api/errors";
   import { getOperator } from "../lib/auth/session";
   import {
     countUp,
@@ -264,6 +281,7 @@ const staleSentence =
     BOARD_ENGAGEMENT_KEY,
     BOARD_PROJECT_PARAM,
     SEL,
+    activePanel,
     applyStateChip,
     bodyOf,
     cardsOf,
@@ -271,6 +289,7 @@ const staleSentence =
     columnsOf,
     findCard,
     findColumn,
+    findPanel,
     isNewer,
     isPending,
     labelOf,
@@ -280,25 +299,29 @@ const staleSentence =
     refreshColumn,
     rideAttribution,
     setPending,
+    surfaceOf,
     visibleCardsOf,
   } from "../components/board/board-dom";
   import { fieldList } from "../components/board/board-model";
-  import type {
-    TaskGroupModel,
-    TaskRowModel,
-  } from "../components/board/board-model";
+  import type { TaskCardModel } from "../components/board/board-model";
   import {
-    claimPanel,
+    claimBoard,
     isCurrent,
     loadTasks,
-    type TaskPanelResult,
+    type TaskBoardResult,
   } from "../components/board/board-tasks";
   import {
     invalidateMoves,
+    invalidateTaskMoves,
     loadMoves,
+    loadTaskMoves,
     moveErrorCopy,
+    projectSubject,
     submitMove,
+    submitTaskMove,
+    taskSubject,
     type MoveOption,
+    type MoveSubject,
     type MovesResult,
   } from "../components/board/board-moves";
 
@@ -318,25 +341,25 @@ const staleSentence =
   /** Grab scale of DESIGN.md's card lifecycle. */
   const GRAB_SCALE = 1.03;
   /**
-   * How long a confirmed POST waits for its `project.state_changed` envelope before the card
-   * settles from the response instead. Without it a dropped stream leaves a card spinning
-   * forever over a change the server already made.
+   * How long a confirmed POST waits for its `*.state_changed` envelope before the card settles
+   * from the response instead. Without it a dropped stream leaves a card spinning forever over
+   * a change the server already made.
    */
   const CONFIRM_DEADLINE_MS = 8_000;
   /** How long the remote-move ring stays on the card. */
   const REMOTE_RING_MS = 900;
   const MENU_GAP_PX = 6;
   const VIEWPORT_MARGIN_PX = 8;
-  /** Band at each edge of the slider inside which a carried card drags the wall along. */
+  /** Band at each edge of a scroller inside which a carried card drags it along. */
   const AUTOSCROLL_ZONE_PX = 96;
   /** Top speed of that drag, in px per second at the very edge. */
   const AUTOSCROLL_MAX_PX_PER_SEC = 1_100;
-  /** Width at which the task panel stops being a sheet and becomes a fixed column. */
-  const PANEL_COLUMN_QUERY = "(min-width: 1280px)";
+  /** Width at which the rail stands up beside the board instead of lying above it. */
+  const RAIL_COLUMN_QUERY = "(min-width: 1024px)";
   /**
-   * Trailing window for task events. A single edit can land as `task.updated` plus
-   * `task.state_changed`, and re-reading the list once per frame of a burst is a request
-   * storm for one visible change.
+   * Trailing window for task events that change the *shape* of the board. A single edit can
+   * land as `task.updated` plus `task.created`, and re-reading the list once per frame of a
+   * burst is a request storm for one visible change.
    */
   const TASK_REFRESH_DEBOUNCE_MS = 250;
 
@@ -346,22 +369,69 @@ const staleSentence =
   const RESET_SENTENCE =
     "La conexión se reinició y no se pueden recuperar los eventos perdidos. Actualiza el tablero para volver a la verdad del servidor.";
 
+  /**
+   * One draggable surface: where its zones are, how its legality is learned, and where a move
+   * is posted.
+   *
+   * The rail and the board differ in exactly these four answers. Everything else — the
+   * follower, the tilt, the drop slots, the lock chips, the pending mark, the travel-back, the
+   * menu, the confirmation deadline — is written once against this interface, which is what
+   * keeps the two halves from drifting into two subtly different drags (CLAUDE.md rule 14).
+   */
+  interface Surface {
+    readonly kind: "project" | "task";
+    /** The container element: the rail, or the task board. */
+    readonly root: HTMLElement;
+    /** How a refusal names one of its aggregates. */
+    subject(code: string): MoveSubject;
+    /** The zones a card of this surface may travel between, in DOM order. */
+    zones(card: HTMLElement): HTMLElement[];
+    /** The moves this card may take, read from the server and cached per code. */
+    moves(card: HTMLElement): Promise<MovesResult>;
+    /** Posts one transition and reduces both answers to {@link MoveOutcome}. */
+    submit(
+      code: string,
+      toStateCode: string,
+      reason: string,
+    ): Promise<MoveOutcome>;
+    /** Forgets one code's cached legality; its state just changed. */
+    forget(code: string): void;
+  }
+
+  /**
+   * The server's answer to a move, with the two payload shapes erased.
+   *
+   * `updatedAt` is the watermark the response carries when it has one — a project detail does,
+   * a `TaskView` does not — so the caller can advance the stale-patch guard without knowing
+   * which endpoint answered.
+   */
+  type MoveOutcome =
+    | { readonly kind: "accepted"; readonly updatedAt: string | null }
+    | { readonly kind: "refused"; readonly error: ApiError };
+
   /** A press that has not yet travelled far enough to become a drag. */
   interface ArmedPress {
     readonly card: HTMLElement;
+    readonly surface: Surface;
     readonly pointerId: number;
     readonly originX: number;
     readonly originY: number;
+    /** True when the press started on a link, which keeps its own click until we drag. */
+    readonly viaLink: boolean;
   }
 
   /** One live drag. Everything the follower, the legality paint and the drop need. */
   interface DragSession {
+    readonly surface: Surface;
     readonly card: HTMLElement;
-    readonly panel: HTMLElement;
-    readonly originColumn: HTMLElement;
-    /** The horizontal scroller the card is travelling over; `null` if there is none. */
+    readonly originZone: HTMLElement;
+    /** The zones this gesture may drop into, measured once at grab. */
+    readonly zones: readonly HTMLElement[];
+    /** Which way the zones are laid out, so the hit test claims the right band. */
+    readonly axis: "x" | "y";
+    /** The scroller the card is travelling over; `null` if there is none. */
     readonly scroller: HTMLElement | null;
-    /** Holds the card's place in its origin column, so the hole stays visible. */
+    /** Holds the card's place in its origin zone, so the hole stays visible. */
     readonly placeholder: HTMLElement;
     readonly pointerId: number;
     readonly cardHeight: number;
@@ -376,8 +446,9 @@ const staleSentence =
     y: number;
     vx: number;
     vy: number;
-    /** Auto-scroll speed in px/s, signed; zero away from the slider's edges. */
+    /** Auto-scroll speed in px/s, signed, per axis; zero away from the edges. */
     autoScrollVx: number;
+    autoScrollVy: number;
     lastFrame: number;
     frame: number | null;
     /** Legal moves by target state code; `null` until the lookup answers. */
@@ -389,11 +460,11 @@ const staleSentence =
    * How a gesture ended.
    *
    * `refused` is kept apart from `released` because they mean different things to the hand:
-   * a card dropped on a column that will not take it answers with the reject shake, while a
+   * a card dropped on a zone that will not take it answers with the reject shake, while a
    * card released over nothing simply goes home (DESIGN.md §Motion, steps 3 and 4).
    */
   type DropOutcome =
-    | { readonly kind: "accepted"; readonly column: HTMLElement }
+    | { readonly kind: "accepted"; readonly zone: HTMLElement }
     | { readonly kind: "refused" }
     | { readonly kind: "released" };
 
@@ -407,22 +478,24 @@ const staleSentence =
    *
    * Registered before the POST departs, because the envelope can outrun the response: an
    * unregistered confirmation would leave the card spinning over a change already made.
-   * `detail` and `timer` therefore arrive later, when (and if) the response does.
+   * `updatedAt` and `timer` therefore arrive later, when (and if) the response does.
    */
   interface PendingMove {
+    readonly surface: Surface;
     readonly card: HTMLElement;
     readonly code: string;
     readonly toStateCode: string;
     readonly targetLabel: string;
     readonly placement: CardPlacement;
-    /** The server's answer, once it lands; `null` while the POST is still in flight. */
-    detail: ProjectDetail | null;
+    /** The server's watermark, once it lands; `null` while the POST is still in flight. */
+    updatedAt: string | null;
     /** The confirmation deadline, armed only after the server accepted. */
     timer: number | null;
   }
 
-  /** One requested move, from either input path. */
+  /** One requested move, from either input path on either surface. */
   interface MoveRequest {
+    readonly surface: Surface;
     readonly card: HTMLElement;
     readonly code: string;
     readonly option: MoveOption;
@@ -462,12 +535,26 @@ const staleSentence =
     const operator = getOperator();
     const operatorAlias = operator === null ? null : operator.alias;
 
+    const foundRail = board.querySelector<HTMLElement>(SEL.rail);
+    const foundTaskBoard = board.querySelector<HTMLElement>(SEL.taskBoard);
+    if (foundRail === null || foundTaskBoard === null) return;
+
+    // Re-bound with a non-nullable declared type rather than narrowed in place: TypeScript
+    // carries a captured `const`'s narrowing into function *expressions* only, never into the
+    // hoisted `function` declarations that make up the rest of this mount, and both halves are
+    // read from dozens of them below. Declaring the type is how the guard reaches them without
+    // a `!` per call site (`FRONTEND.md`: narrow, never assert).
+    const rail: HTMLElement = foundRail;
+    const taskBoard: HTMLElement = foundTaskBoard;
+
+    const field = board.querySelector<HTMLSelectElement>(SEL.engagementSelect);
     const menu = board.querySelector<HTMLElement>(SEL.moveMenu);
     const menuList = board.querySelector<HTMLElement>(SEL.moveMenuList);
     const menuTitle = board.querySelector<HTMLElement>(SEL.moveMenuTitle);
     const dialog = board.querySelector<HTMLDialogElement>(
       "[data-reason-dialog]",
     );
+    const reasonTitle = board.querySelector<HTMLElement>("[data-reason-title]");
     const reasonInput = board.querySelector<HTMLTextAreaElement>(
       "[data-reason-input]",
     );
@@ -483,13 +570,15 @@ const staleSentence =
     const staleBanner = board.querySelector<HTMLElement>(SEL.staleBanner);
     const staleText = board.querySelector<HTMLElement>(SEL.staleText);
     const staleAction = board.querySelector<HTMLButtonElement>(SEL.staleAction);
-    const taskPanel = board.querySelector<HTMLElement>(SEL.taskPanel);
 
     const pendings = new Map<string, PendingMove>();
     let armed: ArmedPress | null = null;
     let drag: DragSession | null = null;
+    let suppressClick = false;
     let menuOwner: HTMLElement | null = null;
     let resolveReason: ((reason: string | null) => void) | null = null;
+    /** The card the reason dialog was opened for; focus goes back to it when it closes. */
+    let reasonReturn: HTMLElement | null = null;
     let staleMode: "offline" | "reset" | null =
       board.dataset["connection"] === "stale" ? "offline" : null;
     const renderedLastEvent = board.dataset["lastEventAt"] ?? "";
@@ -498,34 +587,93 @@ const staleSentence =
     let selectedCode: string | null = board.dataset["selected"] ?? null;
     let memberFilter: string | null = null;
     let taskRefreshTimer: number | null = null;
+    /** A shape refresh a pending task move deferred; run once the move settles. */
+    let taskRefreshDeferred = false;
 
-    // --- Engagement panels -------------------------------------------------
-
-    /** The panel currently on screen, which is the one every gesture acts on. */
-    function activePanel(): HTMLElement | null {
-      return board.querySelector<HTMLElement>(`${SEL.panel}:not([hidden])`);
-    }
+    // --- The two surfaces ---------------------------------------------------
 
     /**
-     * Shows one engagement type's board. The choice is persisted because an operations lead
-     * lives in one type for a whole morning, and re-picking it on every visit is a tax.
+     * The rail: projects, stacked vertically, legality read from the project itself.
+     *
+     * `panelOf` scopes the zones to the engagement type on screen, because a project may only
+     * move inside the workflow its own portfolio is bound to.
+     */
+    const projectSurface: Surface = {
+      kind: "project",
+      root: rail,
+      subject: projectSubject,
+      zones: (card) => {
+        const panel = panelOf(card);
+        return panel === null ? [] : columnsOf(panel);
+      },
+      moves: (card) => loadMoves(codeOf(card)),
+      submit: async (code, toStateCode, reason) => {
+        const result = await submitMove(code, toStateCode, reason);
+        if (!result.ok) return { kind: "refused", error: result.error };
+        return { kind: "accepted", updatedAt: result.data.updated_at };
+      },
+      forget: invalidateMoves,
+    };
+
+    /**
+     * The board: tasks, laid out horizontally, legality read from the task itself.
+     *
+     * `GET /api/v1/tasks/{code}` publishes a task's `transitions` exactly as a project detail
+     * publishes a project's, so this half asks the same question of the same shape and gets the
+     * same three answers back: which columns are legal, which of them demand a reason, and
+     * which are legal but unsatisfiable today. Guessing instead — offering every column and
+     * letting the `POST` decide — makes a legal move that needs a reason impossible to perform,
+     * because the refusal arrives after the gesture that could have asked for it.
+     */
+    const taskSurface: Surface = {
+      kind: "task",
+      root: taskBoard,
+      subject: taskSubject,
+      zones: (card) => {
+        const panel = panelOf(card);
+        return panel === null ? [] : columnsOf(panel);
+      },
+      moves: (card) => loadTaskMoves(codeOf(card)),
+      submit: async (code, toStateCode, reason) => {
+        const result = await submitTaskMove(code, toStateCode, reason);
+        if (!result.ok) return { kind: "refused", error: result.error };
+        return { kind: "accepted", updatedAt: null };
+      },
+      forget: invalidateTaskMoves,
+    };
+
+    /** Which surface a card belongs to, decided by the container it lives in. */
+    function surfaceFor(card: HTMLElement): Surface | null {
+      const container = surfaceOf(card);
+      if (container === rail) return projectSurface;
+      if (container === taskBoard) return taskSurface;
+      return null;
+    }
+
+    // --- Engagement type ----------------------------------------------------
+
+    /**
+     * Shows one engagement type on both halves. The choice is persisted because an operations
+     * lead lives in one type for a whole morning, and re-picking it on every visit is a tax.
+     *
+     * Both halves switch together: the rail's bands and the board's columns come from two
+     * graphs bound to the same engagement type, so showing one type's rail beside another
+     * type's columns would be a screen describing two portfolios at once.
      */
     function selectEngagement(code: string, persist: boolean): void {
-      const target = board.querySelector<HTMLElement>(
-        `${SEL.panel}[data-engagement-code="${CSS.escape(code)}"]`,
-      );
-      if (target === null) return;
+      if (findPanel(rail, code) === null) return;
       board.dataset["engagement"] = code;
       for (const panel of board.querySelectorAll<HTMLElement>(SEL.panel)) {
-        panel.hidden = panel !== target;
+        panel.hidden = panel.dataset["engagementCode"] !== code;
       }
-      for (const pill of board.querySelectorAll<HTMLElement>(
-        SEL.switcherPill,
-      )) {
-        pill.setAttribute(
-          "aria-pressed",
-          pill.dataset["engagementCode"] === code ? "true" : "false",
-        );
+      if (field !== null && field.value !== code) field.value = code;
+      // A selection that lives on another portfolio is no longer on screen, and a board
+      // showing one project's tasks beside a rail that does not contain it is a lie.
+      if (selectedCode !== null) {
+        const panel = findPanel(rail, code);
+        if (panel === null || findCard(panel, selectedCode) === null) {
+          clearSelection({ push: false, focus: false });
+        }
       }
       refreshRoving();
       if (!persist) return;
@@ -536,159 +684,131 @@ const staleSentence =
       }
     }
 
-    // A URL that names a project already opened the right wall; a stored preference must
-    // not overrule the link somebody was sent.
-    if (selectedCode === null) {
-      try {
-        const stored = window.localStorage.getItem(BOARD_ENGAGEMENT_KEY);
-        if (stored !== null) selectEngagement(stored, false);
-      } catch {
-        /* storage disabled: the server's default type stays selected */
-      }
-    }
+    // --- Selection and the task board ---------------------------------------
 
-    // --- Selection and the task panel --------------------------------------
-
-    const tp = {
-      title: query("[data-tp-title]"),
-      sub: query("[data-tp-sub]"),
-      close: query("[data-tp-close]"),
-      project: query("[data-tp-project]"),
-      code: query("[data-tp-code]"),
-      state: query("[data-tp-state]"),
-      name: query("[data-tp-name]"),
-      client: query("[data-tp-client]"),
-      owner: query("[data-tp-owner]"),
-      link: query("[data-tp-link]"),
-      idle: query("[data-tp-idle]"),
-      loading: query("[data-tp-loading]"),
-      error: query("[data-tp-error]"),
-      errorTitle: query("[data-tp-error-title]"),
-      errorDetail: query("[data-tp-error-detail]"),
-      retry: query("[data-tp-retry]"),
-      empty: query("[data-tp-empty]"),
-      groups: query("[data-tp-groups]"),
+    const tb = {
+      title: query("[data-tb-title]"),
+      sub: query("[data-tb-sub]"),
+      project: query("[data-tb-project]"),
+      close: query("[data-tb-close]"),
+      code: query("[data-tb-code]"),
+      state: query("[data-tb-state]"),
+      owner: query("[data-tb-owner]"),
+      link: query("[data-tb-link]"),
+      stage: query("[data-tb-stage]"),
+      idle: query("[data-tb-idle]"),
+      error: query("[data-tb-error]"),
+      errorTitle: query("[data-tb-error-title]"),
+      errorDetail: query("[data-tb-error-detail]"),
+      empty: query("[data-tb-empty]"),
     };
 
     function query(selector: string): HTMLElement | null {
-      return taskPanel === null
-        ? null
-        : taskPanel.querySelector<HTMLElement>(selector);
+      return taskBoard.querySelector<HTMLElement>(selector);
     }
 
     function template(name: string): HTMLTemplateElement | null {
-      return taskPanel === null
-        ? null
-        : taskPanel.querySelector<HTMLTemplateElement>(
-            `[data-template="${name}"]`,
-          );
+      return taskBoard.querySelector<HTMLTemplateElement>(
+        `[data-template="${name}"]`,
+      );
     }
 
     /**
-     * Shows exactly one arm of the panel body.
+     * Shows exactly one arm of the board.
      *
-     * All four states are real markup rendered by `TaskPanel.astro`; this only decides which
-     * one is on screen, so no Spanish string is ever built inside the island.
+     * All four states are real markup rendered by `TaskBoard.astro`; this only decides which
+     * one is on screen, so no Spanish string is ever built inside the island. `loading` and
+     * `ready` share the columns on purpose: the skeleton lives *inside* the final geometry,
+     * so the paint never jumps out of the shape its skeleton promised.
      */
-    function showPanelArm(
+    function showBoardArm(
       arm: "idle" | "loading" | "error" | "empty" | "ready",
     ): void {
-      if (taskPanel !== null) taskPanel.dataset["state"] = arm;
-      if (tp.idle !== null) tp.idle.hidden = arm !== "idle";
-      if (tp.loading !== null) tp.loading.hidden = arm !== "loading";
-      if (tp.error !== null) tp.error.hidden = arm !== "error";
-      if (tp.empty !== null) tp.empty.hidden = arm !== "empty";
-      if (tp.groups !== null) tp.groups.hidden = arm !== "ready";
+      taskBoard.dataset["state"] = arm;
+      if (tb.idle !== null) tb.idle.hidden = arm !== "idle";
+      if (tb.error !== null) tb.error.hidden = arm !== "error";
+      if (tb.empty !== null) tb.empty.hidden = arm !== "empty";
+      if (tb.stage !== null)
+        tb.stage.hidden = arm !== "loading" && arm !== "ready";
     }
 
     /**
-     * Fills the panel header from the card itself.
+     * Fills the board's header from the project card itself.
      *
-     * The card already carries every fact the header shows — code, name, client, state chip,
-     * owner disk — so reading them here costs nothing, while a second
-     * `GET /api/v1/projects/{code}` would be a second version of the same truth that can
-     * disagree with what the operator is looking at (`PATTERNS_FRONTEND.md` §6). The owner
-     * disk is cloned rather than rebuilt so its hue and its accessible name travel with it.
+     * The card already carries every fact the header shows — code, state chip, owner disk — so
+     * reading them here costs nothing, while a second `GET /api/v1/projects/{code}` would be a
+     * second version of the same truth that can disagree with what the operator is looking at
+     * (`PATTERNS_FRONTEND.md` §6). The owner disk is cloned rather than rebuilt so its hue and
+     * its accessible name travel with it.
      */
-    function fillPanelHeader(card: HTMLElement): void {
-      const code = card.dataset["code"] ?? "";
-      if (tp.title !== null) tp.title.textContent = `Tareas de ${code}`;
-      if (tp.code !== null) tp.code.textContent = code;
-      if (tp.name !== null) {
-        tp.name.textContent = textOf(card, SEL.cardTitle);
-      }
-      if (tp.client !== null) {
-        tp.client.textContent = textOf(card, SEL.cardClient);
-      }
-      const column = columnOf(card);
-      if (tp.state !== null && column !== null)
-        applyStateChip(tp.state, column);
-      if (tp.owner !== null) {
+    function fillHeader(card: HTMLElement): void {
+      const code = codeOf(card);
+      if (tb.title !== null) tb.title.textContent = `Tareas de ${code}`;
+      if (tb.code !== null) tb.code.textContent = code;
+      const zone = columnOf(card);
+      if (tb.state !== null && zone !== null) applyStateChip(tb.state, zone);
+      if (tb.owner !== null) {
         const disk = card.querySelector<HTMLElement>(SEL.cardOwner);
-        tp.owner.replaceChildren(
+        tb.owner.replaceChildren(
           ...(disk === null ? [] : [disk.cloneNode(true)]),
         );
       }
-      if (tp.link !== null) {
-        tp.link.setAttribute("href", `/projects/${encodeURIComponent(code)}`);
+      if (tb.link !== null) {
+        tb.link.setAttribute("href", `/projects/${encodeURIComponent(code)}`);
       }
-      if (tp.project !== null) tp.project.hidden = false;
-      if (tp.close !== null) tp.close.hidden = false;
-    }
-
-    function textOf(root: ParentNode, selector: string): string {
-      const found = root.querySelector<HTMLElement>(selector);
-      return found === null ? "" : (found.textContent ?? "").trim();
+      if (tb.project !== null) tb.project.hidden = false;
+      if (tb.close !== null) tb.close.hidden = false;
     }
 
     /**
-     * Selects one card: it becomes the panel's subject and the column's keyboard entry point.
+     * Selects one project: it becomes the board's subject and the rail's keyboard entry point.
      *
      * Re-selecting the same card is a no-op beyond focus — a second click must not restart
-     * the read and blink the list the operator is reading.
+     * the read and blink the board the operator is reading.
      */
     function selectCard(card: HTMLElement, options: SelectOptions): void {
-      const code = card.dataset["code"] ?? "";
+      const code = codeOf(card);
       if (code === "") return;
       const changed = code !== selectedCode;
       selectedCode = code;
       board.dataset["selected"] = code;
       markSelection(code);
-      fillPanelHeader(card);
+      fillHeader(card);
       refreshRoving();
       syncUrl(code, options.push && changed);
       if (options.focus) card.focus();
       if (!changed) return;
-      if (tp.sub !== null) {
-        tp.sub.textContent = "Cargando las tareas del proyecto…";
+      if (tb.sub !== null) {
+        tb.sub.textContent = "Cargando las tareas del proyecto…";
       }
-      showPanelArm("loading");
-      playPanelEntrance();
+      clearTaskCards();
+      showBoardArm("loading");
+      playBoardEntrance();
       void refreshTasks(code);
     }
 
-    /** Drops the selection: the panel goes back to inviting one. */
+    /** Drops the selection: the board goes back to inviting one. */
     function clearSelection(options: SelectOptions): void {
       const previous = selectedCode;
       selectedCode = null;
-      claimPanel(null);
+      claimBoard(null);
       delete board.dataset["selected"];
       markSelection(null);
+      clearTaskCards();
       refreshRoving();
       syncUrl(null, options.push && previous !== null);
-      if (tp.title !== null) tp.title.textContent = "Tareas";
-      if (tp.sub !== null) tp.sub.textContent = "Ninguna tarjeta seleccionada.";
-      if (tp.project !== null) tp.project.hidden = true;
-      if (tp.close !== null) tp.close.hidden = true;
-      if (tp.groups !== null) tp.groups.replaceChildren();
-      showPanelArm("idle");
+      if (tb.title !== null) tb.title.textContent = "Tareas";
+      if (tb.sub !== null) tb.sub.textContent = "Ningún proyecto seleccionado.";
+      if (tb.project !== null) tb.project.hidden = true;
+      if (tb.close !== null) tb.close.hidden = true;
+      showBoardArm("idle");
       if (!options.focus || previous === null) return;
-      const card = findCard(board, previous);
+      const card = findCard(rail, previous);
       if (card !== null) card.focus();
     }
 
     function markSelection(code: string | null): void {
-      for (const card of board.querySelectorAll<HTMLElement>(SEL.card)) {
+      for (const card of rail.querySelectorAll<HTMLElement>(SEL.card)) {
         card.setAttribute(
           "aria-selected",
           card.dataset["code"] === code ? "true" : "false",
@@ -700,108 +820,128 @@ const staleSentence =
      * Reads the selected project's tasks and paints them.
      *
      * The claim is taken *before* the request so a slower answer for a project the operator
-     * already left is dropped instead of overwriting the panel they are now reading.
+     * already left is dropped instead of overwriting the board they are now reading.
      */
     async function refreshTasks(code: string): Promise<void> {
-      claimPanel(code);
+      claimBoard(code);
       const result = await loadTasks(code, new Date());
       if (!isCurrent(code)) return;
       paintTasks(result);
     }
 
-    function paintTasks(result: TaskPanelResult): void {
+    function paintTasks(result: TaskBoardResult): void {
       if (result.kind === "error") {
-        if (tp.errorTitle !== null) tp.errorTitle.textContent = result.title;
-        if (tp.errorDetail !== null) tp.errorDetail.textContent = result.detail;
-        if (tp.sub !== null) tp.sub.textContent = "No pudimos leer las tareas.";
-        showPanelArm("error");
+        if (tb.errorTitle !== null) tb.errorTitle.textContent = result.title;
+        if (tb.errorDetail !== null) tb.errorDetail.textContent = result.detail;
+        if (tb.sub !== null) tb.sub.textContent = "No pudimos leer las tareas.";
+        clearTaskCards();
+        showBoardArm("error");
         return;
       }
       if (result.kind === "empty") {
-        if (tp.groups !== null) tp.groups.replaceChildren();
-        if (tp.sub !== null) tp.sub.textContent = "Sin tareas registradas.";
-        showPanelArm("empty");
+        clearTaskCards();
+        if (tb.sub !== null) tb.sub.textContent = "Sin tareas registradas.";
+        showBoardArm("empty");
         return;
       }
-      renderGroups(result.groups);
-      showPanelArm("ready");
+      const unplaced = distributeTasks(result.cards);
+      if (tb.sub !== null)
+        tb.sub.textContent = countSentence(result.cards.length, unplaced);
+      showBoardArm("ready");
     }
 
-    function renderGroups(groups: readonly TaskGroupModel[]): void {
-      if (tp.groups === null) return;
-      const total = groups.reduce((sum, group) => sum + group.tasks.length, 0);
-      if (tp.sub !== null) {
-        tp.sub.textContent = total === 1 ? "1 tarea" : `${total} tareas`;
-      }
-      tp.groups.replaceChildren(
-        ...groups.flatMap((group) => {
-          const node = buildGroup(group);
-          return node === null ? [] : [node];
-        }),
-      );
+    /** "18 tareas", plus the ones whose state this workflow no longer publishes. */
+    function countSentence(total: number, unplaced: number): string {
+      const head = total === 1 ? "1 tarea" : `${total} tareas`;
+      if (unplaced === 0) return head;
+      const tail =
+        unplaced === 1
+          ? "1 en un estado que este flujo ya no tiene"
+          : `${unplaced} en estados que este flujo ya no tiene`;
+      return `${head} · ${tail}`;
     }
 
-    function buildGroup(group: TaskGroupModel): HTMLElement | null {
-      const tpl = template("group");
-      if (tpl === null) return null;
-      const fragment = tpl.content.cloneNode(true);
-      if (!(fragment instanceof DocumentFragment)) return null;
-      const section = fragment.querySelector<HTMLElement>("[data-tp-group]");
-      if (section === null) return null;
-
-      const dot = section.querySelector<HTMLElement>("[data-tp-group-dot]");
-      if (dot !== null) {
-        dot.classList.add(group.tone.className);
-        if (group.tone.style !== null)
-          dot.setAttribute("style", group.tone.style);
+    /**
+     * Places every task in the column of the state the server says it is in, and returns how
+     * many had nowhere to go.
+     *
+     * A task sitting in a state the resolved graph no longer publishes has no column; it is
+     * counted and named in the subtitle rather than dropped in silence, because a task that
+     * vanishes from a board is worse than a board that admits it cannot draw one.
+     */
+    function distributeTasks(cards: readonly TaskCardModel[]): number {
+      const panel = activePanel(taskBoard);
+      if (panel === null) return cards.length;
+      clearTaskCards();
+      let unplaced = 0;
+      for (const card of cards) {
+        const column = findColumn(panel, card.stateCode);
+        const body = column === null ? null : bodyOf(column);
+        if (body === null) {
+          unplaced += 1;
+          continue;
+        }
+        const node = buildTaskCard(card);
+        if (node === null) continue;
+        body.append(node);
       }
-      const title = section.querySelector<HTMLElement>("[data-tp-group-title]");
-      if (title !== null) title.textContent = group.state.label;
-      const count = section.querySelector<HTMLElement>("[data-tp-group-count]");
-      if (count !== null) count.textContent = String(group.tasks.length);
-
-      const rows = section.querySelector<HTMLElement>("[data-tp-group-rows]");
-      if (rows !== null) {
-        rows.replaceChildren(
-          ...group.tasks.flatMap((task) => {
-            const row = buildTaskRow(task);
-            return row === null ? [] : [row];
-          }),
-        );
-      }
-      return section;
+      for (const column of columnsOf(panel)) refreshColumn(column);
+      return unplaced;
     }
 
-    function buildTaskRow(task: TaskRowModel): HTMLElement | null {
+    /** Empties every task column of every panel; selection changes must not leave residue. */
+    function clearTaskCards(): void {
+      for (const column of columnsOf(taskBoard)) {
+        const body = bodyOf(column);
+        if (body !== null) body.replaceChildren();
+        refreshColumn(column);
+      }
+    }
+
+    function buildTaskCard(task: TaskCardModel): HTMLElement | null {
       const tpl = template("task");
       if (tpl === null) return null;
       const fragment = tpl.content.cloneNode(true);
       if (!(fragment instanceof DocumentFragment)) return null;
-      const row = fragment.querySelector<HTMLElement>("[data-tp-task]");
-      if (row === null) return null;
+      const node = fragment.querySelector<HTMLElement>(SEL.card);
+      if (node === null) return null;
 
-      const title = row.querySelector<HTMLElement>("[data-tp-task-title]");
-      if (title !== null) title.textContent = task.title;
-      const code = row.querySelector<HTMLElement>("[data-tp-task-code]");
+      node.dataset["code"] = task.code;
+      node.dataset["stateCode"] = task.stateCode;
+      node.setAttribute("aria-label", `${task.title} · ${task.code}`);
+
+      const link = node.querySelector<HTMLAnchorElement>("[data-tb-task-link]");
+      if (link !== null) {
+        link.textContent = task.title;
+        link.href = `/tasks/${encodeURIComponent(task.code)}`;
+      }
+      const code = node.querySelector<HTMLElement>("[data-tb-task-code]");
       if (code !== null) code.textContent = task.code;
 
-      const owner = row.querySelector<HTMLElement>("[data-tp-task-owner]");
+      const owner = node.querySelector<HTMLElement>("[data-tb-task-owner]");
       if (owner !== null) {
         const disk = buildOwnerDisk(task);
         owner.replaceChildren(...(disk === null ? [] : [disk]));
       }
 
-      const due = row.querySelector<HTMLElement>("[data-tp-task-due]");
+      const due = node.querySelector<HTMLElement>("[data-tb-task-due]");
       if (due !== null) {
         due.classList.add(task.due.toneClass);
         due.textContent = task.due.text;
         due.title = task.due.description;
       }
 
-      const overdue = row.querySelector<HTMLElement>("[data-tp-task-overdue]");
+      const overdue = node.querySelector<HTMLElement>("[data-tb-task-overdue]");
       if (overdue !== null) overdue.hidden = !task.isOverdue;
 
-      const deps = row.querySelector<HTMLElement>("[data-tp-task-deps]");
+      const moveLabel = node.querySelector<HTMLElement>(
+        "[data-tb-task-move-label]",
+      );
+      if (moveLabel !== null) {
+        moveLabel.textContent = `Mover ${task.code} a otro estado`;
+      }
+
+      const deps = node.querySelector<HTMLElement>("[data-tb-task-deps]");
       if (deps !== null) {
         deps.hidden = task.dependencies.length === 0;
         deps.replaceChildren(
@@ -815,17 +955,19 @@ const staleSentence =
           }),
         );
       }
-      return row;
+      // A card built while the stream is down carries the same refusal the rest already do.
+      if (board.dataset["connection"] === "stale") node.title = STALE_DRAG_HINT;
+      return node;
     }
 
-    function buildOwnerDisk(task: TaskRowModel): HTMLElement | null {
+    function buildOwnerDisk(task: TaskCardModel): HTMLElement | null {
       const owner = task.owner;
       if (owner === null) return null;
       const tpl = template("owner");
       if (tpl === null) return null;
       const fragment = tpl.content.cloneNode(true);
       if (!(fragment instanceof DocumentFragment)) return null;
-      const disk = fragment.querySelector<HTMLElement>("[data-tp-owner-disk]");
+      const disk = fragment.querySelector<HTMLElement>("[data-tb-owner-disk]");
       if (disk === null) return null;
       disk.textContent = owner.initials;
       disk.style.setProperty("--avatar-h", String(owner.hue));
@@ -843,7 +985,7 @@ const staleSentence =
       if (tpl === null) return null;
       const fragment = tpl.content.cloneNode(true);
       if (!(fragment instanceof DocumentFragment)) return null;
-      const chip = fragment.querySelector<HTMLElement>("[data-tp-dep]");
+      const chip = fragment.querySelector<HTMLElement>("[data-tb-dep]");
       if (chip === null) return null;
       chip.textContent = label;
       chip.title = description;
@@ -852,15 +994,15 @@ const staleSentence =
     }
 
     /**
-     * The one authored motion beyond the drag: the panel arrives on the `panel` spring, from
-     * the side it lives on — the right at column width, from below when it is a sheet.
+     * The one authored motion beside the drag: the board arrives on the `panel` spring, from
+     * the side it lives on — the right at rail width, from below when the rail lies down.
      */
-    function playPanelEntrance(): void {
-      if (taskPanel === null || prefersReducedMotion()) return;
-      const asColumn = window.matchMedia(PANEL_COLUMN_QUERY).matches;
+    function playBoardEntrance(): void {
+      if (prefersReducedMotion()) return;
+      const asColumn = window.matchMedia(RAIL_COLUMN_QUERY).matches;
       const from = asColumn ? "translateX(16px)" : "translateY(24px)";
       const { duration, easing } = sampleSpring("panel");
-      taskPanel.animate(
+      taskBoard.animate(
         [
           { opacity: 0, transform: from },
           { opacity: 1, transform: "none" },
@@ -892,7 +1034,7 @@ const staleSentence =
       const code = new URL(window.location.href).searchParams.get(
         BOARD_PROJECT_PARAM,
       );
-      const card = code === null ? null : findCard(board, code);
+      const card = code === null ? null : findCard(rail, code);
       if (card === null) {
         clearSelection({ push: false, focus: false });
         return;
@@ -900,26 +1042,38 @@ const staleSentence =
       selectCard(card, { push: false, focus: false });
     }
 
-    // The server rendered the header for `?project=`; the list is this island's to fetch.
+    // A URL that names a project already opened the right portfolio; a stored preference must
+    // not overrule the link somebody was sent. Restored here, after the board's own plumbing
+    // exists, because switching portfolios can drop a selection that is no longer on screen.
+    if (selectedCode === null) {
+      try {
+        const stored = window.localStorage.getItem(BOARD_ENGAGEMENT_KEY);
+        if (stored !== null) selectEngagement(stored, false);
+      } catch {
+        /* storage disabled: the server's default type stays selected */
+      }
+    }
+
+    // The server rendered the header for `?project=`; the tasks are this island's to fetch.
     if (selectedCode !== null) void refreshTasks(selectedCode);
 
     // --- Member filter ------------------------------------------------------
 
     /**
-     * Narrows the wall to one person's projects, or lifts the filter.
+     * Narrows the rail to one person's projects, or lifts the filter.
      *
-     * Cards are hidden, never removed: a filtered board has to snap back without a refetch,
-     * and a card removed mid-transition would lose the pending move it is carrying.
+     * Cards are hidden, never removed: a filtered rail has to snap back without a refetch,
+     * and a card removed mid-transition would lose the pending move it is carrying. The task
+     * board is untouched — it shows one project, and hiding half of that project's work
+     * because somebody else owns it would answer a question nobody asked.
      */
     function applyMemberFilter(alias: string | null): void {
       memberFilter = alias;
-      for (const card of board.querySelectorAll<HTMLElement>(SEL.card)) {
+      for (const card of rail.querySelectorAll<HTMLElement>(SEL.card)) {
         const owner = card.dataset["ownerAlias"] ?? "";
         card.hidden = alias !== null && owner !== alias;
       }
-      for (const column of board.querySelectorAll<HTMLElement>(SEL.column)) {
-        refreshColumn(column);
-      }
+      for (const zone of columnsOf(rail)) refreshColumn(zone);
       for (const button of board.querySelectorAll<HTMLElement>(SEL.member)) {
         button.setAttribute(
           "aria-pressed",
@@ -930,22 +1084,25 @@ const staleSentence =
       refreshRoving();
     }
 
-    /** Pill counts follow the filter: a count that ignores it names a board nobody sees. */
+    /**
+     * The field's counts follow the filter: a count that ignores it names a portfolio nobody
+     * sees. The label lives in `data-label`, so rewriting the count can never eat the name.
+     */
     function refreshEngagementCounts(): void {
-      for (const panel of board.querySelectorAll<HTMLElement>(SEL.panel)) {
-        const code = panel.dataset["engagementCode"] ?? "";
-        const total = columnsOf(panel).reduce(
-          (sum, column) => sum + visibleCardsOf(column).length,
-          0,
-        );
-        const pill = board.querySelector<HTMLElement>(
-          `${SEL.switcherPill}[data-engagement-code="${CSS.escape(code)}"]`,
-        );
-        const chip =
-          pill === null
-            ? null
-            : pill.querySelector<HTMLElement>("[data-engagement-count]");
-        if (chip !== null) chip.textContent = String(total);
+      if (field === null) return;
+      for (const option of field.querySelectorAll<HTMLOptionElement>(
+        SEL.engagementOption,
+      )) {
+        const code = option.dataset["engagementCode"] ?? "";
+        const panel = findPanel(rail, code);
+        const total =
+          panel === null
+            ? 0
+            : columnsOf(panel).reduce(
+                (sum, zone) => sum + visibleCardsOf(zone).length,
+                0,
+              );
+        option.textContent = `${option.dataset["label"] ?? ""} · ${total}`;
       }
     }
 
@@ -961,13 +1118,13 @@ const staleSentence =
       }
     }
 
-    // --- Keyboard: the board is a grid --------------------------------------
+    // --- Keyboard -----------------------------------------------------------
 
     /**
-     * Moves focus onto one card and makes it the column's tab stop.
+     * Moves focus onto one card and makes it its surface's tab stop.
      *
-     * Roving `tabindex` rather than a tab stop per card: a wall of forty cards that each take
-     * a Tab press is a wall nobody reaches the end of.
+     * Roving `tabindex` rather than a tab stop per card: forty cards that each take a Tab
+     * press is a surface nobody reaches the end of.
      */
     function focusCard(card: HTMLElement): void {
       refreshRoving(card);
@@ -975,104 +1132,173 @@ const staleSentence =
       card.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
 
+    /** One tab stop per surface: the selected project on the rail, the first card otherwise. */
     function refreshRoving(preferred?: HTMLElement): void {
-      const panel = activePanel();
       for (const card of board.querySelectorAll<HTMLElement>(SEL.card)) {
         card.tabIndex = -1;
       }
-      if (panel === null) return;
-      const chosen =
-        preferred ??
-        (selectedCode === null ? null : findCard(panel, selectedCode)) ??
-        firstVisibleCard(panel);
-      if (chosen !== null && !chosen.hidden) chosen.tabIndex = 0;
+      const railPanel = activePanel(rail);
+      const railChosen =
+        preferAt(preferred, rail) ??
+        (selectedCode === null || railPanel === null
+          ? null
+          : findCard(railPanel, selectedCode)) ??
+        (railPanel === null ? null : firstVisibleCard(railPanel));
+      if (railChosen !== null && !railChosen.hidden) railChosen.tabIndex = 0;
+
+      const taskPanel = activePanel(taskBoard);
+      const taskChosen =
+        preferAt(preferred, taskBoard) ??
+        (taskPanel === null ? null : firstVisibleCard(taskPanel));
+      if (taskChosen !== null && !taskChosen.hidden) taskChosen.tabIndex = 0;
+    }
+
+    function preferAt(
+      preferred: HTMLElement | undefined,
+      container: HTMLElement,
+    ): HTMLElement | null {
+      if (preferred === undefined) return null;
+      return container.contains(preferred) ? preferred : null;
     }
 
     function firstVisibleCard(panel: HTMLElement): HTMLElement | null {
-      for (const column of columnsOf(panel)) {
-        const first = visibleCardsOf(column)[0];
+      for (const zone of columnsOf(panel)) {
+        const first = visibleCardsOf(zone)[0];
         if (first !== undefined) return first;
       }
       return null;
     }
 
+    /**
+     * Arrow keys follow the axis each surface is arranged on.
+     *
+     * On the rail the bands are a single stacked list, so Up and Down walk every visible
+     * project across band boundaries and Right hands over to the board — the same journey the
+     * eye makes. On the board Up and Down walk one column and Left and Right change column,
+     * with Left at the first column handing focus back to the selected project.
+     */
     function onBoardKeyDown(event: KeyboardEvent): void {
       const target = event.target;
       if (!(target instanceof Element)) return;
       const card = target.closest<HTMLElement>(SEL.card);
       if (card === null) return;
-      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-        const column = columnOf(card);
-        if (column === null) return;
-        const siblings = visibleCardsOf(column);
-        const next =
-          siblings[
-            siblings.indexOf(card) + (event.key === "ArrowDown" ? 1 : -1)
-          ];
-        if (next === undefined) return;
+      const surface = surfaceFor(card);
+      if (surface === null) return;
+
+      if (event.key === "Enter" || event.key === " ") {
+        // The move trigger and the title link keep their own activation keys.
+        if (target.closest("button, a, textarea, input, select") !== null)
+          return;
         event.preventDefault();
-        focusCard(next);
+        if (surface.kind === "project") {
+          selectCard(card, { push: true, focus: false });
+          return;
+        }
+        // A task card's whole point is its detail: activating the row follows its title.
+        const link = card.querySelector<HTMLAnchorElement>(
+          "[data-tb-task-link]",
+        );
+        if (link !== null) link.click();
         return;
       }
-      if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
-        const next = neighbourCard(card, event.key === "ArrowRight" ? 1 : -1);
-        if (next === null) return;
-        event.preventDefault();
-        focusCard(next);
-        return;
-      }
-      if (event.key !== "Enter" && event.key !== " ") return;
-      // The move trigger and any link inside keep their own activation keys.
-      if (target.closest("button, a, textarea, input") !== null) return;
+
+      const next =
+        surface.kind === "project"
+          ? railNeighbour(card, event.key)
+          : boardNeighbour(card, event.key);
+      if (next === null) return;
       event.preventDefault();
-      selectCard(card, { push: true, focus: false });
+      focusCard(next);
     }
 
-    /** The card at the same height in the nearest column that has any, in `step` direction. */
-    function neighbourCard(
+    /** The rail's flat order: every visible project card, band after band. */
+    function railCards(): HTMLElement[] {
+      const panel = activePanel(rail);
+      if (panel === null) return [];
+      return columnsOf(panel).flatMap((zone) => visibleCardsOf(zone));
+    }
+
+    function railNeighbour(card: HTMLElement, key: string): HTMLElement | null {
+      if (key === "ArrowRight") {
+        const panel = activePanel(taskBoard);
+        return panel === null ? null : firstVisibleCard(panel);
+      }
+      if (key !== "ArrowDown" && key !== "ArrowUp") return null;
+      const cards = railCards();
+      return (
+        cards[cards.indexOf(card) + (key === "ArrowDown" ? 1 : -1)] ?? null
+      );
+    }
+
+    function boardNeighbour(
       card: HTMLElement,
-      step: 1 | -1,
+      key: string,
     ): HTMLElement | null {
-      const column = columnOf(card);
+      const zone = columnOf(card);
       const panel = panelOf(card);
-      if (column === null || panel === null) return null;
-      const columns = columnsOf(panel);
-      const row = visibleCardsOf(column).indexOf(card);
+      if (zone === null || panel === null) return null;
+      if (key === "ArrowDown" || key === "ArrowUp") {
+        const siblings = visibleCardsOf(zone);
+        return (
+          siblings[siblings.indexOf(card) + (key === "ArrowDown" ? 1 : -1)] ??
+          null
+        );
+      }
+      if (key !== "ArrowRight" && key !== "ArrowLeft") return null;
+      const step = key === "ArrowRight" ? 1 : -1;
+      const zones = columnsOf(panel);
+      const row = visibleCardsOf(zone).indexOf(card);
       for (
-        let index = columns.indexOf(column) + step;
-        index >= 0 && index < columns.length;
+        let index = zones.indexOf(zone) + step;
+        index >= 0 && index < zones.length;
         index += step
       ) {
-        const candidate = columns[index];
+        const candidate = zones[index];
         if (candidate === undefined) continue;
         const cards = visibleCardsOf(candidate);
         if (cards.length === 0) continue;
         return cards[Math.min(Math.max(row, 0), cards.length - 1)] ?? null;
       }
-      return null;
+      // Off the left edge: the rail is where this board came from.
+      if (step === 1 || selectedCode === null) return null;
+      const railPanel = activePanel(rail);
+      return railPanel === null ? null : findCard(railPanel, selectedCode);
     }
 
-    // --- Drag: grab --------------------------------------------------------
+    // --- Drag: grab ---------------------------------------------------------
 
     function onPointerDown(event: PointerEvent): void {
+      // A suppression armed by a drag that ended over nothing must not outlive that gesture
+      // and swallow the next real click on a task title.
+      suppressClick = false;
       if (event.pointerType === "mouse" && event.button !== 0) return;
       if (board.dataset["connection"] === "stale") return;
       const target = event.target;
       if (!(target instanceof Element)) return;
-      // Links and controls keep their own gestures; the rest of the card is the grip.
-      if (target.closest("a, button, textarea, input") !== null) return;
+      // Controls keep their own gestures; a link may still be a grip, because on a task card
+      // the title *is* the link and a card you cannot pick up by its name is not an object.
+      if (target.closest("button, textarea, input, select") !== null) return;
       const card = target.closest<HTMLElement>(SEL.card);
       if (card === null || isPending(card)) return;
+      const surface = surfaceFor(card);
+      if (surface === null) return;
+      const viaLink = target.closest("a") !== null;
       closeMenu();
-      // Stops the press from starting a text selection that would fight the drag; the
-      // interactive parts of the card were excluded above, so nothing loses its focus.
-      event.preventDefault();
+      // Stops the press from starting a text selection that would fight the drag. A link
+      // keeps its default so focus and the click still work when the press never travels.
+      if (!viaLink) event.preventDefault();
       armed = {
         card,
+        surface,
         pointerId: event.pointerId,
         originX: event.clientX,
         originY: event.clientY,
+        viaLink,
       };
+      // Warmed on the press, not on the drag threshold: the lookup is a request, and a flick
+      // that crosses the board in one motion would otherwise let go before the answer lands.
+      // Both surfaces share one cache, so the grab joins this request instead of repeating it.
+      void surface.moves(card);
       card.setPointerCapture(event.pointerId);
     }
 
@@ -1092,12 +1318,12 @@ const staleSentence =
       if (event.pointerId !== session.pointerId) return;
       session.targetX = event.clientX - session.grabX - session.baseLeft;
       session.targetY = event.clientY - session.grabY - session.baseTop;
-      session.autoScrollVx = edgeVelocity(session, event.clientX);
+      applyEdgeVelocity(session, event.clientX, event.clientY);
       updateHover(session, event.clientX, event.clientY);
     }
 
     /**
-     * A press that never became a drag is a click, and a click on a card selects it.
+     * A press that never became a drag is a click, and a click on a project card selects it.
      *
      * Decided here rather than in a `click` listener because the pointer capture the grab
      * takes can swallow the synthetic click on some browsers; the press we armed is the
@@ -1110,20 +1336,36 @@ const staleSentence =
       if (session === null) {
         if (press === null || press.pointerId !== event.pointerId) return;
         const target = event.target;
-        if (target instanceof Element && target.closest("a, button") !== null) {
-          return;
+        if (target instanceof Element) {
+          // Buttons keep their own activation.
+          if (target.closest("button") !== null) return;
+          const link = target.closest<HTMLAnchorElement>("a");
+          if (link !== null) {
+            // The press never travelled, so this was a tap on the title, not a
+            // grip on it. The anchor cannot answer that tap by itself:
+            // `onPointerDown` captured the pointer to the card so the title
+            // could also *be* the grip, and a captured pointer retargets the
+            // follow-up `click` to the capturing element — the anchor's own
+            // default never runs and the operator goes nowhere. Following it
+            // here is what makes the title behave like the link it looks like.
+            // Client-side, because a board reload would cost the operator the
+            // selection and scroll position they arrived with.
+            void navigate(link.href);
+            return;
+          }
         }
+        if (press.surface.kind !== "project") return;
         selectCard(press.card, { push: true, focus: true });
         return;
       }
       if (event.pointerId !== session.pointerId) return;
-      const column = columnAt(session, event.clientX, event.clientY);
-      if (column === null) {
+      const zone = zoneAt(session, event.clientX, event.clientY);
+      if (zone === null) {
         concludeDrag(session, { kind: "released" });
         return;
       }
-      if (column.dataset["drop"] === "legal") {
-        concludeDrag(session, { kind: "accepted", column });
+      if (zone.dataset["drop"] === "legal") {
+        concludeDrag(session, { kind: "accepted", zone });
         return;
       }
       concludeDrag(session, { kind: "refused" });
@@ -1140,15 +1382,19 @@ const staleSentence =
      * Lifts the card out of flow and starts the follower.
      *
      * The card becomes `position: fixed` at exactly the rect it occupied, and a placeholder
-     * takes its place, so the origin column keeps the hole the card came out of instead of
+     * takes its place, so the origin zone keeps the hole the card came out of instead of
      * closing over it — you can always see where you are moving *from*.
      */
     function beginDrag(press: ArmedPress, event: PointerEvent): void {
       armed = null;
       const card = press.card;
-      const column = columnOf(card);
-      const panel = panelOf(card);
-      if (column === null || panel === null) return;
+      const zone = columnOf(card);
+      if (zone === null) return;
+      const zones = press.surface.zones(card);
+      if (zones.length === 0) return;
+
+      // A drag that started on a link must not also navigate when the finger lifts.
+      if (press.viaLink) suppressClick = true;
 
       const rect = card.getBoundingClientRect();
       const placeholder = document.createElement("div");
@@ -1166,10 +1412,12 @@ const staleSentence =
       document.documentElement.dataset["boardDragging"] = "true";
 
       const session: DragSession = {
+        surface: press.surface,
         card,
-        panel,
-        originColumn: column,
-        scroller: panel.querySelector<HTMLElement>(SEL.columns),
+        originZone: zone,
+        zones,
+        axis: layoutAxis(zones),
+        scroller: card.closest<HTMLElement>(SEL.scroller),
         placeholder,
         pointerId: press.pointerId,
         cardHeight: rect.height,
@@ -1184,6 +1432,7 @@ const staleSentence =
         vx: 0,
         vy: 0,
         autoScrollVx: 0,
+        autoScrollVy: 0,
         lastFrame: performance.now(),
         frame: null,
         options: null,
@@ -1195,9 +1444,25 @@ const staleSentence =
     }
 
     /**
+     * Which way a set of zones is arranged, measured rather than assumed.
+     *
+     * The rail stacks its bands vertically at desk width and lies down into a horizontal strip
+     * below 1024px; reading the geometry means the hit test and the auto-scroll follow the
+     * layout instead of duplicating its breakpoint in TypeScript, where the two would drift.
+     */
+    function layoutAxis(zones: readonly HTMLElement[]): "x" | "y" {
+      const first = zones[0];
+      const second = zones[1];
+      if (first === undefined || second === undefined) return "y";
+      const a = first.getBoundingClientRect();
+      const b = second.getBoundingClientRect();
+      return Math.abs(b.left - a.left) >= Math.abs(b.top - a.top) ? "x" : "y";
+    }
+
+    /**
      * One frame of the follower: a critically damped spring pulling the card toward the
-     * pointer, plus a tilt proportional to its own horizontal velocity, plus the wall sliding
-     * under it when the card is held at an edge.
+     * pointer, plus a tilt proportional to its own horizontal velocity, plus the surface
+     * sliding under it when the card is held at an edge.
      *
      * The lag *is* the mass — the card arrives after the hand, which is what makes it read as
      * an object rather than a cursor decoration. Under reduced motion the card tracks the
@@ -1214,8 +1479,12 @@ const staleSentence =
           : FALLBACK_FRAME_SECONDS;
       session.lastFrame = now;
 
-      if (session.autoScrollVx !== 0 && session.scroller !== null) {
-        session.scroller.scrollLeft += session.autoScrollVx * dt;
+      const scroller = session.scroller;
+      if (scroller !== null) {
+        if (session.autoScrollVx !== 0)
+          scroller.scrollLeft += session.autoScrollVx * dt;
+        if (session.autoScrollVy !== 0)
+          scroller.scrollTop += session.autoScrollVy * dt;
       }
 
       const reduced = prefersReducedMotion();
@@ -1246,43 +1515,69 @@ const staleSentence =
     }
 
     /**
-     * How fast the slider should travel with a card held near its edge, in px/s.
+     * How fast the scroller should travel with a card held near its edges, per axis.
      *
-     * A board wider than the viewport is unreachable without it: the hand cannot both hold a
-     * card and scroll the wall. Speed ramps with depth into the band so a card resting just
-     * inside the edge creeps instead of bolting.
+     * A surface longer than its viewport is unreachable without it: the hand cannot both hold
+     * a card and scroll. Each axis is checked independently against what the container can
+     * actually scroll, so the rail creeps vertically when it stands up and horizontally when
+     * it lies down, with no breakpoint written twice. Speed ramps with depth into the band so
+     * a card resting just inside the edge creeps instead of bolting.
      */
-    function edgeVelocity(session: DragSession, x: number): number {
+    function applyEdgeVelocity(
+      session: DragSession,
+      x: number,
+      y: number,
+    ): void {
       const scroller = session.scroller;
-      if (scroller === null) return 0;
-      if (scroller.scrollWidth <= scroller.clientWidth) return 0;
+      if (scroller === null) {
+        session.autoScrollVx = 0;
+        session.autoScrollVy = 0;
+        return;
+      }
       const rect = scroller.getBoundingClientRect();
-      const fromLeft = x - rect.left;
-      const fromRight = rect.right - x;
-      if (fromLeft < AUTOSCROLL_ZONE_PX && scroller.scrollLeft > 0) {
-        const depth = clamp(1 - fromLeft / AUTOSCROLL_ZONE_PX, 0, 1);
+      session.autoScrollVx = axisVelocity(
+        x - rect.left,
+        rect.right - x,
+        scroller.scrollLeft,
+        scroller.scrollWidth - scroller.clientWidth,
+      );
+      session.autoScrollVy = axisVelocity(
+        y - rect.top,
+        rect.bottom - y,
+        scroller.scrollTop,
+        scroller.scrollHeight - scroller.clientHeight,
+      );
+    }
+
+    function axisVelocity(
+      fromStart: number,
+      fromEnd: number,
+      offset: number,
+      maxOffset: number,
+    ): number {
+      if (maxOffset <= 0) return 0;
+      if (fromStart < AUTOSCROLL_ZONE_PX && offset > 0) {
+        const depth = clamp(1 - fromStart / AUTOSCROLL_ZONE_PX, 0, 1);
         return -depth * AUTOSCROLL_MAX_PX_PER_SEC;
       }
-      const maxScroll = scroller.scrollWidth - scroller.clientWidth;
-      if (fromRight < AUTOSCROLL_ZONE_PX && scroller.scrollLeft < maxScroll) {
-        const depth = clamp(1 - fromRight / AUTOSCROLL_ZONE_PX, 0, 1);
+      if (fromEnd < AUTOSCROLL_ZONE_PX && offset < maxOffset) {
+        const depth = clamp(1 - fromEnd / AUTOSCROLL_ZONE_PX, 0, 1);
         return depth * AUTOSCROLL_MAX_PX_PER_SEC;
       }
       return 0;
     }
 
-    // --- Drag: the board announces legality --------------------------------
+    // --- Drag: the surface announces legality -------------------------------
 
     /**
-     * Asks the project which moves it may take and paints the answer on the columns.
+     * Asks the card which moves it may take and paints the answer on the zones.
      *
-     * A failed lookup does not abort the gesture: every column simply refuses, the drop
-     * springs back, and the operator reads why in a toast. Aborting mid-gesture would yank
-     * the card out of a hand that is still holding it.
+     * A failed lookup does not abort the gesture: every zone simply refuses, the drop springs
+     * back, and the operator reads why in a toast. Aborting mid-gesture would yank the card
+     * out of a hand that is still holding it.
      */
     async function announceLegality(session: DragSession): Promise<void> {
-      const code = session.card.dataset["code"] ?? "";
-      const result = await loadMoves(code);
+      const result = await session.surface.moves(session.card);
       if (drag !== session) return;
       if (result.kind === "error") {
         session.options = new Map();
@@ -1298,46 +1593,47 @@ const staleSentence =
     function paintLegality(session: DragSession): void {
       const options = session.options;
       if (options === null) return;
-      const originLabel = labelOf(session.originColumn);
-      for (const column of columnsOf(session.panel)) {
-        if (column === session.originColumn) {
-          column.dataset["drop"] = "origin";
+      const originLabel = labelOf(session.originZone);
+      const noun = session.surface.subject(codeOf(session.card)).noun;
+      for (const zone of session.zones) {
+        if (zone === session.originZone) {
+          zone.dataset["drop"] = "origin";
           continue;
         }
-        const option = options.get(column.dataset["stateCode"] ?? "");
+        const option = options.get(zone.dataset["stateCode"] ?? "");
         if (option === undefined) {
-          lockColumn(column, "illegal", `Sin transición desde ${originLabel}`);
+          lockZone(zone, "illegal", `Sin transición desde ${originLabel}`);
           continue;
         }
         if (option.missingFields.length > 0) {
-          lockColumn(
-            column,
+          lockZone(
+            zone,
             "blocked",
-            `Falta ${fieldList(option.missingFields)} en el proyecto`,
+            `Falta ${fieldList(option.missingFields)} en ${noun}`,
           );
           continue;
         }
-        openSlot(session, column);
+        openSlot(session, zone);
       }
     }
 
-    /** A column that cannot take the card says so, in words, and steps back. */
-    function lockColumn(
-      column: HTMLElement,
+    /** A zone that cannot take the card says so, in words, and steps back. */
+    function lockZone(
+      zone: HTMLElement,
       drop: "illegal" | "blocked",
       reason: string,
     ): void {
-      column.dataset["drop"] = drop;
-      const text = column.querySelector<HTMLElement>(SEL.columnLockText);
+      zone.dataset["drop"] = drop;
+      const text = zone.querySelector<HTMLElement>(SEL.columnLockText);
       if (text !== null) text.textContent = reason;
-      const chip = column.querySelector<HTMLElement>(SEL.columnLock);
+      const chip = zone.querySelector<HTMLElement>(SEL.columnLock);
       if (chip !== null) chip.hidden = false;
     }
 
-    /** A legal column opens a dashed slot the height of the card, and its cards make room. */
-    function openSlot(session: DragSession, column: HTMLElement): void {
-      column.dataset["drop"] = "legal";
-      const body = bodyOf(column);
+    /** A legal zone opens a dashed slot the height of the card, and its cards make room. */
+    function openSlot(session: DragSession, zone: HTMLElement): void {
+      zone.dataset["drop"] = "legal";
+      const body = bodyOf(zone);
       if (body === null) return;
       const slot = document.createElement("div");
       slot.className = "drop-slot";
@@ -1345,7 +1641,7 @@ const staleSentence =
       // The card list is a grid; a slot is scenery inside it, not a row.
       slot.setAttribute("role", "presentation");
       slot.style.height = `${session.cardHeight}px`;
-      const siblings = cardsOf(column);
+      const siblings = cardsOf(zone);
       void flip(siblings, () => {
         body.prepend(slot);
       });
@@ -1363,10 +1659,10 @@ const staleSentence =
     }
 
     function clearLegality(session: DragSession): void {
-      for (const column of columnsOf(session.panel)) {
-        column.dataset["drop"] = "idle";
-        delete column.dataset["hover"];
-        const chip = column.querySelector<HTMLElement>(SEL.columnLock);
+      for (const zone of session.zones) {
+        zone.dataset["drop"] = "idle";
+        delete zone.dataset["hover"];
+        const chip = zone.querySelector<HTMLElement>(SEL.columnLock);
         if (chip !== null) chip.hidden = true;
       }
       for (const slot of session.slots) slot.remove();
@@ -1374,52 +1670,62 @@ const staleSentence =
     }
 
     function updateHover(session: DragSession, x: number, y: number): void {
-      const hovered = columnAt(session, x, y);
-      for (const column of columnsOf(session.panel)) {
-        if (column === hovered && column.dataset["drop"] === "legal") {
-          column.dataset["hover"] = "true";
+      const hovered = zoneAt(session, x, y);
+      for (const zone of session.zones) {
+        if (zone === hovered && zone.dataset["drop"] === "legal") {
+          zone.dataset["hover"] = "true";
         } else {
-          delete column.dataset["hover"];
+          delete zone.dataset["hover"];
         }
       }
     }
 
     /**
-     * The column under the pointer, by rect arithmetic rather than `elementFromPoint`: the
+     * The zone under the pointer, by rect arithmetic rather than `elementFromPoint`: the
      * dragged card is captured and floating above everything, so hit testing through it is
      * exactly what we must not rely on.
      *
      * Rects are measured on every call, which is also what keeps the drop slot honest while
-     * the slider auto-scrolls under the hand: the columns move, the arithmetic follows.
+     * the container auto-scrolls under the hand: the zones move, the arithmetic follows.
      *
-     * A column is claimed by its horizontal band across the whole height of the board, not by
-     * its own box. Columns are as tall as their contents, and a card released below a short
-     * column is unmistakably aimed at that column — refusing it because the box ended two
-     * hundred pixels higher would be the interface being pedantic about its own layout.
+     * A zone is claimed by its own band **across** the layout axis and by the whole extent of
+     * the surface along the other one. Zones are only as big as their contents, and a card
+     * released past the end of a short one is unmistakably aimed at it — refusing because the
+     * box ended two hundred pixels earlier would be the interface being pedantic about its own
+     * layout.
      */
-    function columnAt(
+    function zoneAt(
       session: DragSession,
       x: number,
       y: number,
     ): HTMLElement | null {
-      const boxes = columnsOf(session.panel).map((column) => ({
-        column,
-        rect: column.getBoundingClientRect(),
+      const boxes = session.zones.map((zone) => ({
+        zone,
+        rect: zone.getBoundingClientRect(),
       }));
       if (boxes.length === 0) return null;
-      const top = Math.min(...boxes.map((box) => box.rect.top));
-      const bottom = Math.max(...boxes.map((box) => box.rect.bottom));
-      if (y < top || y > bottom) return null;
+      if (session.axis === "x") {
+        const top = Math.min(...boxes.map((box) => box.rect.top));
+        const bottom = Math.max(...boxes.map((box) => box.rect.bottom));
+        if (y < top || y > bottom) return null;
+        for (const box of boxes) {
+          if (x >= box.rect.left && x <= box.rect.right) return box.zone;
+        }
+        return null;
+      }
+      const left = Math.min(...boxes.map((box) => box.rect.left));
+      const right = Math.max(...boxes.map((box) => box.rect.right));
+      if (x < left || x > right) return null;
       for (const box of boxes) {
-        if (x >= box.rect.left && x <= box.rect.right) return box.column;
+        if (y >= box.rect.top && y <= box.rect.bottom) return box.zone;
       }
       return null;
     }
 
-    // --- Drag: drop and reject ---------------------------------------------
+    // --- Drag: drop and reject ----------------------------------------------
 
     /**
-     * Ends the gesture: the card returns to flow — in the column that accepted it, or in the
+     * Ends the gesture: the card returns to flow — in the zone that accepted it, or in the
      * hole it came out of — and travels there along one arc.
      *
      * Layout is mutated first and animated after, which is the contract of
@@ -1434,7 +1740,7 @@ const staleSentence =
         session.card.releasePointerCapture(session.pointerId);
       }
 
-      const target = outcome.kind === "accepted" ? outcome.column : null;
+      const target = outcome.kind === "accepted" ? outcome.zone : null;
       const from = session.card.getBoundingClientRect();
       const affected = affectedCards(session, target);
 
@@ -1460,11 +1766,22 @@ const staleSentence =
       const to = session.card.getBoundingClientRect();
       const journey = glide(session.card, from, to);
 
-      refreshColumn(session.originColumn);
+      refreshColumn(session.originZone);
       if (target === null) {
-        // The wall refusing the card is a physical answer, after it lands, not during.
+        // The surface refusing the card is a physical answer, after it lands, not during.
         if (outcome.kind === "refused") {
           void journey.then(() => shake(session.card));
+          // A refusal with no legality in hand is not the workflow saying no, it is us not
+          // knowing yet. Saying so is the difference between "you cannot" and "ask again" —
+          // and by the time this is read the answer is cached, so asking again works.
+          if (session.options === null) {
+            toast({
+              kind: "info",
+              title: `${codeOf(session.card)} sigue en su estado`,
+              detail:
+                "Todavía estábamos consultando qué movimientos admite. Vuelve a arrastrarla.",
+            });
+          }
         }
         refreshRoving();
         return;
@@ -1479,11 +1796,12 @@ const staleSentence =
           : options.get(target.dataset["stateCode"] ?? "");
       if (option === undefined) return;
       void performMove({
+        surface: session.surface,
         card: session.card,
-        code: session.card.dataset["code"] ?? "",
+        code: codeOf(session.card),
         option,
         targetLabel: labelOf(target),
-        placement: { kind: "moved", from: session.originColumn },
+        placement: { kind: "moved", from: session.originZone },
       });
     }
 
@@ -1492,15 +1810,15 @@ const staleSentence =
       session: DragSession,
       target: HTMLElement | null,
     ): HTMLElement[] {
-      const columns = new Set<HTMLElement>([session.originColumn]);
+      const zones = new Set<HTMLElement>([session.originZone]);
       for (const slot of session.slots) {
-        const column = columnOf(slot);
-        if (column !== null) columns.add(column);
+        const zone = columnOf(slot);
+        if (zone !== null) zones.add(zone);
       }
-      if (target !== null) columns.add(target);
+      if (target !== null) zones.add(target);
       const cards: HTMLElement[] = [];
-      for (const column of columns) {
-        for (const card of cardsOf(column)) {
+      for (const zone of zones) {
+        for (const card of cardsOf(zone)) {
           if (card !== session.card) cards.push(card);
         }
       }
@@ -1541,69 +1859,123 @@ const staleSentence =
       await animation.finished.catch(() => undefined);
     }
 
-    // --- The move itself (shared by the drag and the menu) -----------------
+    // --- The move itself (shared by both drags and both menus) --------------
 
     /**
      * Runs one transition: reason if the edge demands one, POST, then wait for the stream.
      *
      * Nothing is painted as done here. The card enters the pending state and the *server's*
-     * envelope is what repaints it (`PATTERNS_FRONTEND.md` §8); a refusal sends the card
-     * home along its own path with a shake and a toast naming the rule that refused it.
+     * envelope is what repaints it (`PATTERNS_FRONTEND.md` §8); a refusal sends the card home
+     * along its own path with a shake and a toast naming the rule that refused it.
+     *
+     * The reason is asked for *before* the POST, from the transition's own `requires_reason`,
+     * so the ordinary path never spends a refusal on a field the operator was willing to fill.
+     * The one case that survives is a workflow edited between the lookup and the drop: the
+     * server asks for a motive we did not send, and the board answers by asking for it and
+     * posting again rather than by telling the operator to repeat the gesture themselves.
      */
     async function performMove(request: MoveRequest): Promise<void> {
-      const { card, code, option, targetLabel, placement } = request;
-      // Pending from the first instant, dialog included: a card sitting in a column it has
-      // not been accepted into must never look settled.
+      const { surface, card, code, option, targetLabel, placement } = request;
+      if (code === "") return;
+      // Pending from the first instant, dialog included: a card sitting in a zone it has not
+      // been accepted into must never look settled.
       setPending(card, true);
 
       let reason = "";
       if (option.requiresReason) {
-        const given = await askReason(code, targetLabel);
+        const given = await askReason(request);
         if (given === null) {
-          setPending(card, false);
-          if (placement.kind === "moved")
-            moveCard(card, placement.from, "travel");
+          abandonMove(request);
           return;
         }
         reason = given;
       }
 
       const pending: PendingMove = {
+        surface,
         card,
         code,
         toStateCode: option.toStateCode,
         targetLabel,
         placement,
-        detail: null,
+        updatedAt: null,
         timer: null,
       };
       pendings.set(code, pending);
 
-      const result = await submitMove(code, option.toStateCode, reason);
+      let outcome = await surface.submit(code, option.toStateCode, reason);
       // The stream may have confirmed (or superseded) this move while we waited; whoever
       // holds the entry now owns the card, and it is no longer us.
       if (pendings.get(code) !== pending) return;
 
-      if (!result.ok) {
+      // The edge demands a motive the cached legality did not mention. `submit` has already
+      // dropped that stale answer, so all that is left is to ask and post again — the card
+      // stays pending and in place throughout, and the operator performs one gesture.
+      if (outcome.kind === "refused" && demandsReason(outcome.error, reason)) {
+        const given = await askReason(request);
+        if (pendings.get(code) !== pending) return;
+        if (given === null) {
+          pendings.delete(code);
+          abandonMove(request);
+          return;
+        }
+        reason = given;
+        outcome = await surface.submit(code, option.toStateCode, reason);
+        if (pendings.get(code) !== pending) return;
+      }
+
+      if (outcome.kind === "refused") {
         pendings.delete(code);
         setPending(card, false);
         if (placement.kind === "moved")
           moveCard(card, placement.from, "travel");
         void shake(card);
-        const copy = moveErrorCopy(result.error, code, targetLabel);
+        const copy = moveErrorCopy(
+          outcome.error,
+          surface.subject(code),
+          targetLabel,
+          stateNamer(card),
+        );
         toast({ kind: "error", title: copy.title, detail: copy.detail });
         return;
       }
 
-      pending.detail = result.data;
+      pending.updatedAt = outcome.updatedAt;
       pending.timer = window.setTimeout(() => {
         settleWithoutEnvelope(code);
       }, CONFIRM_DEADLINE_MS);
     }
 
     /**
-     * Applies the confirmed state to a card: it lands in its column, the chip snaps, the
-     * counts follow, and the panel header follows when the card is the selected one.
+     * A move nobody confirmed and nobody refused: the operator closed the reason dialog.
+     *
+     * Not a refusal, so no shake and no toast — cancelling is an answer, not an error. The
+     * card travels home on the same spring the refusal path uses, because a card left sitting
+     * in a column it never entered would be the board claiming a move that did not happen.
+     */
+    function abandonMove(request: MoveRequest): void {
+      setPending(request.card, false);
+      if (request.placement.kind === "moved") {
+        moveCard(request.card, request.placement.from, "travel");
+      }
+    }
+
+    /**
+     * Names one workflow state the way this surface renders it, so a refusal can list the
+     * destinations that *are* possible in the operator's own vocabulary. A state with no zone
+     * on screen falls back to its code rather than to silence.
+     */
+    function stateNamer(card: HTMLElement): (stateCode: string) => string {
+      const panel = panelOf(card);
+      return (stateCode) => {
+        const zone = panel === null ? null : findColumn(panel, stateCode);
+        return zone === null ? stateCode : labelOf(zone);
+      };
+    }
+
+    /**
+     * Applies the confirmed state to a card: it lands in its zone, the chip snaps, the counts
+     * follow, and the board header follows when the card is the selected project.
      *
      * `occurredAt` is the envelope's instant when there was one, so the stale-patch watermark
      * advances to the event rather than to the moment we happened to render it.
@@ -1612,29 +1984,34 @@ const staleSentence =
       if (pending.timer !== null) window.clearTimeout(pending.timer);
       pendings.delete(pending.code);
       setPending(pending.card, false);
-      const stamp =
-        occurredAt ??
-        (pending.detail === null ? null : pending.detail.updated_at);
+      const stamp = occurredAt ?? pending.updatedAt;
       if (stamp !== null) markUpdatedAt(pending.card, stamp);
-      invalidateMoves(pending.code);
+      pending.surface.forget(pending.code);
 
       const panel = panelOf(pending.card);
-      const column =
+      const zone =
         panel === null ? null : findColumn(panel, pending.toStateCode);
-      if (column === null) {
-        dropFromBoard(pending.card, pending.code, pending.targetLabel);
+      if (zone === null) {
+        dropFromSurface(
+          pending.surface,
+          pending.card,
+          pending.code,
+          pending.targetLabel,
+        );
         return;
       }
-      if (columnOf(pending.card) !== column)
-        moveCard(pending.card, column, "travel");
-      patchStateChip(pending.card, column);
-      syncPanelState(pending.code, column);
+      if (columnOf(pending.card) !== zone)
+        moveCard(pending.card, zone, "travel");
+      patchStateChip(pending.card, zone);
+      if (pending.surface.kind === "project")
+        syncHeaderState(pending.code, zone);
+      runDeferredTaskRefresh();
     }
 
-    /** The panel header names the same state the card does, or it is telling a second story. */
-    function syncPanelState(code: string, column: HTMLElement): void {
-      if (code !== selectedCode || tp.state === null) return;
-      applyStateChip(tp.state, column);
+    /** The board header names the same state the card does, or it is telling a second story. */
+    function syncHeaderState(code: string, zone: HTMLElement): void {
+      if (code !== selectedCode || tb.state === null) return;
+      applyStateChip(tb.state, zone);
     }
 
     function confirmFromEnvelope(
@@ -1666,7 +2043,7 @@ const staleSentence =
     }
 
     /**
-     * Moves a card into a column and animates the journey.
+     * Moves a card into a zone and animates the journey.
      *
      * The DOM move happens inside `flip`, so the cards that make room travel with the same
      * spring as the card itself; the card's own glide is measured around it. Selection is an
@@ -1674,15 +2051,15 @@ const staleSentence =
      */
     function moveCard(
       card: HTMLElement,
-      column: HTMLElement,
+      zone: HTMLElement,
       motion: "travel" | "none",
     ): void {
-      const body = bodyOf(column);
+      const body = bodyOf(zone);
       if (body === null) return;
       const previous = columnOf(card);
       const from = card.getBoundingClientRect();
       const affected = [
-        ...cardsOf(column),
+        ...cardsOf(zone),
         ...(previous === null ? [] : cardsOf(previous)),
       ].filter((candidate) => candidate !== card);
 
@@ -1692,37 +2069,40 @@ const staleSentence =
 
       const to = card.getBoundingClientRect();
       if (previous !== null) refreshColumn(previous);
-      refreshColumn(column);
+      refreshColumn(zone);
       refreshRoving();
       if (motion === "travel") void glide(card, from, to);
     }
 
     /**
-     * A project moved into a state that has no column here — the board draws the states that
-     * are occupied, and nobody was in that one. The card leaves rather than lying about where
-     * the project is, and the toast says what happened.
+     * The aggregate moved into a state that has no zone here — the surface draws the states
+     * its workflow publishes, and this one is not among them. The card leaves rather than
+     * lying about where the work is, and the toast says what happened.
      */
-    function dropFromBoard(
+    function dropFromSurface(
+      surface: Surface,
       card: HTMLElement,
       code: string,
       /** The state's label when we have one; its bare code when the envelope is all we got. */
       stateName: string,
     ): void {
-      const column = columnOf(card);
+      const zone = columnOf(card);
       const siblings =
-        column === null
+        zone === null
           ? []
-          : cardsOf(column).filter((candidate) => candidate !== card);
+          : cardsOf(zone).filter((candidate) => candidate !== card);
       void flip(siblings, () => {
         card.remove();
       });
-      if (column !== null) refreshColumn(column);
-      if (code === selectedCode) clearSelection({ push: false, focus: false });
+      if (zone !== null) refreshColumn(zone);
+      if (surface.kind === "project" && code === selectedCode) {
+        clearSelection({ push: false, focus: false });
+      }
       refreshRoving();
       toast({
         kind: "info",
         title: `${code} salió del tablero`,
-        detail: `Pasó a ${stateName}, un estado que hoy no tiene columna. Actualiza el tablero para verlo.`,
+        detail: `Pasó a ${stateName}, un estado que este flujo no publica. Actualiza el tablero para verlo.`,
       });
     }
 
@@ -1731,20 +2111,28 @@ const staleSentence =
     /**
      * Collects the reason an edge marked `requires_reason` demands, before the request.
      *
+     * One dialog for both surfaces and both input paths: a project dropped on the rail, a task
+     * dropped on the board and either one moved from "Mover a…" all land here, so the sentence
+     * the operator reads and the field they fill cannot drift apart between them.
+     *
      * A modal is correct here and nowhere else on this surface: it is a confirmation the
      * operator asked for by dropping the card, and the transition cannot proceed without it
-     * (DESIGN.md, Don'ts). Cancelling resolves `null` and the card goes home.
+     * (DESIGN.md, Don'ts). It is titled with the move's own label — "Pedir cambios", not
+     * "Motivo del cambio" — because that is the name the workflow gives what is about to
+     * happen. Cancelling and Escape both resolve `null`, and the card goes home.
      */
-    function askReason(
-      code: string,
-      targetLabel: string,
-    ): Promise<string | null> {
+    function askReason(request: MoveRequest): Promise<string | null> {
       if (dialog === null || reasonInput === null) return Promise.resolve(null);
       reasonInput.value = "";
       if (reasonSubmit !== null) reasonSubmit.disabled = true;
+      if (reasonTitle !== null) reasonTitle.textContent = request.option.label;
       if (reasonContext !== null) {
-        reasonContext.textContent = `${code} pasa a ${targetLabel}. Esta transición exige un motivo.`;
+        reasonContext.textContent = `Mover ${request.code} a ${request.targetLabel}. Esta transición exige un motivo.`;
       }
+      reasonReturn = request.card;
+      // Cleared explicitly rather than trusted to be: a previous confirmation left "confirm"
+      // here, and a dialog dismissed with Escape does not overwrite it in every engine.
+      dialog.returnValue = "";
       dialog.showModal();
       reasonInput.focus();
       return new Promise<string | null>((resolve) => {
@@ -1755,6 +2143,9 @@ const staleSentence =
     function onDialogClose(): void {
       const resolve = resolveReason;
       resolveReason = null;
+      const card = reasonReturn;
+      reasonReturn = null;
+      if (card !== null && card.isConnected) focusCard(card);
       if (resolve === null) return;
       const confirmed = dialog !== null && dialog.returnValue === "confirm";
       const typed = reasonInput === null ? "" : reasonInput.value.trim();
@@ -1766,13 +2157,15 @@ const staleSentence =
       reasonSubmit.disabled = reasonInput.value.trim() === "";
     }
 
-    // --- "Mover a…": the keyboard and touch twin ---------------------------
+    // --- "Mover a…": the keyboard and touch twin ----------------------------
 
     async function openMenu(trigger: HTMLElement): Promise<void> {
       if (menu === null || menuList === null) return;
       const card = trigger.closest<HTMLElement>(SEL.card);
       if (card === null) return;
-      const code = card.dataset["code"] ?? "";
+      const surface = surfaceFor(card);
+      if (surface === null) return;
+      const code = codeOf(card);
 
       closeMenu();
       menuOwner = trigger;
@@ -1783,16 +2176,17 @@ const staleSentence =
       menu.hidden = false;
       positionMenu(trigger);
 
-      const result = await loadMoves(code);
+      const result = await surface.moves(card);
       trigger.classList.remove("is-loading");
       if (menuOwner !== trigger) return;
-      renderMenu(result, card, code);
+      renderMenu(result, surface, card, code);
       positionMenu(trigger);
       focusFirstItem();
     }
 
     function renderMenu(
       result: MovesResult,
+      surface: Surface,
       card: HTMLElement,
       code: string,
     ): void {
@@ -1811,18 +2205,19 @@ const staleSentence =
       }
       menuList.replaceChildren(
         ...result.options.map((option, index) =>
-          buildMenuItem(option, card, code, index),
+          buildMenuItem(option, surface, card, code, index),
         ),
       );
     }
 
     /**
      * One target state as a menu item. A transition whose `requires_fields` are empty on the
-     * project renders present and visibly dead, naming the field — the same rule the drag
-     * paints as a locked column (`FRONTEND.md` §8).
+     * aggregate renders present and visibly dead, naming the field — the same rule the drag
+     * paints as a locked zone (`FRONTEND.md` §8).
      */
     function buildMenuItem(
       option: MoveOption,
+      surface: Surface,
       card: HTMLElement,
       code: string,
       index: number,
@@ -1854,13 +2249,14 @@ const staleSentence =
       button.addEventListener("click", () => {
         dismissMenu();
         const panel = panelOf(card);
-        const column =
+        const zone =
           panel === null ? null : findColumn(panel, option.toStateCode);
         void performMove({
+          surface,
           card,
           code,
           option,
-          targetLabel: column === null ? option.label : labelOf(column),
+          targetLabel: zone === null ? option.label : labelOf(zone),
           placement: { kind: "waiting" },
         });
       });
@@ -1941,24 +2337,49 @@ const staleSentence =
     // --- Stream -------------------------------------------------------------
 
     /**
-     * A project changed state somewhere. Three cases, in order:
+     * A project changed state somewhere: the same three cases a task change has, on the rail.
+     */
+    function onProjectStateChanged(envelope: Envelope): void {
+      lastEventAt = envelope.occurred_at;
+      applyStateChange(projectSurface, rail, envelope);
+    }
+
+    /**
+     * A task changed state somewhere.
+     *
+     * Only the selected project's tasks are on screen, and every task payload names its
+     * project (`docs/EVENTS.md` §4), so an event about another project is dropped rather than
+     * patched into a board that is not showing it.
+     */
+    function onTaskStateChanged(envelope: Envelope): void {
+      lastEventAt = envelope.occurred_at;
+      if (selectedCode === null) return;
+      if (readString(envelope.payload, "project_code") !== selectedCode) return;
+      applyStateChange(taskSurface, taskBoard, envelope);
+    }
+
+    /**
+     * One state change, on whichever surface holds the card. Three cases, in order:
      *
      * 1. it is the move this tab is waiting for → confirm it;
-     * 2. it is a move this tab did not make → the card travels across the board with the
+     * 2. it is a move this tab did not make → the card travels across its surface with the
      *    author's name riding on it (the signature moment);
-     * 3. it names a state with no column here → the card leaves, and says so.
+     * 3. it names a state with no zone here → the card leaves, and says so.
      */
-    function onStateChanged(envelope: Envelope): void {
-      lastEventAt = envelope.occurred_at;
+    function applyStateChange(
+      surface: Surface,
+      container: HTMLElement,
+      envelope: Envelope,
+    ): void {
       const code = envelope.entity.id;
-      const card = findCard(board, code);
+      const card = findCard(container, code);
       if (card === null) return;
       if (!isNewer(card, envelope.occurred_at)) return;
       const toStateCode = readString(envelope.payload, "to");
       if (toStateCode === null) return;
 
       markUpdatedAt(card, envelope.occurred_at);
-      invalidateMoves(code);
+      surface.forget(code);
 
       const pending = pendings.get(code);
       if (pending !== undefined) {
@@ -1973,40 +2394,42 @@ const staleSentence =
       }
 
       const panel = panelOf(card);
-      const column = panel === null ? null : findColumn(panel, toStateCode);
-      if (column === null) {
-        dropFromBoard(card, code, toStateCode);
+      const zone = panel === null ? null : findColumn(panel, toStateCode);
+      if (zone === null) {
+        dropFromSurface(surface, card, code, toStateCode);
         return;
       }
-      if (columnOf(card) === column) {
-        patchStateChip(card, column);
-        syncPanelState(code, column);
+      if (columnOf(card) === zone) {
+        patchStateChip(card, zone);
+        if (surface.kind === "project") syncHeaderState(code, zone);
         return;
       }
 
-      moveCard(card, column, "travel");
-      patchStateChip(card, column);
-      syncPanelState(code, column);
+      moveCard(card, zone, "travel");
+      patchStateChip(card, zone);
+      if (surface.kind === "project") syncHeaderState(code, zone);
       card.dataset["remote"] = "true";
       window.setTimeout(() => {
         delete card.dataset["remote"];
       }, REMOTE_RING_MS);
       if (envelope.actor !== operatorAlias) {
-        rideAttribution(card, `${envelope.actor} → ${labelOf(column)}`);
+        rideAttribution(card, `${envelope.actor} → ${labelOf(zone)}`);
       }
     }
 
     /**
-     * A task moved, was created or was edited. The panel only cares when it belongs to the
-     * project on screen, which every task payload names through `project_code`
-     * (`docs/EVENTS.md` §4).
+     * A task was created or edited: the *shape* of the board changed, so the list is re-read
+     * rather than patched in place. Patching is for values, refetching is for shape
+     * (`PATTERNS_FRONTEND.md` §6) — and a task created elsewhere has no node to patch.
      *
-     * The list is re-read rather than patched in place: a task can change the *group* it
-     * belongs to, and the panel's shape is what a state change alters. Patching is for
-     * values, refetching is for shape (`PATTERNS_FRONTEND.md` §6).
+     * A pending move defers it: re-reading would replace the very node whose transition is in
+     * flight, and the confirmation would then land on a card that no longer exists.
      */
-    function onTaskEvent(envelope: Envelope): void {
+    function onTaskShapeEvent(envelope: Envelope): void {
       lastEventAt = envelope.occurred_at;
+      // A task's own attributes decide which of its legal transitions are satisfiable today,
+      // so an edit makes the cached answer stale even when the state did not move.
+      invalidateTaskMoves(envelope.entity.id);
       const code = selectedCode;
       if (code === null) return;
       if (readString(envelope.payload, "project_code") !== code) return;
@@ -2014,8 +2437,26 @@ const staleSentence =
       taskRefreshTimer = window.setTimeout(() => {
         taskRefreshTimer = null;
         if (selectedCode !== code) return;
+        if (hasPendingTaskMove()) {
+          taskRefreshDeferred = true;
+          return;
+        }
         void refreshTasks(code);
       }, TASK_REFRESH_DEBOUNCE_MS);
+    }
+
+    function hasPendingTaskMove(): boolean {
+      for (const pending of pendings.values()) {
+        if (pending.surface.kind === "task") return true;
+      }
+      return false;
+    }
+
+    function runDeferredTaskRefresh(): void {
+      if (!taskRefreshDeferred || hasPendingTaskMove()) return;
+      taskRefreshDeferred = false;
+      const code = selectedCode;
+      if (code !== null) void refreshTasks(code);
     }
 
     /**
@@ -2025,7 +2466,7 @@ const staleSentence =
      */
     function onPriorityRecalculated(envelope: Envelope): void {
       lastEventAt = envelope.occurred_at;
-      const card = findCard(board, envelope.entity.id);
+      const card = findCard(rail, envelope.entity.id);
       if (card === null) return;
       const value = envelope.payload["value"];
       if (typeof value !== "number") return;
@@ -2105,9 +2546,9 @@ const staleSentence =
     }
 
     /**
-     * Drags are refused while the stream is down: a move whose confirmation can never arrive
-     * would leave a card pending with no way back. The menu stays open on purpose — it is the
-     * explicit path, and its deadline settles it from the response.
+     * Drags are refused on both surfaces while the stream is down: a move whose confirmation
+     * can never arrive would leave a card pending with no way back. The menu stays open on
+     * purpose — it is the explicit path, and its deadline settles it from the response.
      */
     function applyConnection(stale: boolean): void {
       board.dataset["connection"] = stale ? "stale" : "live";
@@ -2134,15 +2575,14 @@ const staleSentence =
 
     // --- Wiring -------------------------------------------------------------
 
+    function onEngagementChange(): void {
+      if (field === null) return;
+      selectEngagement(field.value, true);
+    }
+
     function onBoardClick(event: MouseEvent): void {
       const target = event.target;
       if (!(target instanceof Element)) return;
-      const pill = target.closest<HTMLElement>(SEL.switcherPill);
-      if (pill !== null) {
-        const code = pill.dataset["engagementCode"] ?? "";
-        if (code !== "") selectEngagement(code, true);
-        return;
-      }
       const more = target.closest<HTMLElement>(SEL.membersMore);
       if (more !== null) {
         toggleMemberOverflow(more);
@@ -2156,13 +2596,13 @@ const staleSentence =
         );
         return;
       }
-      if (target.closest("[data-tp-close]") !== null) {
+      if (target.closest("[data-tb-close]") !== null) {
         clearSelection({ push: true, focus: true });
         return;
       }
-      if (target.closest("[data-tp-retry]") !== null) {
+      if (target.closest("[data-tb-retry]") !== null) {
         if (selectedCode === null) return;
-        showPanelArm("loading");
+        showBoardArm("loading");
         void refreshTasks(selectedCode);
         return;
       }
@@ -2171,6 +2611,19 @@ const staleSentence =
         if (menuOwner === trigger) dismissMenu();
         else void openMenu(trigger);
       }
+    }
+
+    /**
+     * Swallows exactly one click after a drag that began on a link.
+     *
+     * A task card's title is a link and also its grip; without this, letting go of a dragged
+     * card would navigate to the task the operator was only moving.
+     */
+    function onCaptureClick(event: MouseEvent): void {
+      if (!suppressClick) return;
+      suppressClick = false;
+      event.preventDefault();
+      event.stopPropagation();
     }
 
     function onDocumentClick(event: MouseEvent): void {
@@ -2209,7 +2662,9 @@ const staleSentence =
     board.addEventListener("pointerup", onPointerUp);
     board.addEventListener("pointercancel", onPointerCancel);
     board.addEventListener("click", onBoardClick);
+    board.addEventListener("click", onCaptureClick, true);
     board.addEventListener("keydown", onBoardKeyDown);
+    if (field !== null) field.addEventListener("change", onEngagementChange);
     document.addEventListener("click", onDocumentClick);
     document.addEventListener("keydown", onKeyDown);
     window.addEventListener("popstate", onPopState);
@@ -2225,14 +2680,14 @@ const staleSentence =
     if (staleAction !== null)
       staleAction.addEventListener("click", onStaleAction);
 
-    const offState = subscribe("project.state_changed", onStateChanged);
+    const offState = subscribe("project.state_changed", onProjectStateChanged);
     const offPriority = subscribe(
       "project.priority.recalculated",
       onPriorityRecalculated,
     );
-    const offTaskCreated = subscribe("task.created", onTaskEvent);
-    const offTaskUpdated = subscribe("task.updated", onTaskEvent);
-    const offTaskState = subscribe("task.state_changed", onTaskEvent);
+    const offTaskCreated = subscribe("task.created", onTaskShapeEvent);
+    const offTaskUpdated = subscribe("task.updated", onTaskShapeEvent);
+    const offTaskState = subscribe("task.state_changed", onTaskStateChanged);
     const offStatus = onStatus((status) => {
       applyConnection(status === "disconnected");
     });
@@ -2246,7 +2701,10 @@ const staleSentence =
       board.removeEventListener("pointerup", onPointerUp);
       board.removeEventListener("pointercancel", onPointerCancel);
       board.removeEventListener("click", onBoardClick);
+      board.removeEventListener("click", onCaptureClick, true);
       board.removeEventListener("keydown", onBoardKeyDown);
+      if (field !== null)
+        field.removeEventListener("change", onEngagementChange);
       document.removeEventListener("click", onDocumentClick);
       document.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("popstate", onPopState);
@@ -2260,7 +2718,7 @@ const staleSentence =
       }
       pendings.clear();
       if (taskRefreshTimer !== null) window.clearTimeout(taskRefreshTimer);
-      claimPanel(null);
+      claimBoard(null);
       if (drag !== null) concludeDrag(drag, { kind: "released" });
       offState();
       offPriority();
@@ -2274,6 +2732,23 @@ const staleSentence =
 
   function clamp(value: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, value));
+  }
+
+  /** The business code a card carries; `""` when the node is not one. */
+  function codeOf(card: HTMLElement): string {
+    return card.dataset["code"] ?? "";
+  }
+
+  /**
+   * Whether a refusal is the server asking for the motive we did not send.
+   *
+   * Only when we sent none: a reason the server rejected on its own merits is a genuine
+   * refusal, and re-opening the dialog over it would loop the operator through a field that
+   * is not the problem.
+   */
+  function demandsReason(error: ApiError, sent: string): boolean {
+    if (sent !== "") return false;
+    return error.kind === "validation" && error.fields["reason"] !== undefined;
   }
 
   function readString(
@@ -2295,18 +2770,14 @@ const staleSentence =
     flex-direction: column;
     flex: 1;
     min-height: 0;
-    /* One column's resting width: wide enough for a project name plus its owner,
-       narrow enough that four fit a laptop. The skeleton mirrors it so the loaded
-       board never jumps out of the shape its skeleton promised. */
-    --column-min: 268px;
-    /* The task panel's track: wide enough for a task title on two lines, never so
-       wide that it starves the wall. */
-    --panel-width: clamp(380px, 28vw, 420px);
+    /* The rail's track: wide enough for a project name over its client and owner,
+       narrow enough that the board beside it keeps four task columns. */
+    --rail-track: clamp(340px, 24vw, 380px);
   }
 
   .board-bar {
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     gap: var(--space-4);
     flex-wrap: wrap;
     padding: 0 var(--space-5) var(--space-3);
@@ -2314,6 +2785,19 @@ const staleSentence =
 
   .board-hint {
     margin-left: auto;
+    max-width: 42ch;
+  }
+
+  .board-note {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0 var(--space-5) var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background-color: var(--tone-wash);
+    border-color: var(--tone-solid);
+    color: var(--tone-ink);
+    font-size: var(--text-small-size);
   }
 
   .stale {
@@ -2339,63 +2823,22 @@ const staleSentence =
     margin-left: auto;
   }
 
-  /* --- The stage: the wall, and the panel beside it --- */
+  /* --- The stage: the rail, and the board beside it --- */
 
   .board-stage {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) var(--panel-width);
+    grid-template-columns: var(--rail-track) minmax(0, 1fr);
     flex: 1;
     min-height: 0;
     border-top: var(--border-width) solid var(--hairline);
   }
 
-  .board-slider {
-    min-width: 0;
-    min-height: 0;
-    display: flex;
-  }
-
-  .panel {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-  }
-
-  .panel[hidden] {
-    display: none;
-  }
-
-  .columns {
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(var(--column-min), 1fr);
-    gap: var(--space-4);
-    align-items: stretch;
-    height: 100%;
-    padding: var(--space-4) var(--space-5);
-    overflow-x: auto;
-    overflow-y: hidden;
-    /* The wall scrolls sideways and never hands the gesture to the page behind it. */
-    overscroll-behavior-x: contain;
-    scroll-snap-type: x proximity;
-  }
-
-  /* A carried card must land where the hand is, not where a snap point decides. */
-  :global(html[data-board-dragging="true"]) .columns {
-    scroll-snap-type: none;
-  }
-
-  .tpanel-slot {
-    /* One row with a zero minimum, so the panel's own overflow can do its job
-       instead of the grid item refusing to shrink below its content. */
-    display: grid;
-    grid-template-rows: minmax(0, 1fr);
-    min-height: 0;
-    border-left: var(--border-width) solid var(--hairline);
+  .board-stage > :global([data-rail]) {
+    border-right: var(--border-width) solid var(--hairline);
   }
 
   /* The board goes stale, not blank: it stays readable and refuses the hand. */
-  .board[data-connection="stale"] .columns {
+  .board[data-connection="stale"] .board-stage {
     opacity: 0.72;
   }
 
@@ -2534,30 +2977,18 @@ const staleSentence =
     gap: var(--space-2);
   }
 
-  /* --- Below the panel's own width: the panel becomes a sheet over the wall --- */
+  /* --- Below the rail's own width: it lies down above the board --- */
 
-  @media (max-width: 1279px) {
+  @media (max-width: 1023px) {
     .board-stage {
       grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: auto minmax(0, 1fr);
     }
 
-    .tpanel-slot {
-      position: fixed;
-      inset: auto 0 0 0;
-      max-height: 72dvh;
-      border-left: 0;
-      border-top: var(--border-width) solid var(--hairline);
-      border-radius: var(--radius-card) var(--radius-card) 0 0;
-      box-shadow: var(--shadow-lifted);
-      background-color: var(--carta);
-      overflow: hidden;
-      z-index: var(--z-drawer);
-    }
-
-    /* Nothing selected: the sheet is not a strip of empty paper at the bottom of
-       the wall — it simply is not there, and the wall keeps the whole screen. */
-    .board:not([data-selected]) .tpanel-slot {
-      display: none;
+    .board-stage > :global([data-rail]) {
+      border-right: 0;
+      border-bottom: var(--border-width) solid var(--hairline);
+      max-height: 46dvh;
     }
   }
 
@@ -2566,18 +2997,13 @@ const staleSentence =
       padding-inline: var(--space-4);
     }
 
+    .board-note,
     .stale {
       margin-inline: var(--space-4);
     }
 
     .board-hint {
       margin-left: 0;
-    }
-
-    .columns {
-      grid-auto-columns: min(84vw, 300px);
-      padding-inline: var(--space-4);
-      scroll-snap-type: x mandatory;
     }
   }
 </style>

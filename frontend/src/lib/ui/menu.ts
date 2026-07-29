@@ -1,9 +1,16 @@
 /**
- * The popup grammar the row controls share: one trigger, one panel, one choice.
+ * The popup grammar every dropdown on this app shares: one trigger, one panel,
+ * one choice.
  *
- * Written once because the owner picker and the task's move menu differ only in
- * what they put inside the panel — copying the open/close/keyboard code into
- * both is how one of them silently stops answering `Escape`.
+ * Written once because the owner picker, the task's move menu and the activity
+ * feed's facet selects differ only in what they put inside the panel — copying
+ * the open/close/keyboard code into each is how one of them silently stops
+ * answering `Escape`. It lives in `lib/` rather than under one view's directory
+ * for the same reason: none of this knows what a project is.
+ *
+ * It is also why there is no `<select>` anywhere in this interface. The native
+ * popup is drawn by the operating system, so it lands as a grey system list in
+ * the middle of a surface that is otherwise all paper and ink.
  *
  * Three properties this owes the rest of the surface:
  *
@@ -136,15 +143,23 @@ async function openMenu(
   itemsOf(panel)[0]?.focus();
 }
 
-/** Moves focus within the open panel; `step` of +1 is "next", -1 is "previous". */
-function moveFocus(step: number): void {
-  if (open === null) return;
+/**
+ * Moves focus within the open panel; `step` of +1 is "next", -1 is "previous".
+ *
+ * @returns Whether the key was consumed. A panel with no `[data-menu-item]` —
+ *   the date picker's grid, which navigates by day, week and month on its own —
+ *   owns its arrow keys, so this reports `false` and the caller leaves the event
+ *   alone instead of swallowing it on the way to a control that needed it.
+ */
+function moveFocus(step: number): boolean {
+  if (open === null) return false;
   const items = itemsOf(open.panel);
-  if (items.length === 0) return;
+  if (items.length === 0) return false;
   const active = document.activeElement;
   const index = items.findIndex((item) => item === active);
   const next = index === -1 ? 0 : (index + step + items.length) % items.length;
   items[next]?.focus();
+  return true;
 }
 
 /**
@@ -213,14 +228,14 @@ export function mountMenus(
       }
 
       if (open === null || !isInsideOpen(target)) return;
-      if (event.key === "ArrowDown") {
+      // `preventDefault` only once the move actually happened: a panel that
+      // navigates itself must still receive its own arrow keys.
+      if (event.key === "ArrowDown" && moveFocus(1)) {
         event.preventDefault();
-        moveFocus(1);
         return;
       }
-      if (event.key === "ArrowUp") {
+      if (event.key === "ArrowUp" && moveFocus(-1)) {
         event.preventDefault();
-        moveFocus(-1);
       }
     },
     { signal },

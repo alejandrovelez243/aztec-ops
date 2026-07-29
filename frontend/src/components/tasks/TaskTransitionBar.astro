@@ -1,0 +1,145 @@
+---
+/**
+ * The legal moves out of this task's current state — one button per entry in
+ * `task.transitions`, which is the **only** source of them (`docs/API.md`
+ * §2.2).
+ *
+ * Deliberately the same bar as the project's, against the task workflow: the
+ * frontend holds no list of task state codes and never guesses legality, so a
+ * task state added in the admin appears here with zero frontend changes, and an
+ * empty list renders the terminal sentence rather than inventing a button.
+ *
+ * A transition whose `requires_fields` names something this task has not filled
+ * in renders **visibly dead** — disabled, with the missing field named beside it
+ * and wired through `aria-describedby` — instead of disappearing or letting the
+ * operator discover the rule through a 422.
+ *
+ * The motive some edges demand is asked by `ReasonDialog`, rendered once at the
+ * root of the screen: `requires_reason` lives on the `WorkflowTransition` row,
+ * so a task's move and a project's move ask the same question and must not ask
+ * it in two different forms.
+ */
+import { joinFields } from "../projects/messages";
+import type { Transition } from "../../lib/api/domain";
+
+export interface Props {
+  taskCode: string;
+  transitions: readonly Transition[];
+  /** Task attributes currently empty, from the same read. */
+  emptyFields: readonly string[];
+  /** The read's `updated_at`; the floor for every live patch. */
+  updatedAt: string;
+}
+
+const { taskCode, transitions, emptyFields, updatedAt } = Astro.props;
+
+/** The fields this edge demands that the task has not got. */
+function missingFor(transition: Transition): readonly string[] {
+  return transition.requires_fields.filter((field) =>
+    emptyFields.includes(field),
+  );
+}
+
+const options = transitions.map((transition) => ({
+  transition,
+  missing: missingFor(transition),
+  describedBy: `req-${taskCode}-${transition.to_state.code}`,
+}));
+---
+
+<div
+  class="bar"
+  data-task-transition-bar
+  data-task-code={taskCode}
+  data-updated-at={updatedAt}
+>
+  <p class="label">Mover a</p>
+
+  <div class="options" data-transition-options>
+    {
+      options.map(({ transition, missing, describedBy }) => (
+        <span class="option">
+          <button
+            class="btn btn-secondary"
+            type="button"
+            data-task-transition
+            data-to-state={transition.to_state.code}
+            data-requires-reason={String(transition.requires_reason)}
+            disabled={missing.length > 0}
+            aria-describedby={missing.length > 0 ? describedBy : undefined}
+          >
+            <span data-field="transition-label">{transition.label}</span>
+          </button>
+          {missing.length > 0 && (
+            <span
+              class="small missing"
+              id={describedBy}
+              data-field="transition-missing"
+            >
+              Falta {joinFields(missing)}
+            </span>
+          )}
+        </span>
+      ))
+    }
+  </div>
+
+  {
+    /* Always rendered, so the island can reveal it when a move lands the task
+      in a terminal state and the button list becomes empty. */
+  }
+  <p class="small" data-no-transitions hidden={transitions.length > 0}>
+    Este estado es terminal: no hay movimientos disponibles.
+  </p>
+
+  {
+    /* One home for the option markup; the island clones it when the legal moves
+      change after a transition. */
+  }
+  <template data-template="transition">
+    <span class="option">
+      <button class="btn btn-secondary" type="button" data-task-transition>
+        <span data-field="transition-label"></span>
+      </button>
+      <span class="small missing" data-field="transition-missing" hidden></span>
+    </span>
+  </template>
+</div>
+
+<script>
+  import { onPage } from "../projects/island";
+  import { mountTaskTransitions } from "./task-transitions";
+
+  onPage("[data-task-transition-bar]", mountTaskTransitions);
+</script>
+
+<style>
+  .bar {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin-top: var(--space-2);
+    padding-top: var(--space-4);
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  .option {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .missing {
+    color: var(--ambar-ink);
+  }
+
+  .missing[hidden] {
+    display: none;
+  }
+</style>

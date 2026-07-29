@@ -276,6 +276,7 @@ ROSTER_ORDERING: dict[str, str] = {
     "open_tasks": "open_tasks",
     "overdue_tasks": "overdue_tasks",
     "blocked_tasks": "blocked_tasks",
+    "urgent_tasks": "high_or_critical_open",
     "projects_owned": "projects_owned",
 }
 

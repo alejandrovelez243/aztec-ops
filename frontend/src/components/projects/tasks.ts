@@ -35,13 +35,15 @@ import {
   setField,
 } from "./dom";
 import { dueState } from "./format";
-import { mountMenus } from "./menu";
+import { mountMenus } from "../../lib/ui/menu";
 import { failureCopy, TASK_MOVES_UNAVAILABLE } from "./messages";
 import { mountOwnerMenus, renderOwnerControl } from "./owner-menu";
 import { askReason } from "./reason-dialog";
 import { markEvent } from "./stale";
 import { taskMoves, type TaskMove } from "./task-moves";
-import { semanticTone, stateTone } from "./tone";
+import { submitTaskDueDate, submitTaskOwner } from "../tasks/task-writes";
+import { mountDateFields, renderDateControl } from "../ui/date-field";
+import { semanticTone, stateTone, taxonomyTone } from "./tone";
 import type { TaskItem } from "../../lib/api/domain";
 
 /** Topics that can change something a task row shows. */
@@ -169,34 +171,16 @@ export function mountTasks(root: HTMLElement): () => void {
   });
 
   const offOwners = mountOwnerMenus(root, submitTaskOwner);
+  const offDates = mountDateFields(root, submitTaskDueDate);
 
   return () => {
     for (const off of offs) off();
     offMoves();
     offOwners();
+    offDates();
     for (const move of pending.values()) window.clearTimeout(move.timer);
     pending.clear();
   };
-}
-
-/**
- * Reassigns one task — the single seam this file leaves open.
- *
- * `PATCH /api/v1/tasks/{code}` carries the change and its body names the person
- * `assignee`, but the typed client does not expose it yet, and a component may
- * not call `fetch` itself (`docs/standards/PATTERNS_FRONTEND.md` §3). So every
- * task row's owner trigger renders disabled with `TASK_OWNER_UNAVAILABLE` as its
- * tooltip, and this never runs.
- *
- * Turning it on is three edits and no redesign: add `patchTask` to
- * `lib/api/client.ts`, replace the body below with the same shape
- * `header-controls.ts` uses for the project (write, then paint from the
- * response, then toast), and drop `disabledReason` from the two `OwnerMenu`
- * usages in `TasksTable.astro`. The menu, the roster, the keyboard handling and
- * the pending state are already here and already shared with the header.
- */
-async function submitTaskOwner(): Promise<void> {
-  return Promise.resolve();
 }
 
 /**
@@ -298,13 +282,16 @@ function patchRow(
     chip.dataset.category = task.state.category;
   }
 
-  const dueChip = row.querySelector<HTMLElement>("[data-due-chip]");
-  if (dueChip !== null) {
-    const due = dueState(task.due_date ?? null);
-    applyTone(dueChip, semanticTone(due.tone));
-    setField(dueChip, "due-label", due.label);
-    if ("title" in due) dueChip.setAttribute("title", due.title);
-    else dueChip.removeAttribute("title");
+  const priorityChip = row.querySelector<HTMLElement>("[data-priority-chip]");
+  if (priorityChip !== null) {
+    applyTone(priorityChip, taxonomyTone(task.priority.color));
+    setField(priorityChip, "priority-label", task.priority.label);
+  }
+
+  const dueControl = row.querySelector<HTMLElement>("[data-date-control]");
+  if (dueControl !== null) {
+    dueControl.dataset.code = task.code;
+    renderDateControl(dueControl, task.due_date ?? null);
   }
 
   const overdue = row.querySelector<HTMLElement>("[data-field='overdue']");

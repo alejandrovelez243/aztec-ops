@@ -34,7 +34,6 @@ const { surfaces, active, selectedCode = null } = Astro.props;
     surfaces.map((surface) => (
       <section
         class="rail-panel"
-        id={`rail-${surface.engagementType.code}`}
         data-panel
         data-engagement-code={surface.engagementType.code}
         hidden={surface.engagementType.code !== active}

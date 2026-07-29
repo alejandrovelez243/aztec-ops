@@ -29,7 +29,7 @@ level.
 | `occurred_at` | string, ISO-8601 UTC with `Z` | yes | When the change committed, not when the drain dispatched. Consumers use it to discard a stale application of an out-of-order redelivery. |
 | `actor` | string | yes | Who caused the change: the actor identifier from the request (`daniel.rojas`), or the literal `system` when the prioritization or risk engine caused it. Never null — an unattributed change is a bug. |
 | `correlation_id` | string, UUIDv4 | yes | Chains every event produced by one decision, including the events a consumer emits in reaction. It is what turns "deprioritize A in order to prioritize B" into a single movement in the timeline. Defaults to the request id. |
-| `entity` | object | yes | `{"type": "...", "id": "..."}`. `type` ∈ `project \| task \| blocker \| note`. `id` is the **business code** (`PRJ-01`, `PRJ-01-T02`), never a database primary key — a consumer in another context must never need a FK into the emitting context. |
+| `entity` | object | yes | `{"type": "...", "id": "..."}`. `type` ∈ `project \| task \| blocker \| note \| clock \| member`. `id` is the **business code** (`PRJ-01`, `PRJ-01-T02`), never a database primary key — a consumer in another context must never need a FK into the emitting context. |
 | `payload` | object | yes | Topic-specific, versioned. Schemas in §4. |
 | `version` | integer ≥ 1 | yes | Schema version **of this topic's payload**, not a global bus version. Starts at 1 and is tracked per topic. |
 
@@ -611,6 +611,45 @@ index scan and emits nothing.
 
 The cost accepted: a score can be at most one tick stale with respect to time. Data changes,
 which are the ones a human just made and is watching for, still propagate immediately.
+
+---
+
+### `member.created`, `member.updated`, `member.activation_changed`
+
+The roster's three topics. **Emitted by** `backend/apps/accounts/services/` — `create_member.py`
+and `update_member.py` — from the `/api/v1/team/members` routes. Version 1.
+`entity` is `{"type": "member", "id": "<User.code>"}`.
+
+Retiring and restoring share **one** topic carrying `is_active`, rather than being two. A
+subscriber's question is "may this person still take work?", and the answer is a field; two topics
+would make every subscription list both and treat them identically, which is the shape of the bug
+where somebody later adds only one of them.
+
+| Topic | Payload | Notes |
+|---|---|---|
+| `member.created` | `{label, role: str \| null, weekly_capacity_points, is_active}` | The whole person, so a subscriber renders the new row without a follow-up read. No load: it is computed from task rows at read time and a new person has none, so a number here could only be a zero that goes stale immediately. |
+| `member.updated` | `{label, role, weekly_capacity_points, changed: str[]}` | `changed` names which wire fields moved — `label`, `role`, `weekly_capacity_points` — so a consumer deciding whether to act need not diff against a copy it does not have. Never empty: a service that found nothing to change emits nothing at all. |
+| `member.activation_changed` | `{label, is_active}` | The person's existing work is untouched. `is_active: false` retires them from *new* assignment and nothing reassigns what they already hold, so a consumer must not read this as "their tasks are now unowned". |
+
+**Consumed by** `sse-fanout` only. **SSE**: yes — the Equipo surface refetches on any of them, so
+an edit made in one tab appears in another.
+
+**Not consumed by `priority-recalculator`**, and that is deliberate. Raising somebody's capacity
+changes whether they are overloaded, and being overloaded is a `OWNER_OVERLOADED` *flag* — computed
+on read from the current task rows (ADR 0011), never stored — so there is nothing for a
+recomputation to persist. Subscribing anyway would rescore every project that person owns on every
+roster edit, to arrive at the same number.
+
+**There is no `member.password_reset` topic**, on purpose. An event is broadcast to every
+subscriber and replayed from a durable row months later; "somebody's password was replaced" is of
+interest to no consumer, and putting it on a channel the browser reads would leak the timing of
+credential changes to every open tab for nothing. The reset is recorded in the audit trail — actor,
+subject and instant, never the value — which is where the question is actually asked.
+
+**Role changes emit nothing at all.** `POST`/`PATCH /api/v1/catalog/roles` write an
+`ActivityRecord` under `entity_type: "role"` and no event: a role is picker vocabulary, nothing
+recomputes from it, no read model denormalizes it, and the surfaces that render one refetch the
+catalog.
 
 ## 5. Handlers
 

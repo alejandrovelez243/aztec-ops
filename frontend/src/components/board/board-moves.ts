@@ -8,25 +8,34 @@
  *
  * Three invariants:
  *
- * - **The API owns legality.** A project's legal moves are `project.transitions` and nothing
- *   else (`docs/API.md` §2.2); this module never derives a move from a state code, so a
- *   workflow edge added in the admin appears on the board with no frontend change.
- * - **A task's legality is the server's to refuse.** `GET /api/v1/tasks/{code}` publishes
- *   `transitions`, but `src/lib/api/client.ts` exposes no reader for it and this task may not
- *   edit `lib/`. So a task drag offers every published state of its workflow, posts, and lets
- *   `POST /api/v1/tasks/{code}/transition` refuse — the refusal path (travel back, shake, a
- *   toast naming the rule) is the same one a stale project button already takes. The typed 409
- *   carries `allowed`, so the *first* refusal teaches this board the task's real legal set and
- *   every later gesture on that card is painted from it.
+ * - **The API owns legality, on both surfaces.** A project's legal moves are
+ *   `project.transitions` and a task's are `task.transitions` (`docs/API.md` §2.2 and §2.8);
+ *   this module never derives a move from a state code, so an edge added in the admin appears
+ *   on the board with no frontend change, and one removed there stops being offered.
+ * - **Legality is known before the drop, never after it.** Both surfaces read it from a `GET`
+ *   and cache it per code, so `requires_reason` is already in hand when a card lands: the
+ *   dialog opens and the reason travels with the first `POST`. Learning the rule from the
+ *   refusal instead would mean the operator has to perform a legal move twice to perform it
+ *   once, which is the same as not being able to perform it at all.
  * - **Nothing is painted optimistically.** {@link submitMove} and {@link submitTaskMove}
  *   return the server's answer; the caller keeps the card pending until the matching envelope
  *   arrives (`docs/standards/PATTERNS_FRONTEND.md` §8).
  */
-import { getProject, postProjectTransition, postTaskTransition } from "../../lib/api/client";
+import {
+  getProject,
+  getTask,
+  postProjectTransition,
+  postTaskTransition,
+} from "../../lib/api/client";
 import type { ApiError } from "../../lib/api/errors";
-import type { ProjectDetail, TaskItem } from "../../lib/api/domain";
+import type {
+  ProjectDetail,
+  TaskDetail,
+  TaskItem,
+  Transition,
+} from "../../lib/api/domain";
 import type { Result } from "../../lib/api/client";
-import { fieldList } from "./board-model";
+import { fieldList, spanishList } from "./board-model";
 
 /** One legal move out of the aggregate's current state, ready to render as a target. */
 export interface MoveOption {
@@ -49,12 +58,6 @@ export type MovesResult =
       readonly kind: "ready";
       readonly options: readonly MoveOption[];
       readonly stateLabel: string;
-      /**
-       * True when the list is the workflow's whole state set rather than a checked legal set —
-       * the task path before its first refusal. The menu says so out loud, because offering a
-       * move the server may refuse without warning would be the interface lying by omission.
-       */
-      readonly isProvisional: boolean;
     }
   | { readonly kind: "error"; readonly title: string; readonly detail: string };
 
@@ -62,12 +65,6 @@ export type MovesResult =
 export interface MoveErrorCopy {
   readonly title: string;
   readonly detail: string;
-}
-
-/** One state a card could be moved into, as the DOM already renders it. */
-export interface StateOption {
-  readonly code: string;
-  readonly label: string;
 }
 
 /**
@@ -92,17 +89,17 @@ export function taskSubject(code: string): MoveSubject {
   return { code, noun: "la tarea" };
 }
 
-/** Resolved legal moves per project code; a drag re-grabs the same card constantly. */
+/**
+ * Resolved legal moves per aggregate, keyed `kind:code`.
+ *
+ * One map for both surfaces because both answer the same question and are invalidated by the
+ * same event — a state change — and the key prefix keeps a project and a task that happen to
+ * share a code apart.
+ */
 const cache = new Map<string, MovesResult>();
 
 /** In-flight lookups, so a fast second grab joins the first request instead of racing it. */
 const inFlight = new Map<string, Promise<MovesResult>>();
-
-/** Legal target states per task code, learned from a refusal the server already worded. */
-const taskAllowed = new Map<string, ReadonlySet<string>>();
-
-/** Task edges the server has told us demand a reason, keyed `from>to`. */
-const taskReasonEdges = new Set<string>();
 
 /**
  * The legal moves of one project, cached for the life of the page.
@@ -114,90 +111,32 @@ const taskReasonEdges = new Set<string>();
  * Never throws: a failed lookup resolves to the `error` arm with copy the caller can show.
  */
 export async function loadMoves(code: string): Promise<MovesResult> {
-  const cached = cache.get(code);
-  if (cached !== undefined) return cached;
-  const running = inFlight.get(code);
-  if (running !== undefined) return running;
+  return resolve(projectKey(code), async () =>
+    fromProject(await getProject(code), projectSubject(code)),
+  );
+}
 
-  const request = getProject(code)
-    .then((result) => {
-      const resolved = toMovesResult(result);
-      if (resolved.kind === "ready") cache.set(code, resolved);
-      return resolved;
-    })
-    .finally(() => {
-      inFlight.delete(code);
-    });
-  inFlight.set(code, request);
-  return request;
+/**
+ * The legal moves of one task, cached the same way and for the same reason.
+ *
+ * `GET /api/v1/tasks/{code}` publishes the task's `transitions` with their labels, their
+ * `requires_reason` and their `requires_fields`, which is everything the board needs to dim
+ * an illegal column, name the rule on its lock chip and ask for a reason *before* posting.
+ */
+export async function loadTaskMoves(code: string): Promise<MovesResult> {
+  return resolve(taskKey(code), async () =>
+    fromTask(await getTask(code), taskSubject(code)),
+  );
 }
 
 /** Forgets one project's legal moves; call it whenever its state changed. */
 export function invalidateMoves(code: string): void {
-  cache.delete(code);
+  cache.delete(projectKey(code));
 }
 
-/**
- * The moves one task may be offered, from the states its own workflow publishes.
- *
- * Before the first refusal every other state is offered and the result is marked provisional:
- * the board cannot know the edges, and refusing to offer any move would make the surface
- * useless for the sake of a purity the server already enforces. After a refusal the task's
- * `allowed` list — the one the typed 409 carried — is the whole answer, and the result stops
- * being provisional.
- *
- * Pure and synchronous: no request is made, so a grab paints legality on the same frame.
- */
-export function taskMoves(
-  code: string,
-  states: readonly StateOption[],
-  currentStateCode: string,
-  currentStateLabel: string,
-): MovesResult {
-  const learned = taskAllowed.get(code);
-  const targets = states.filter((state) => {
-    if (state.code === currentStateCode) return false;
-    return learned === undefined || learned.has(state.code);
-  });
-  return {
-    kind: "ready",
-    stateLabel: currentStateLabel,
-    isProvisional: learned === undefined,
-    options: targets.map((state) => ({
-      toStateCode: state.code,
-      label: state.label,
-      requiresReason: taskReasonEdges.has(edgeKey(currentStateCode, state.code)),
-      missingFields: [],
-    })),
-  };
-}
-
-/**
- * Records what the server said one task may actually do, from a refused transition's
- * `allowed`. The next grab of that card paints only those columns as legal.
- */
-export function rememberTaskMoves(
-  code: string,
-  allowed: readonly string[],
-): void {
-  taskAllowed.set(code, new Set(allowed));
-}
-
-/** Records that one task edge demands a reason, so the next attempt asks before posting. */
-export function rememberTaskReason(
-  fromStateCode: string,
-  toStateCode: string,
-): void {
-  taskReasonEdges.add(edgeKey(fromStateCode, toStateCode));
-}
-
-/** Forgets a task's learned legal set; call it whenever its state changed. */
+/** Forgets one task's legal moves; call it whenever its state changed. */
 export function invalidateTaskMoves(code: string): void {
-  taskAllowed.delete(code);
-}
-
-function edgeKey(from: string, to: string): string {
-  return `${from}>${to}`;
+  cache.delete(taskKey(code));
 }
 
 /**
@@ -219,13 +158,15 @@ export async function submitMove(
 /**
  * Executes one task transition (`POST /api/v1/tasks/{code}/transition`).
  *
- * Same contract as {@link submitMove}: the response proves the write, the envelope repaints.
+ * Same contract as {@link submitMove}: the response proves the write, the envelope repaints,
+ * and the cached legality is dropped first because a transition that lands makes it stale.
  */
 export async function submitTaskMove(
   code: string,
   toStateCode: string,
   reason: string,
 ): Promise<Result<TaskItem>> {
+  invalidateTaskMoves(code);
   return postTaskTransition(code, { to_state: toStateCode, reason });
 }
 
@@ -235,18 +176,21 @@ export async function submitTaskMove(
  * `error.message` is generated English prose for logs and is never shown (`docs/API.md`
  * §4.2); every branch here keys on `code` / `backendCode`, so a message reworded server-side
  * cannot change what the operator reads.
+ *
+ * `nameState` turns a workflow state code into the label the surface renders for it, so a
+ * refused move can say what *is* possible in the operator's own vocabulary.
  */
 export function moveErrorCopy(
   error: ApiError,
   subject: MoveSubject,
   targetLabel: string,
+  nameState: (stateCode: string) => string,
 ): MoveErrorCopy {
   switch (error.kind) {
     case "transition_not_allowed":
       return {
         title: `${subject.code} no puede pasar a ${targetLabel}`,
-        detail:
-          "El flujo de trabajo no tiene esa transición desde el estado actual. El tablero tenía una lista vieja de movimientos; ya la descartó.",
+        detail: allowedDetail(error.allowed.map(nameState)),
       };
     case "validation":
       return {
@@ -281,6 +225,20 @@ export function moveErrorCopy(
 }
 
 /**
+ * Names what the card *can* do, from the `allowed` list the 409 carried.
+ *
+ * A refusal that only says "no" leaves the operator aiming at columns until one takes the
+ * card; the server already knows the answer and puts it in `details.allowed` (`docs/API.md`
+ * §2.5), so the only thing left to do is say it out loud.
+ */
+function allowedDetail(stateLabels: readonly string[]): string {
+  if (stateLabels.length === 0) {
+    return "Desde su estado actual el flujo no permite ningún movimiento.";
+  }
+  return `Desde su estado actual solo puede pasar a ${spanishList(stateLabels)}.`;
+}
+
+/**
  * Spanish name of a capability the API named in a 403.
  *
  * `ops_lead` is the only one the product has today; anything else renders under its wire
@@ -292,23 +250,59 @@ function capabilityName(required: string): string {
 }
 
 /**
- * Words a failed *lookup* — asking a project what it may do, not asking it to do something.
+ * One lookup, deduplicated and cached.
+ *
+ * `read` is a client call, and client calls never throw (`PATTERNS_FRONTEND.md` §3), so the
+ * `error` arm is the only failure shape a caller has to handle. Only `ready` is cached: a
+ * refused or offline lookup must be retried by the next grab, not remembered as an answer.
+ */
+async function resolve(
+  key: string,
+  read: () => Promise<MovesResult>,
+): Promise<MovesResult> {
+  const cached = cache.get(key);
+  if (cached !== undefined) return cached;
+  const running = inFlight.get(key);
+  if (running !== undefined) return running;
+
+  const request = read()
+    .then((resolved) => {
+      if (resolved.kind === "ready") cache.set(key, resolved);
+      return resolved;
+    })
+    .finally(() => {
+      inFlight.delete(key);
+    });
+  inFlight.set(key, request);
+  return request;
+}
+
+function projectKey(code: string): string {
+  return `project:${code}`;
+}
+
+function taskKey(code: string): string {
+  return `task:${code}`;
+}
+
+/**
+ * Words a failed *lookup* — asking an aggregate what it may do, not asking it to do
+ * something.
  *
  * Kept apart from {@link moveErrorCopy} because the two failures are different sentences: one
  * says a move was refused, the other says we never learned which moves exist.
  */
-function lookupErrorCopy(error: ApiError): MoveErrorCopy {
+function lookupErrorCopy(error: ApiError, subject: MoveSubject): MoveErrorCopy {
   switch (error.kind) {
     case "network":
       return {
         title: "Sin conexión con el servidor",
-        detail:
-          "No pudimos consultar los movimientos legales de este proyecto. Vuelve a intentarlo.",
+        detail: `No pudimos consultar qué movimientos admite ${subject.noun}. Vuelve a intentarlo.`,
       };
     case "not_found":
       return {
-        title: "El proyecto ya no está en el portafolio",
-        detail: "Actualiza el tablero para ver el estado real.",
+        title: `${subject.code} ya no existe`,
+        detail: `Actualiza el tablero para ver ${subject.noun} tal como está en el servidor.`,
       };
     case "auth":
       return {
@@ -322,28 +316,67 @@ function lookupErrorCopy(error: ApiError): MoveErrorCopy {
     default:
       return {
         title: "No pudimos consultar los movimientos",
-        detail:
-          "El servidor no devolvió las transiciones legales, así que el tablero no puede ofrecer ninguna.",
+        detail: `El servidor no devolvió las transiciones legales de ${subject.code}, así que el tablero no puede ofrecer ninguna.`,
       };
   }
 }
 
-/**
- * The `error` arm of a moves lookup, plus the legality of every transition the project
- * reported: legal in the workflow, and satisfiable with the data the project has today.
- */
-function toMovesResult(result: Result<ProjectDetail>): MovesResult {
-  if (!result.ok) {
-    const copy = lookupErrorCopy(result.error);
-    return { kind: "error", title: copy.title, detail: copy.detail };
-  }
+/** A project's answer: its transitions, and which of their required fields it lacks. */
+function fromProject(
+  result: Result<ProjectDetail>,
+  subject: MoveSubject,
+): MovesResult {
+  if (!result.ok) return errorResult(result.error, subject);
   const project = result.data;
-  const empty = emptyAttributes(project);
+  return toMovesResult(project.transitions, project.state.label, {
+    name: project.name,
+    summary: project.summary ?? null,
+    next_step: project.next_step ?? null,
+    target_date: project.target_date ?? null,
+    start_date: project.start_date ?? null,
+    business_value: project.business_value ?? null,
+    owner: project.owner ?? null,
+    stage: project.stage ?? null,
+    project_type: project.project_type ?? null,
+  });
+}
+
+/** A task's answer, read exactly the same way — same shape, same rules, different endpoint. */
+function fromTask(
+  result: Result<TaskDetail>,
+  subject: MoveSubject,
+): MovesResult {
+  if (!result.ok) return errorResult(result.error, subject);
+  const task = result.data;
+  return toMovesResult(task.transitions, task.state.label, {
+    title: task.title,
+    detail: task.detail,
+    assignee: task.assignee ?? null,
+    due_date: task.due_date ?? null,
+    last_progress: task.last_progress,
+    priority: task.priority,
+  });
+}
+
+function errorResult(error: ApiError, subject: MoveSubject): MovesResult {
+  const copy = lookupErrorCopy(error, subject);
+  return { kind: "error", title: copy.title, detail: copy.detail };
+}
+
+/**
+ * The `ready` arm: every transition the aggregate reported, plus whether the data it holds
+ * today satisfies each one.
+ */
+function toMovesResult(
+  transitions: readonly Transition[],
+  stateLabel: string,
+  values: Readonly<Record<string, unknown>>,
+): MovesResult {
+  const empty = emptyAttributes(transitions, values);
   return {
     kind: "ready",
-    stateLabel: project.state.label,
-    isProvisional: false,
-    options: project.transitions.map((transition) => ({
+    stateLabel,
+    options: transitions.map((transition) => ({
       toStateCode: transition.to_state.code,
       label: transition.label,
       requiresReason: transition.requires_reason,
@@ -355,26 +388,18 @@ function toMovesResult(result: Result<ProjectDetail>): MovesResult {
 }
 
 /**
- * The project attributes `requires_fields` can name, and whether each is currently empty.
+ * The attributes `requires_fields` names, and whether each is currently empty.
  *
  * An attribute the frontend does not know about counts as empty: the control then renders
  * dead and names the field, which is the honest answer to a contract that grew server-side —
  * the opposite mistake enables a move the API is about to refuse.
  */
-function emptyAttributes(project: ProjectDetail): ReadonlySet<string> {
-  const values: Record<string, unknown> = {
-    name: project.name,
-    summary: project.summary ?? null,
-    next_step: project.next_step ?? null,
-    target_date: project.target_date ?? null,
-    start_date: project.start_date ?? null,
-    business_value: project.business_value ?? null,
-    owner: project.owner ?? null,
-    stage: project.stage ?? null,
-    project_type: project.project_type ?? null,
-  };
+function emptyAttributes(
+  transitions: readonly Transition[],
+  values: Readonly<Record<string, unknown>>,
+): ReadonlySet<string> {
   const empty = new Set<string>();
-  for (const transition of project.transitions) {
+  for (const transition of transitions) {
     for (const field of transition.requires_fields) {
       const value = values[field];
       if (value === undefined || value === null || value === "") {
@@ -385,6 +410,13 @@ function emptyAttributes(project: ProjectDetail): ReadonlySet<string> {
   return empty;
 }
 
+/**
+ * A payload the server refused.
+ *
+ * The `reason` branch names a motive the server would not take, never an instruction to try
+ * again: the board asks for the reason before it posts, so "vuelve a intentarlo" would send
+ * the operator back around a loop that already ran.
+ */
 function validationDetail(
   fields: Record<string, string[]>,
   noun: string,
@@ -394,7 +426,7 @@ function validationDetail(
     return "El servidor rechazó los datos del movimiento.";
   }
   if (names.includes("reason")) {
-    return "Esta transición exige un motivo. Vuelve a intentarlo y el tablero te lo pedirá.";
+    return "El servidor no aceptó el motivo de esta transición.";
   }
   return `Faltan datos en ${noun}: ${fieldList(names)}.`;
 }

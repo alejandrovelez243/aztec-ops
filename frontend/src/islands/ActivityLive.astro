@@ -89,4 +89,22 @@ import { FEED_COPY } from "../components/activity/copy";
   .stale .chip:empty {
     display: none;
   }
+
+  /*
+   * A refetch is visible without taking the records off the screen: the list
+   * dims and stops accepting clicks for the moment it is being replaced. A
+   * skeleton on every keystroke would answer "what matched?" by hiding the last
+   * answer, which is worse than a stale one.
+   */
+  .live[data-pending="true"] :global([data-activity-body]) {
+    opacity: 0.55;
+    pointer-events: none;
+    transition: opacity var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .live[data-pending="true"] :global([data-activity-filters]) {
+    /* The bar stays live: the operator must be able to change their mind
+       mid-request, and the sequence guard makes that safe. */
+    cursor: progress;
+  }
 </style>

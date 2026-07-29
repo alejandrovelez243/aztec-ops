@@ -19,7 +19,10 @@ const CARDS_PER_COLUMN = 2;
 const bands = Array.from({ length: BANDS }, (_, index) => index);
 const bandCards = Array.from({ length: CARDS_PER_BAND }, (_, index) => index);
 const columns = Array.from({ length: COLUMNS }, (_, index) => index);
-const columnCards = Array.from({ length: CARDS_PER_COLUMN }, (_, index) => index);
+const columnCards = Array.from(
+  { length: CARDS_PER_COLUMN },
+  (_, index) => index,
+);
 ---
 
 <div class="skeleton-stage" aria-busy="true" aria-live="polite">

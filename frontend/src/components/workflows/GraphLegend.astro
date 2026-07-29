@@ -1,0 +1,103 @@
+---
+/**
+ * How to read the diagram: what an arrow's head means, what its side means, and
+ * what the mark on a caption means.
+ *
+ * It sits **outside** the figure and stays in the accessibility tree even though
+ * the drawing does not. Two of its entries are about the picture and cost a
+ * reader who cannot see it nothing; the other two are the legend's real job —
+ * the reason mark names the column the table carries as "Motivo obligatorio",
+ * and "sin salida" names the mark that answers why a state refuses every move.
+ *
+ * The swatches draw their own arrowheads instead of referencing a `<marker>`:
+ * this component renders once per workflow, and a marker carries an `id`, which
+ * is document-wide. Two legends would be two elements with one id.
+ */
+---
+
+<ul class="legend small">
+  <li class="entry">
+    <span class="swatch" aria-hidden="true">
+      <svg viewBox="0 0 40 14" width="40" height="14" focusable="false">
+        <path
+          d="M5 11 C 5 1, 35 1, 35 11"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"></path>
+        <path d="M31.8 6 L38.2 6 L35 11.6 Z" fill="currentColor"></path>
+      </svg>
+    </span>
+    <span>
+      La punta de la flecha señala el destino: sale del estado de origen y entra
+      en el de destino.
+    </span>
+  </li>
+
+  <li class="entry">
+    <span class="swatch" aria-hidden="true">
+      <svg viewBox="0 0 40 14" width="40" height="14" focusable="false">
+        <path
+          d="M35 3 C 35 13, 5 13, 5 3"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"></path>
+        <path d="M1.8 8 L8.2 8 L5 2.4 Z" fill="currentColor"></path>
+      </svg>
+    </span>
+    <span>
+      Las flechas de arriba avanzan en el orden del flujo; las de abajo vuelven
+      a un estado anterior.
+    </span>
+  </li>
+
+  <li class="entry">
+    <span class="swatch" aria-hidden="true">
+      <span class="chip tone-ambar">Mover<b>*</b></span>
+    </span>
+    <span>
+      Un asterisco junto al nombre del movimiento: ese paso pide un motivo
+      escrito.
+    </span>
+  </li>
+
+  <li class="entry">
+    <span class="swatch" aria-hidden="true">
+      <span class="chip">sin salida</span>
+    </span>
+    <span>
+      De un estado marcado <b>sin salida</b> no parte ninguna flecha. Entre dos estados
+      sin flecha tampoco hay paso posible.
+    </span>
+  </li>
+</ul>
+
+<style>
+  .legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: var(--space-2) var(--space-5);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-control);
+    background-color: var(--pozo);
+  }
+
+  .entry {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .swatch {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--space-8);
+    color: var(--tinta-suave);
+    flex: none;
+  }
+
+  .swatch .chip {
+    text-transform: none;
+    letter-spacing: 0;
+  }
+</style>

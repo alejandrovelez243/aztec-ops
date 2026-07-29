@@ -21,6 +21,8 @@ import {
   originBadge,
   originTone,
   policyExplanation,
+  SYSTEM_ACTOR,
+  SYSTEM_ACTOR_LABEL,
   verbLabel,
 } from "./vocabulary";
 
@@ -30,44 +32,104 @@ export interface ProjectRef {
   readonly name: string;
 }
 
-/**
- * Business codes the app already knows, longest first.
- *
- * Longest-first is what makes prefix resolution correct rather than lucky: a
- * task code `PRJ-1-T02` must resolve to `PRJ-1` and never to a hypothetical
- * `PRJ` that happens to sort earlier.
- */
-export interface ProjectIndex {
-  readonly entries: readonly ProjectRef[];
+/** One person as the feed needs it: their `accounts.User.code` and their name. */
+export interface MemberRef {
+  readonly alias: string;
+  readonly label: string;
 }
 
-/** Builds the lookup from whatever project list the page already fetched. */
-export function buildProjectIndex(
+/**
+ * The names the app already holds, so a record's code can be read as a thing.
+ *
+ * Projects are kept longest-code-first, which is what makes prefix resolution
+ * correct rather than lucky: a task code `PRJ-1-T02` must resolve to `PRJ-1` and
+ * never to a hypothetical `PRJ` that happens to sort earlier.
+ */
+export interface Directory {
+  readonly projects: readonly ProjectRef[];
+  readonly members: readonly MemberRef[];
+}
+
+/** Builds the lookup from the lists the page already fetched. */
+export function buildDirectory(
   projects: readonly ProjectRef[],
-): ProjectIndex {
+  members: readonly MemberRef[],
+): Directory {
   return {
-    entries: [...projects].sort((a, b) => b.code.length - a.code.length),
+    projects: [...projects].sort((a, b) => b.code.length - a.code.length),
+    members: [...members],
   };
 }
 
+/** An empty directory: every subject then renders as its bare code. */
+export const EMPTY_DIRECTORY: Directory = { projects: [], members: [] };
+
 /**
- * Resolves a record's subject to the project it belongs to.
+ * What a record is about, resolved to something a person can read and open.
  *
- * `entity_id` is a business code, and a task's code carries its project's as a
- * prefix (`PRJ-01-T02`), so one index answers for both. A blocker names itself
- * with an id that belongs to no project code, and that is a legitimate `null`:
- * the row then renders its subject without a link rather than guessing.
+ * The kind is taken from `entity_type` and **never guessed from the id**. That
+ * was the defect: a member's `entity_id` is an `accounts.User.code`, and running
+ * it through the project prefix match put a phantom project name and a project
+ * link on a row about a person. A record says what kind of thing it concerns;
+ * the frontend's job is to believe it.
  */
-export function resolveProject(
+export type ActivitySubject =
+  | {
+      readonly kind: "project";
+      /** The project the record belongs to, even when the id is a task's. */
+      readonly code: string;
+      readonly name: string;
+      readonly href: string;
+    }
+  | { readonly kind: "member"; readonly alias: string; readonly label: string }
+  | { readonly kind: "plain" };
+
+/** The project a project- or task-scoped code belongs to. */
+function findProject(
   entityId: string,
-  index: ProjectIndex,
+  directory: Directory,
 ): ProjectRef | null {
-  for (const entry of index.entries) {
+  for (const entry of directory.projects) {
     if (entityId === entry.code || entityId.startsWith(`${entry.code}-`)) {
       return entry;
     }
   }
   return null;
+}
+
+/**
+ * Resolves one record's subject.
+ *
+ * A kind the directory cannot name — a blocker's numeric id, a role code, a
+ * project archived out of the queue this page read — is `plain`, and the row
+ * renders the bare business code. That is the honest answer: the trail outlives
+ * the rows it describes, and inventing a name for something no longer on file
+ * would be worse than showing the code somebody can search for.
+ */
+export function resolveSubject(
+  entityType: string,
+  entityId: string,
+  directory: Directory,
+): ActivitySubject {
+  if (entityType === "member") {
+    const member = directory.members.find((one) => one.alias === entityId);
+    return {
+      kind: "member",
+      alias: entityId,
+      label: member?.label ?? entityId,
+    };
+  }
+  if (entityType === "project" || entityType === "task") {
+    const project = findProject(entityId, directory);
+    if (project === null) return { kind: "plain" };
+    return {
+      kind: "project",
+      code: project.code,
+      name: project.name,
+      href: `/projects/${encodeURIComponent(project.code)}`,
+    };
+  }
+  return { kind: "plain" };
 }
 
 /** One record, with every string it renders already decided. */
@@ -89,9 +151,12 @@ export interface ActivityRow {
   readonly entityType: string;
   readonly entityTypeLabel: string;
   readonly entityId: string;
-  /** `null` when the subject resolves to no project (a blocker id). */
-  readonly projectCode: string | null;
-  readonly projectName: string | null;
+  /** What the record is about, resolved from its declared kind. */
+  readonly subject: ActivitySubject;
+  /** The subject's name, or `""` when only its code is known. */
+  readonly subjectLabel: string;
+  /** Where the subject can be opened, or `null` when it has no page. */
+  readonly subjectHref: string | null;
   readonly occurredAt: string;
   /** "hace 3 días"; falls back to the raw instant if it cannot be parsed. */
   readonly occurredLabel: string;
@@ -100,19 +165,20 @@ export interface ActivityRow {
   readonly correlationId: string;
 }
 
-/** The actor string the platform signs its own records with. */
-const SYSTEM_ACTOR = "system";
-
-/** How the platform's own signature reads on screen. */
-const SYSTEM_ACTOR_LABEL = "Sistema";
+/** The subject's readable name, or `""` when the directory could not name it. */
+function labelOf(subject: ActivitySubject): string {
+  if (subject.kind === "project") return subject.name;
+  if (subject.kind === "member") return subject.label;
+  return "";
+}
 
 /** Maps one record onto the row the feed renders. */
 export function toRow(
   entry: ActivityEntry,
-  index: ProjectIndex,
+  directory: Directory,
   now: Date,
 ): ActivityRow {
-  const project = resolveProject(entry.entity_id, index);
+  const subject = resolveSubject(entry.entity_type, entry.entity_id, directory);
   const origin = entry.origin;
   return {
     id: entry.id,
@@ -129,8 +195,9 @@ export function toRow(
     entityType: entry.entity_type,
     entityTypeLabel: entityTypeLabel(entry.entity_type),
     entityId: entry.entity_id,
-    projectCode: project?.code ?? null,
-    projectName: project?.name ?? null,
+    subject,
+    subjectLabel: labelOf(subject),
+    subjectHref: subject.kind === "project" ? subject.href : null,
     occurredAt: entry.occurred_at,
     occurredLabel: relativeTime(entry.occurred_at, now) ?? entry.occurred_at,
     occurredTitle: formatInstant(entry.occurred_at) ?? entry.occurred_at,
@@ -141,10 +208,10 @@ export function toRow(
 /** Maps a page of records, newest first, preserving the server's order. */
 export function toRows(
   entries: readonly ActivityEntry[],
-  index: ProjectIndex,
+  directory: Directory,
   now: Date,
 ): readonly ActivityRow[] {
-  return entries.map((entry) => toRow(entry, index, now));
+  return entries.map((entry) => toRow(entry, directory, now));
 }
 
 /**

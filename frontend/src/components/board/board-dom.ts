@@ -46,7 +46,6 @@ export const SEL = {
   moveMenu: "[data-move-menu]",
   moveMenuList: "[data-move-menu-list]",
   moveMenuTitle: "[data-move-menu-title]",
-  moveMenuNote: "[data-move-menu-note]",
   staleBanner: "[data-board-stale]",
   staleText: "[data-board-stale-text]",
   staleAction: "[data-board-stale-action]",

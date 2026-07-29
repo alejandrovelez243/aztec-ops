@@ -121,13 +121,21 @@ object-level "only your own" rules, and there should not be: a colleague must be
 project while its owner is on holiday. "My tickets" is a **filter** — `?assignee=camila.torres` on
 the task list, `?owner=` on the queue — exactly as it is in Jira. A filter, never a restriction.
 
-**Level 2 — ops lead.** Two capabilities, both of which overrule the engine rather than feed it:
+**Level 2 — ops lead.** Two capabilities. The first overrules the engine rather than feeding it;
+the second decides who is in the operation at all, which is upstream of everything the engine
+ranks:
 
 | Route | Why it is gated |
 |---|---|
 | `POST /projects/{code}/priority-override` | Forces the ranking against the computed score. |
 | `DELETE /projects/{code}/priority-override` | The other half of the same capability: a rank one person may force and anybody may lift is a suggestion, not a decision. |
 | `POST /recompute` | Portfolio-wide and expensive. `POST /projects/{code}/recompute` is *not* gated — its blast radius is one project. |
+| `POST` / `PATCH` / `DELETE /team/members{,/…}` | Who is on the roster, and what capacity they are judged against — the divisor of every `OWNER_OVERLOADED` flag. |
+| `POST /team/members/{code}/password` | Replacing somebody else's credential. |
+| `POST /catalog/roles`, `PATCH /catalog/roles/{code}` | The one taxonomy writable outside `/admin/` (§2.16). |
+
+The 403 names which of the two was refused in `details.action`, so an operator who pressed
+"Añadir persona" is not told they lack permission to override a ranking.
 
 An ops lead is `accounts.User.is_staff`. **Why that and not the `role` foreign key:** `catalog.Role`
 is operator-editable taxonomy — rows are renamed, reordered and retired from the admin like every
@@ -788,19 +796,38 @@ screen. The only `422` on this endpoint is a malformed `correlation_id` or datet
 `origin=POLICY` is how the engine's own behaviour is audited — every score the ranking moved on its
 own, portfolio-wide, in one read.
 
-### 2.14 `GET /api/v1/team/load` — load per person
+### 2.14 `GET /api/v1/team/load` — the roster
 
-Computed from `Task` rows at read time. The `Team` sheet counters in the source dataset are a
-stale projection and are not imported.
+Load is computed from `Task` rows at read time. The `Team` sheet counters in the source dataset
+are a stale projection and are not imported.
 
-Query: `owner` (repeatable), `include_inactive` (bool, default `false`). Not paginated: five rows.
+Query — every parameter optional, and the filters that are columns of a person are applied by the
+database while `overloaded` and `order_by` are applied to the derived rows:
+
+| Parameter | Values | Default | Notes |
+|---|---|---|---|
+| `owner` | repeatable `User.code` | — | Restrict to these people |
+| `role` | repeatable `Role.code` | — | ORs its values, like every multi-select |
+| `q` | free text | — | Case-insensitive substring over `code` and the display name |
+| `status` | `active` \| `inactive` \| `all` | `active` | Replaced the earlier `include_inactive` boolean, which could not express "only the people we have retired" |
+| `overloaded` | `true` \| `false` | absent | Absent is everybody; `false` is **who has room**, which is the question somebody about to assign work is asking |
+| `order_by` | see below, `-` prefix descends | `-utilization` | Outside the allowlist is `422` carrying `details.allowed` |
+
+`order_by` allowlist: `label`, `role`, `utilization`, `load_points`, `capacity`, `open_tasks`,
+`overdue_tasks`, `blocked_tasks`, `urgent_tasks`, `projects_owned`. Ties always break on `label`,
+so two people on identical load keep a stable order between two reads of unchanged data.
+
+Not paginated: the result set is bounded by how many people the company employs.
 
 Response `200: { items: TeamLoadOut[] }`:
 
 ```
 TeamLoadOut {
   alias, label: str
-  role: str | null
+  role: str | null              # the label, to render
+  role_code: str | null         # the slug, to send back to PATCH /team/members/{code}
+  is_active: bool               # false = retired from new assignment; their work is untouched
+  has_password: bool            # false = a real assignee who cannot sign in yet
   weekly_capacity_points: int
   load_points: int              # sum of Priority.weight over open assigned tasks
   utilization: float            # load_points / weekly_capacity_points
@@ -812,16 +839,85 @@ TeamLoadOut {
 
 ```json
 {"items": [
-  {"alias": "camila", "label": "Camila Torres", "role": "Delivery",
+  {"alias": "camila", "label": "Camila Torres", "role": "Delivery", "role_code": "delivery",
+   "is_active": true, "has_password": true,
    "weekly_capacity_points": 40, "load_points": 62, "utilization": 1.55, "is_overloaded": true,
    "open_tasks": 28, "blocked_tasks": 7, "high_or_critical_open": 20, "overdue_tasks": 12,
    "projects_owned": 7},
   {"alias": "daniel", "label": "Daniel Rojas", "role": "Commercial / Delivery",
+   "role_code": "commercial_delivery", "is_active": true, "has_password": true,
    "weekly_capacity_points": 40, "load_points": 24, "utilization": 0.6, "is_overloaded": false,
    "open_tasks": 11, "blocked_tasks": 2, "high_or_critical_open": 6, "overdue_tasks": 5,
    "projects_owned": 3}
 ]}
 ```
+
+### 2.15 Roster writes — `/api/v1/team/members`
+
+Reading the roster is everybody's business; changing it is an ops lead's. All four routes are
+`auth=ops_lead` and answer `403 permission_denied` with `details.required = "ops_lead"` otherwise.
+They live under `/team/` although the aggregate is `accounts.User`, because the URL space names
+the product's surface and not the app that owns the row.
+
+`MemberOut` is the identity half only — no load, because load is a portfolio aggregate and these
+routes belong to identity:
+
+```
+MemberOut { alias, label: str, role: TaxonomyRef | null,
+            weekly_capacity_points: int, is_active, is_ops_lead, has_password: bool }
+```
+
+| Route | Body | Success | Errors |
+|---|---|---|---|
+| `POST /team/members` | `{code, label, role?, weekly_capacity_points, password?}` | `201 MemberOut` | `409 conflicting_state` (code taken), `422 validation_error` (unknown `role`, capacity out of 1–200, a password the validators refuse) |
+| `PATCH /team/members/{code}` | `{label?, role?, weekly_capacity_points?, is_active?}` | `200 MemberOut` | `404 not_found`, `422 validation_error`, `403` |
+| `DELETE /team/members/{code}` | — | `204` | `404 not_found`, `403` |
+| `POST /team/members/{code}/password` | `{password}` | `200 MemberOut` | `404`, `422 validation_error`, `403` |
+
+Four things are load-bearing:
+
+* **`code` is permanent.** It is what every event and activity record names the person by, so
+  there is no rename. A person whose name changed gets a new `label`.
+* **`DELETE` deletes nothing.** The effect is `is_active = false`: the tasks and projects that
+  name them are untouched, and a row removed underneath those would either cascade the history
+  away or break the foreign keys holding it. `PATCH` with `is_active: true` restores them.
+  Idempotent — retiring somebody already retired is the same `204` and writes no second record.
+* **Absent ≠ `null` on `PATCH`.** An absent `role` is left alone; an explicit `null` unclassifies
+  the person.
+* **Nobody may retire their own account.** `403 permission_denied` — it would end the caller's own
+  session, and if they were the last ops lead it would lock the product for everybody.
+
+`password` omitted on creation is normal: the person is assignable immediately and cannot sign in
+until one is set. A refused password answers with **every** rule it broke in
+`details.fields.password`, not the first — a form that fixes one rule per round trip is a form
+people work around by choosing something worse. The password is never echoed, never logged and
+never published: this route emits no event at all.
+
+### 2.16 `POST /api/v1/catalog/roles`, `PATCH /api/v1/catalog/roles/{code}`
+
+The one taxonomy writable from the product; the other five are decisions about how the business
+works and are still made in `/admin/`. A role is what an operator needs *while doing something
+else* — registering somebody who does a job nobody has typed yet — and a trip to the admin
+mid-form is how a person gets filed under the wrong role permanently. Both routes are ops lead.
+
+| Route | Body / query | Success | Errors |
+|---|---|---|---|
+| `GET /catalog/roles` | `status` ∈ `active \| inactive \| all` (default `all`) | `200 TaxonomyRef[]` | `403` |
+| `POST /catalog/roles` | `{code, label}` | `201 TaxonomyRef` | `409 conflicting_state`, `422`, `403` |
+| `PATCH /catalog/roles/{code}` | `{label?, is_active?}` | `200 TaxonomyRef` | `404 not_found`, `422`, `403` |
+
+`GET /catalog/roles` is the **editor's** list and is deliberately not a flag on `GET /catalog`.
+That one feeds the pickers, where a retired value must never appear; this one has to show the
+retired rows, because a screen that offers "retire" and cannot show what was retired offers a
+delete with better manners. It is ops lead for the same reason the writes are: which roles were
+retired is not something a reader needs in order to read the roster.
+
+A new role is active and goes last in the picker. `is_active: false` takes it out of the pickers
+and leaves everybody already classified under it exactly as they are — nothing is deleted, so
+nobody is silently unclassified. A taken code is a conflict **including a retired role's**: the row
+still exists, so restore it rather than create a second one that would resolve ambiguously ever
+after. Every change writes an `ActivityRecord` under `entity_type: "role"`; none emits an event,
+because a role is picker vocabulary that nothing recomputes from.
 
 Overload never lowers a project's score. It raises `OWNER_OVERLOADED` on that owner's projects,
 which is a staffing decision, not a ranking one.
@@ -964,10 +1060,10 @@ hardcoded 2 is wrong by two orders of magnitude for every zero-decimal currency.
 **Workflow states are deliberately absent.** A state code is unique only inside its workflow, and
 the legal moves out of the state a project is actually in are `transitions` on the project detail
 (§2.2). A global list of states would invite the client to guess legality, which is exactly what
-that field exists to prevent. The *shape* of a workflow — which columns a board has — is a
-different question and is served by §2.18.
+that field exists to prevent. The *configured shape* of a workflow — which columns a board has and
+which arrows an operator drew between them — is a different question and is served by §2.18.
 
-### 2.18 `GET /api/v1/workflows` — the shape of every state graph
+### 2.18 `GET /api/v1/workflows` — every state graph as an operator configured it
 
 Authenticated like every other read; the opt-out list in §1.2 is five routes long and closed.
 
@@ -985,6 +1081,14 @@ WorkflowShape {
   is_active: bool                # false = retired; still served, see below
   engagement_types: TaxonomyRef[]
   states: StateRef[]             # every node, in the operator's `order`
+  transitions: WorkflowEdge[]    # every ACTIVE edge, grouped by source column
+}
+WorkflowEdge {
+  from_state: str                # WorkflowState.code of the source, inside this graph
+  to_state: str                  # WorkflowState.code of the target, inside this graph
+  label: str                     # the operator's wording — "Aprobar", "Pedir cambios"
+  requires_reason: bool          # the move was configured to demand written text
+  requires_fields: str[]         # aggregate attributes the move was configured to demand
 }
 ```
 
@@ -995,7 +1099,13 @@ WorkflowShape {
                 "states": [{"code": "descubrimiento", "label": "Descubrimiento",
                             "category": "BACKLOG", "color": "#f59e0b"},
                            {"code": "bloqueado", "label": "Bloqueado",
-                            "category": "BLOCKED", "color": "#ef4444"}]}]}
+                            "category": "BLOCKED", "color": "#ef4444"}],
+                "transitions": [{"from_state": "descubrimiento", "to_state": "ejecucion",
+                                 "label": "Iniciar ejecucion", "requires_reason": false,
+                                 "requires_fields": ["next_step"]},
+                                {"from_state": "ejecucion", "to_state": "bloqueado",
+                                 "label": "Marcar como bloqueado", "requires_reason": true,
+                                 "requires_fields": []}]}]}
 ```
 
 One document rather than a route per engagement type, for the same reason §2.17 is one document: a
@@ -1003,15 +1113,36 @@ board draws all of its columns at once. Asking per engagement type would also fo
 know *which* type to ask about before its first request, which means reimplementing the binding
 precedence `Workflow.objects.resolve` owns (`DATA_MODEL.md` §2).
 
-**This is shape, not legality, and it is not the global state list §2.17 refuses.** States arrive
-grouped under the graph that owns them — never flat, so the collision that makes a global list
-unsafe (`bloqueada` in two graphs) cannot happen — and **no edge is published at all**. A board
-needs the column set and cannot derive it: columns inferred from the states projects happen to
-occupy cannot represent an empty one, so a workflow whose `Bloqueado` state is unoccupied has no
-such column, cannot say "nothing is blocked", and cannot accept a card dropped into it. Whether
-that drop is allowed is still answered only by `transitions` on the project detail (§2.2); a card
-dragged into a column it may not enter gets the `409 transition_not_allowed` that carries
-`details.allowed` (§1.5), exactly like a stale button.
+**`transitions` here is configuration; `transitions` on a project or a task is permission.** This
+route shipped without edges so that no client could compute legality locally and skip the
+per-project and per-task list, and that rule is unchanged. What makes edges safe on *this* document
+is the distinction between the two questions. This document answers "what did an operator
+configure": it is a picture of the graph as it stands in the admin. A record's own `transitions`
+(§2.2) answers "what may **this** record do **right now**", and the two legitimately disagree — a
+configured edge is refused when the record is not sitting on its `from_state`, when its guard
+rejects the move (`409 guard_rejected`, §1.5, exists precisely because a declared edge can be
+denied), and when a field named in `requires_fields` is empty *on that row*. **An edge existing is
+not a move being legal.** A client that draws an arrow and then acts on it without asking the record
+meets the same `409 transition_not_allowed` carrying `details.allowed` it met before. Nothing in the
+enforcement path reads this document: `validate_transition` re-reads the rows every time it decides.
+
+**Nor is it the global state list §2.17 refuses.** States arrive grouped under the graph that owns
+them — never flat, so the collision that makes a global list unsafe (`bloqueada` in two graphs)
+cannot happen — and every edge names its endpoints by code *inside that same graph*. A board needs
+the column set and cannot derive it: columns inferred from the states projects happen to occupy
+cannot represent an empty one, so a workflow whose `Bloqueado` state is unoccupied has no such
+column, cannot say "nothing is blocked", and cannot accept a card dropped into it. A lifecycle
+diagram needs the arrows and cannot derive those either, since an edge no record has taken is
+invisible in the data.
+
+`transitions` carries **active edges only**. `is_active = false` is how an operator withdraws a
+move; the transition service refuses it, so publishing it as a drawable arrow would advertise a move
+nothing can take. An empty list is legitimate and means no move has been declared yet. The `guard`
+name is deliberately **not** published, for the same reason it is absent from §2.2: whether a guard
+passes depends on facts no row in the graph holds, so naming it would invite the client to predict
+an answer it cannot compute. Endpoints are codes rather than `StateRef` objects because the same
+document publishes every node in full under `states`; duplicating labels onto both ends of every
+arrow is how one response ends up disagreeing with itself after a rename.
 
 Unlike §2.17, **retired graphs are served too**, flagged `is_active: false`. The catalog filters
 because it feeds pickers, where offering a retired value would let somebody choose it and quietly

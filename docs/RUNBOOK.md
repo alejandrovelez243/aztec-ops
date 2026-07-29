@@ -620,6 +620,27 @@ new container is Astro's own npm parent: the server shuts itself down on startup
 `npm error signal SIGTERM` instead of the lock message. That is a worse failure, because it looks
 like an unrelated crash.
 
+## 12c. Tests fail with `database "test_aztec" does not exist`
+
+**Symptom.** `make test` reports errors on tests that have nothing to do with each other, all of
+them at setup, with `django.db.utils.OperationalError: ... database "test_aztec" does not exist —
+It seems to have just been dropped or renamed.` Running the same files again on their own passes.
+
+**Cause.** Two test runs at once. Django derives one test-database name from the real one, so both
+runs target `test_aztec`; the second run's setup drops it while the first is still using it. The
+failures land on whichever tests happened to be running, which is why they look random and why the
+file you blame passes in isolation.
+
+**Fix.** Give each run its own database with `TEST_DB_SUFFIX`:
+
+```bash
+docker compose exec -T -e TEST_DB_SUFFIX=_mine api python -m pytest apps
+```
+
+The suffix is empty by default, so a single run keeps the ordinary name. Reach for it whenever
+something else might be testing at the same time — a parallel agent, a colleague on the same host,
+a second shell.
+
 ## 13. `loaddata` fails on a foreign key, or appears to duplicate rows
 
 **Symptom A.** `DeserializationError: Problem installing fixture ... matching query does not exist`.

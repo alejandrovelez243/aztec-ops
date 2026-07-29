@@ -22,7 +22,7 @@ import { setPending } from "./dom";
 import { failureCopy } from "./messages";
 import { mountOwnerMenus } from "./owner-menu";
 import { applyProjectDetail, hasRisk } from "./project-paint";
-import { invalidateRoster } from "./roster";
+import { invalidateRoster } from "../../lib/team/roster";
 
 /**
  * The risk this field exists to answer. A flag code, never a label: codes are

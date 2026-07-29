@@ -51,17 +51,6 @@ export const TASK_MOVES_UNAVAILABLE =
   "Mover la tarea todavía no está disponible desde esta pantalla: aún no sabemos qué movimientos permite su flujo.";
 
 /**
- * Why a task row's owner control is dead, when it is.
- *
- * `PATCH /api/v1/tasks/{code}` is the endpoint that carries the change; until it
- * reaches the typed client the control renders visibly dead with this as its
- * tooltip — never hidden, and never wired to some other route that happens to
- * exist.
- */
-export const TASK_OWNER_UNAVAILABLE =
-  "Cambiar el responsable de una tarea todavía no está disponible desde esta pantalla.";
-
-/**
  * Aggregate attributes a transition's `requires_fields` can name, and request
  * fields a `validation_error` can blame. Both are attribute names, never
  * labels, so one map serves both.

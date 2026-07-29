@@ -1,0 +1,189 @@
+---
+/**
+ * The question the roster answers: search, three facets, and the way in for a new person.
+ *
+ * Every control is a real form field with a `name` matching the API's own query parameter, and
+ * the island copies them straight into the URL. That is what keeps the toolbar, the address bar
+ * and the request describing the same thing — a toolbar with its own vocabulary would need a
+ * translation table, and the table is where the three drift apart.
+ *
+ * The controls are rendered with the current query already selected, so a shared link opens on
+ * the view it promises rather than on the default one.
+ */
+import Icon from "../ui/Icon.astro";
+import type { RosterQuery } from "./table";
+import type { TaxonomyRef } from "../../lib/api/domain";
+
+export interface Props {
+  query: RosterQuery;
+  /** Every role a person can be classified under, in the order an operator arranged them. */
+  roles: readonly TaxonomyRef[];
+}
+
+const { query, roles } = Astro.props;
+
+/** `overloaded` is tri-state on the wire; the select carries the three as strings. */
+const overloadedValue =
+  query.overloaded === null ? "" : String(query.overloaded);
+---
+
+<form class="toolbar card" data-roster-toolbar role="search" novalidate>
+  <label class="search">
+    <span class="visually-hidden">Buscar una persona</span>
+    <span class="search-icon" aria-hidden="true">
+      <Icon name="search" size={16} />
+    </span>
+    <input
+      class="input"
+      type="search"
+      name="q"
+      value={query.search}
+      placeholder="Buscar por nombre o código"
+      autocomplete="off"
+    />
+  </label>
+
+  <label class="facet">
+    <span class="label">Rol</span>
+    <select class="input" name="role">
+      <option value="" selected={query.role === null}>Todos</option>
+      {
+        roles.map((role) => (
+          <option value={role.code} selected={query.role === role.code}>
+            {role.label}
+          </option>
+        ))
+      }
+    </select>
+  </label>
+
+  <label class="facet">
+    <span class="label">Estado</span>
+    <select class="input" name="status">
+      <option value="active" selected={query.status === "active"}
+        >Activas</option
+      >
+      <option value="inactive" selected={query.status === "inactive"}>
+        Retiradas
+      </option>
+      <option value="all" selected={query.status === "all"}>Todas</option>
+    </select>
+  </label>
+
+  <label class="facet">
+    <span class="label">Carga</span>
+    <select class="input" name="overloaded">
+      <option value="" selected={overloadedValue === ""}>Cualquiera</option>
+      <option value="true" selected={overloadedValue === "true"}>
+        Con sobrecarga
+      </option>
+      {
+        /* The third answer a boolean could not give: who still has room to take work. */
+      }
+      <option value="false" selected={overloadedValue === "false"}>
+        Con margen
+      </option>
+    </select>
+  </label>
+
+  <div class="tools">
+    <button class="btn btn-secondary" type="button" data-roster-action="clear">
+      Limpiar
+    </button>
+    {
+      /*
+       * Roles sit beside the facet that uses them rather than behind a settings screen: the
+       * moment somebody needs a role that does not exist is the moment they are filling this
+       * form, and a trip to `/admin/` is how a person gets filed under the wrong one.
+       */
+    }
+    <button
+      class="btn btn-secondary"
+      type="button"
+      data-roster-action="roles"
+      data-roster-actions
+      hidden
+    >
+      Roles
+    </button>
+    <button
+      class="btn btn-primary"
+      type="button"
+      data-roster-action="create"
+      data-roster-actions
+      hidden
+    >
+      <Icon name="plus" size={16} />
+      Añadir persona
+    </button>
+  </div>
+</form>
+
+<style>
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--space-3);
+    padding: var(--space-4);
+  }
+
+  .search {
+    position: relative;
+    flex: 1 1 18rem;
+    min-width: 12rem;
+  }
+
+  .search-icon {
+    position: absolute;
+    top: 50%;
+    left: var(--space-3);
+    transform: translateY(-50%);
+    color: var(--tinta-media);
+    line-height: 0;
+  }
+
+  .search .input {
+    width: 100%;
+    padding-left: calc(var(--space-3) * 2 + 16px);
+  }
+
+  .facet {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .facet .input {
+    min-width: 9rem;
+  }
+
+  .tools {
+    display: flex;
+    gap: var(--space-2);
+    margin-left: auto;
+  }
+
+  /* Load-bearing: the island hides the roster-writing buttons for anyone who is not an ops
+     lead, and `.btn`'s `display: inline-flex` would otherwise beat the user agent's `[hidden]`
+     rule and offer every reader an action the API will refuse. */
+  .tools [hidden] {
+    display: none;
+  }
+
+  @media (max-width: 767px) {
+    .facet,
+    .facet .input {
+      flex: 1 1 100%;
+      min-width: 0;
+      width: 100%;
+    }
+
+    .tools {
+      width: 100%;
+    }
+
+    .tools .btn {
+      flex: 1;
+    }
+  }
+</style>

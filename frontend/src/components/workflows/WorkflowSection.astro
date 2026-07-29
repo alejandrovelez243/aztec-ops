@@ -1,0 +1,152 @@
+---
+/**
+ * One configured workflow: what it is, what it governs, and the two views of its
+ * graph — the diagram, and the table that carries the same edges accessibly.
+ *
+ * Both come from one {@link WorkflowView}, so the picture and the rows cannot
+ * fall out of step: the drawing is a projection of the same edge list the table
+ * enumerates, not a second reading of the wire.
+ *
+ * The header states the facts a reader needs before believing anything below it
+ * — which records this graph applies to, whether it is the default one, which
+ * engagement types are bound to it, and whether it is active at all. An inactive
+ * workflow still draws: it is configuration, and "why is nothing moving" is
+ * answered by seeing it marked inactive, not by hiding it.
+ */
+import GraphLegend from "./GraphLegend.astro";
+import StateGraph from "./StateGraph.astro";
+import TransitionTable from "./TransitionTable.astro";
+import type { WorkflowView } from "./graph";
+import { taxonomyTone, toneStyle } from "../projects/tone";
+
+export interface Props {
+  workflow: WorkflowView;
+}
+
+const { workflow } = Astro.props;
+
+const stateCount = workflow.nodes.length;
+const moveCount = workflow.rows.length;
+---
+
+<section class="workflow" aria-labelledby={`wf-${workflow.code}`}>
+  <header class="head">
+    <div class="titles">
+      <h2 class="h2" id={`wf-${workflow.code}`} lang="es">{workflow.name}</h2>
+      <p class="small counts">
+        Aplica a {workflow.appliesToLabel.toLowerCase()} · <span class="figure"
+          >{stateCount}</span
+        > estados · <span class="figure">{moveCount}</span> movimientos
+      </p>
+    </div>
+
+    <ul class="marks">
+      <li><code class="chip chip-code">{workflow.code}</code></li>
+      {
+        workflow.isDefault && (
+          <li>
+            <span class="chip tone-cielo">Predeterminado</span>
+          </li>
+        )
+      }
+      {
+        !workflow.isActive && (
+          <li>
+            <span class="chip tone-ambar">Inactivo</span>
+          </li>
+        )
+      }
+      {
+        workflow.engagementTypes.map((type) => {
+          const tone = taxonomyTone(type.color);
+          return (
+            <li>
+              <span
+                class:list={["chip", tone.className]}
+                style={toneStyle(tone)}
+                lang="es"
+              >
+                {type.label}
+              </span>
+            </li>
+          );
+        })
+      }
+      {
+        workflow.engagementTypes.length === 0 && (
+          <li>
+            <span class="chip tone-ambar">sin tipo asignado</span>
+          </li>
+        )
+      }
+    </ul>
+  </header>
+
+  {
+    stateCount === 0 ? (
+      <p class="small empty-graph">
+        Este flujo no tiene estados configurados, así que no hay nada que
+        dibujar.
+      </p>
+    ) : (
+      <StateGraph
+        nodes={workflow.nodes}
+        arcs={workflow.arcs}
+        width={workflow.width}
+        height={workflow.height}
+        arrowId={workflow.arrowId}
+      />
+    )
+  }
+
+  <GraphLegend />
+
+  <TransitionTable
+    name={workflow.name}
+    rows={workflow.rows}
+    terminalLabels={workflow.terminalLabels}
+    isolatedLabels={workflow.isolatedLabels}
+  />
+</section>
+
+<style>
+  .workflow {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .titles {
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .counts .figure {
+    color: var(--tinta);
+  }
+
+  .marks {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .marks .chip {
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  .empty-graph {
+    padding: var(--space-5);
+    border-radius: var(--radius-card);
+    background-color: var(--pozo);
+  }
+</style>

@@ -1,0 +1,533 @@
+---
+/**
+ * A date **range** in one control: one trigger, one panel, both ends.
+ *
+ * It replaces `<input type="date">`, which cannot be part of this design system:
+ * only `::-webkit-calendar-picker-indicator` is styleable, the panel itself is
+ * browser chrome, and it renders differently in every browser while ignoring
+ * every token. Two of them side by side were also two calendars for one
+ * question.
+ *
+ * The behaviour that makes it a popover — open, close, `Escape`, outside click,
+ * focus return — is the shared `lib/ui/menu.ts`, the same module behind
+ * `MenuSelect` and the owner picker. What is specific to a calendar lives in
+ * `components/ui/date-range.ts`, and every day of arithmetic lives in the pure,
+ * DOM-free `lib/ui/calendar.ts`.
+ *
+ * Structure worth knowing before editing:
+ *
+ * - The typed fields come **first** in DOM order. They are not a convenience,
+ *   they are the accessible path: stating `04/08/2026` must never require being
+ *   walked through a grid of forty-two buttons.
+ * - The grid is built from `<template>`s at open time, because the month on
+ *   screen changes; the panel's chrome is server-rendered and never rebuilt.
+ * - The month jump is a layer inside the same panel rather than a nested menu:
+ *   `lib/ui/menu.ts` keeps exactly one popover open at a time, so a menu inside
+ *   a menu would close its own parent.
+ */
+import Icon from "./Icon.astro";
+import { formatRangeLabel, parseISODay } from "../../lib/ui/calendar";
+
+export interface Props {
+  /** Field name, in Spanish; also the accessible name of the trigger. */
+  label: string;
+  /** Start of the range as `YYYY-MM-DD`, or `null` for an open start. */
+  since: string | null;
+  /** End of the range as `YYYY-MM-DD`, or `null` for an open end. */
+  until: string | null;
+  /**
+   * Distinguishes this instance's element ids and, for the island, which facet
+   * pair it drives. One page may hold more than one range.
+   */
+  facet?: string;
+}
+
+const { label, since, until, facet = "range" } = Astro.props;
+
+const value = { since: parseISODay(since), until: parseISODay(until) };
+const triggerLabel = formatRangeLabel(value);
+
+const labelId = `range-${facet}-label`;
+const triggerId = `range-${facet}-trigger`;
+const panelId = `range-${facet}-panel`;
+---
+
+<div
+  class="date-range"
+  data-date-range
+  data-facet={facet}
+  data-since={since ?? ""}
+  data-until={until ?? ""}
+>
+  <span class="label" id={labelId}>{label}</span>
+
+  <button
+    class="btn btn-secondary trigger"
+    type="button"
+    id={triggerId}
+    data-menu-trigger
+    aria-haspopup="dialog"
+    aria-expanded="false"
+    aria-controls={panelId}
+    aria-labelledby={`${labelId} ${triggerId}`}
+  >
+    <Icon name="calendar" size={16} />
+    <span data-field="range-label">{triggerLabel}</span>
+    <Icon name="chevron-down" size={16} />
+  </button>
+
+  <div
+    class="panel card"
+    id={panelId}
+    role="dialog"
+    aria-labelledby={labelId}
+    data-menu-panel
+    hidden
+  >
+    {
+      /*
+      One strip, not two boxes: the two ends are one range, and the field for the
+      end currently being chosen marks itself so the typed path and the grid are
+      visibly the same act rather than two controls stacked on each other.
+    */
+    }
+    <div class="range-fields" data-range-fields>
+      <label class="range-field" data-range-field="since">
+        <span class="label">Desde</span>
+        <input
+          class="range-input"
+          type="text"
+          data-range-input="since"
+          placeholder="dd/mm/aaaa"
+          inputmode="numeric"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </label>
+      <span class="range-arrow" aria-hidden="true">→</span>
+      <label class="range-field" data-range-field="until">
+        <span class="label">Hasta</span>
+        <input
+          class="range-input"
+          type="text"
+          data-range-input="until"
+          placeholder="dd/mm/aaaa"
+          inputmode="numeric"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </label>
+    </div>
+
+    <div class="head">
+      <button
+        class="btn btn-ghost btn-icon nav"
+        type="button"
+        data-range-nav="previous-month"
+        aria-label="Mes anterior"
+      >
+        <Icon name="back" size={18} />
+      </button>
+      <button
+        class="month-toggle"
+        type="button"
+        data-range-months
+        aria-expanded="false"
+      >
+        <span data-field="range-month"></span>
+        <Icon name="chevron-down" size={14} />
+      </button>
+      <button
+        class="btn btn-ghost btn-icon nav"
+        type="button"
+        data-range-nav="next-month"
+        aria-label="Mes siguiente"
+      >
+        <Icon name="chevron-right" size={18} />
+      </button>
+    </div>
+
+    {
+      /* The jump: a year stepper and twelve months, so reaching March 2025 from
+        August 2026 is two clicks rather than seventeen. */
+    }
+    <div class="jump" data-range-jump hidden>
+      <div class="years">
+        <button
+          class="btn btn-ghost btn-icon nav"
+          type="button"
+          data-range-nav="previous-year"
+          aria-label="Año anterior"
+        >
+          <Icon name="back" size={18} />
+        </button>
+        <span class="figure" data-field="range-year"></span>
+        <button
+          class="btn btn-ghost btn-icon nav"
+          type="button"
+          data-range-nav="next-year"
+          aria-label="Año siguiente"
+        >
+          <Icon name="chevron-right" size={18} />
+        </button>
+      </div>
+      <div class="month-grid" data-range-month-grid></div>
+    </div>
+
+    <div class="grid" role="grid" aria-labelledby={labelId} data-range-grid>
+      <div class="week weekdays" role="row" data-range-weekdays></div>
+      <div data-range-weeks></div>
+    </div>
+
+    <div class="foot">
+      <p class="small" data-field="range-hint"></p>
+      <button class="btn btn-ghost clear" type="button" data-range-clear hidden>
+        <Icon name="close" size={16} />
+        Limpiar
+      </button>
+    </div>
+
+    {
+      /* The completed range, spoken once. The grid itself is not a live region:
+        announcing forty-two cells on every month page is worse than silence. */
+    }
+    <p class="visually-hidden" role="status" data-range-announce></p>
+
+    <template data-template="range-week">
+      <div class="week" role="row"></div>
+    </template>
+
+    <template data-template="range-weekday">
+      <span class="weekday" role="columnheader"></span>
+    </template>
+
+    <template data-template="range-day">
+      <span class="cell" role="gridcell">
+        <button class="day" type="button" data-range-day></button>
+      </span>
+    </template>
+
+    <template data-template="range-month-option">
+      <button class="month-option" type="button" data-range-month-value
+      ></button>
+    </template>
+  </div>
+</div>
+
+<style>
+  .date-range {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .trigger {
+    justify-content: flex-start;
+    gap: var(--space-2);
+    height: 40px;
+    padding: 0 var(--space-2) 0 var(--space-3);
+    font-size: var(--text-small-size);
+    font-weight: 400;
+  }
+
+  .trigger :global(svg) {
+    flex: none;
+    color: var(--tinta-suave);
+  }
+
+  .trigger [data-field="range-label"] {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-right: auto;
+  }
+
+  .trigger[aria-expanded="true"] {
+    border-color: var(--cobalto);
+    color: var(--cobalto);
+  }
+
+  /* Anchored in viewport coordinates by `lib/ui/menu.ts`; everything but
+     `top`/`left` is decided here. */
+  .panel {
+    position: fixed;
+    z-index: var(--z-drawer);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    width: max-content;
+    padding: var(--space-3);
+    box-shadow: var(--shadow-lifted);
+  }
+
+  .panel[hidden] {
+    display: none;
+  }
+
+  /* The two ends share one well, so they read as one range rather than as two
+     inputs that happen to sit above a calendar. */
+  .range-fields {
+    display: flex;
+    align-items: stretch;
+    gap: var(--space-1);
+    padding: var(--space-1);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-control);
+    background-color: var(--pozo);
+  }
+
+  .range-fields:focus-within {
+    border-color: var(--cobalto);
+  }
+
+  .range-field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-chip);
+    cursor: text;
+  }
+
+  /* The end the next click or keystroke will fill. It moves with the selection,
+     which is what ties the grid and the fields into one control. */
+  .range-field[data-active="true"] {
+    background-color: var(--carta);
+    box-shadow: inset 0 0 0 var(--border-width) var(--cobalto-medio);
+  }
+
+  .range-field .label {
+    color: var(--tinta-suave);
+  }
+
+  .range-field[data-active="true"] .label {
+    color: var(--cobalto);
+  }
+
+  .range-arrow {
+    display: grid;
+    place-items: center;
+    color: var(--tinta-suave);
+    flex: none;
+  }
+
+  /* Sized in `ch` of its own mono font, so `dd/mm/aaaa` can never clip into a
+     format the field would not accept. */
+  .range-input {
+    width: 11ch;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--text-small-size);
+    color: var(--tinta);
+  }
+
+  .range-input:focus-visible {
+    outline: none;
+  }
+
+  .range-input::placeholder {
+    color: var(--tinta-suave);
+  }
+
+  .range-input[aria-invalid="true"] {
+    color: var(--rojo-ink);
+  }
+
+  .head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .nav {
+    width: var(--space-6);
+    height: var(--space-6);
+    border-radius: var(--radius-chip);
+  }
+
+  /* No `text-transform: capitalize`: it capitalizes every word, and Spanish
+     writes "Julio de 2026", never "Julio De 2026". The formatter sentence-cases
+     the string instead (`lib/ui/calendar.ts`). */
+  .month-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-chip);
+    font-size: var(--text-title-size);
+    font-weight: var(--text-title-weight);
+  }
+
+  .month-toggle:hover {
+    background-color: var(--pozo);
+  }
+
+  .month-toggle[aria-expanded="true"] {
+    background-color: var(--cobalto-papel);
+    color: var(--cobalto);
+  }
+
+  .jump {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .jump[hidden] {
+    display: none;
+  }
+
+  .years {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .month-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-1);
+  }
+
+  .month-option {
+    padding: var(--space-2);
+    border-radius: var(--radius-chip);
+    font-size: var(--text-small-size);
+  }
+
+  .month-option:hover {
+    background-color: var(--pozo);
+  }
+
+  .month-option[aria-current="true"] {
+    background-color: var(--cobalto-papel);
+    color: var(--cobalto);
+    font-weight: 600;
+  }
+
+  .grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .grid[hidden] {
+    display: none;
+  }
+
+  .week {
+    display: grid;
+    grid-template-columns: repeat(7, var(--space-6));
+  }
+
+  .weekday {
+    display: grid;
+    place-items: center;
+    height: var(--space-5);
+    font-size: var(--text-label-size);
+    font-weight: var(--text-label-weight);
+    letter-spacing: var(--text-label-tracking);
+    text-transform: uppercase;
+    color: var(--tinta-suave);
+  }
+
+  .cell {
+    display: block;
+  }
+
+  .day {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: var(--space-6);
+    border-radius: var(--radius-chip);
+    font-family: var(--font-mono);
+    font-size: var(--text-figure-size);
+    font-variant-numeric: tabular-nums;
+    color: var(--tinta);
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  /* Days of the neighbouring months keep their place — the grid is always six
+     weeks so the panel never jumps — but recede. */
+  .day[data-outside="true"] {
+    color: var(--tinta-suave);
+  }
+
+  .day:hover {
+    background-color: var(--pozo);
+  }
+
+  /* The band between the two ends, including the live preview while the second
+     end is still being chosen. Square inner edges so the run reads as one span
+     rather than as a row of separate chips. */
+  .day[data-in-range="true"] {
+    background-color: var(--cobalto-papel);
+    border-radius: 0;
+  }
+
+  .day[data-edge="start"] {
+    border-radius: var(--radius-chip) 0 0 var(--radius-chip);
+  }
+
+  .day[data-edge="end"] {
+    border-radius: 0 var(--radius-chip) var(--radius-chip) 0;
+  }
+
+  .day[data-edge="both"] {
+    border-radius: var(--radius-chip);
+  }
+
+  .day[data-selected="true"] {
+    background-color: var(--cobalto);
+    color: var(--carta);
+    font-weight: 600;
+  }
+
+  /* Today is a ring, never a fill: it must stay legible underneath a selection
+     and must not be mistaken for one. */
+  .day[data-today="true"] {
+    box-shadow: inset 0 0 0 var(--border-width) var(--cobalto);
+  }
+
+  .day[data-today="true"][data-selected="true"] {
+    box-shadow: none;
+  }
+
+  .foot {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .foot .small {
+    margin-right: auto;
+    max-width: 26ch;
+  }
+
+  .clear {
+    height: 32px;
+    padding: 0 var(--space-2);
+    font-size: var(--text-small-size);
+  }
+
+  .clear[hidden] {
+    display: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .day {
+      transition: none;
+    }
+  }
+</style>

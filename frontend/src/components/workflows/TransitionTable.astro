@@ -1,0 +1,227 @@
+---
+/**
+ * Every configured move of one workflow, one per row — and the accessible
+ * representation of the diagram above it, which is `aria-hidden`.
+ *
+ * A real `<table>` with `<th scope="col">`: the column a value belongs to *is*
+ * the information here, and "Bloqueada / En progreso / Desbloquear / Sí" read as
+ * a flat list says nothing. Below 1024px the rows stack into cards, which means
+ * `display: block` on table elements — that strips the implicit table roles in
+ * every current engine, so the roles are written back explicitly and the header
+ * row is clipped rather than removed, keeping the cell-to-header association a
+ * screen reader depends on.
+ *
+ * The two notes underneath carry what a list of edges structurally cannot: a
+ * state nothing leaves, and a state nothing leaves *or* reaches. Neither appears
+ * in any row, and both are precisely the answer somebody who was refused a move
+ * came here for.
+ *
+ * `requires_fields` renders as the raw field identifier in a code chip rather
+ * than a translated phrase. A Spanish name per field would be a map keyed by a
+ * backend identifier, and the next field added would silently render as nothing
+ * (`docs/standards/PATTERNS_FRONTEND.md` §7); the identifier is data, the way a
+ * project code is.
+ */
+import EmptyState from "../ui/EmptyState.astro";
+import StateTag from "./StateTag.astro";
+import type { EdgeRow } from "./graph";
+// The shared data-table grammar (`src/styles/table.css`): the card is its own
+// scroll container, the header sticks to it, rows are ruled with hairlines. What
+// stays below is only this table's own — its caption, its stacked form, and the
+// meaning of its cells.
+import "../../styles/table.css";
+
+export interface Props {
+  /** Name of the workflow, for the table's own caption. */
+  name: string;
+  rows: readonly EdgeRow[];
+  /** Labels of states no move departs from; invisible in a table of edges. */
+  terminalLabels: readonly string[];
+  /** Labels of states no move departs from or arrives at. */
+  isolatedLabels: readonly string[];
+}
+
+const { name, rows, terminalLabels, isolatedLabels } = Astro.props;
+
+/** Column headers, also used as the stacked row's per-cell labels. */
+const COLUMNS = [
+  "Desde",
+  "Hacia",
+  "Movimiento",
+  "Motivo obligatorio",
+  "Campos requeridos",
+] as const;
+
+const listing = (labels: readonly string[]): string => labels.join(", ");
+---
+
+{
+  rows.length === 0 ? (
+    <EmptyState
+      scene="quiet"
+      title="Este flujo no tiene movimientos configurados"
+      description="Ningún estado lleva a otro, así que nada puede cambiar de estado por aquí hasta que se declare una transición en el panel de administración."
+      compact
+    />
+  ) : (
+    <div class="card table-wrap">
+      <table class="data-table moves" role="table">
+        <caption class="small">
+          Movimientos configurados de <b lang="es">{name}</b>: el mismo grafo
+          del diagrama, fila a fila.
+        </caption>
+        <thead role="rowgroup">
+          <tr role="row">
+            {COLUMNS.map((column) => (
+              <th scope="col" role="columnheader" class="label">
+                {column}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody role="rowgroup">
+          {rows.map((row) => (
+            <tr role="row">
+              <td role="cell" data-label={COLUMNS[0]}>
+                <StateTag
+                  label={row.from.state.label}
+                  toneClass={row.from.toneClass}
+                  toneStyle={row.from.toneStyle}
+                />
+              </td>
+              <td role="cell" data-label={COLUMNS[1]}>
+                <StateTag
+                  label={row.to.state.label}
+                  toneClass={row.to.toneClass}
+                  toneStyle={row.to.toneStyle}
+                />
+              </td>
+              <td role="cell" data-label={COLUMNS[2]} lang="es">
+                {row.label}
+              </td>
+              <td role="cell" data-label={COLUMNS[3]}>
+                {row.requiresReason ? (
+                  <span class="chip tone-ambar">Sí</span>
+                ) : (
+                  <span class="none">No</span>
+                )}
+              </td>
+              <td role="cell" data-label={COLUMNS[4]}>
+                {row.requiresFields.length === 0 ? (
+                  <span class="none">Ninguno</span>
+                ) : (
+                  <span class="fields">
+                    {row.requiresFields.map((field) => (
+                      <code class="chip chip-code">{field}</code>
+                    ))}
+                  </span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+{
+  terminalLabels.length > 0 && (
+    <p class="note small">
+      <b>Sin salida:</b> <span lang="es">{listing(terminalLabels)}</span>.
+      Ningún movimiento parte de estos estados, así que no aparecen en la
+      columna «Desde».
+    </p>
+  )
+}
+
+{
+  isolatedLabels.length > 0 && (
+    <p class="note small">
+      <b>Sin movimientos:</b> <span lang="es">{listing(isolatedLabels)}</span>.
+      No entra ni sale ninguna flecha, de modo que estos estados no aparecen en
+      ninguna fila.
+    </p>
+  )
+}
+
+<style>
+  caption {
+    padding: var(--space-3) var(--space-4);
+    text-align: left;
+    border-bottom: var(--border-width) solid var(--hairline);
+  }
+
+  .moves th {
+    white-space: nowrap;
+  }
+
+  .none {
+    color: var(--tinta-suave);
+  }
+
+  .fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  .note {
+    margin-top: var(--space-1);
+  }
+
+  .note b {
+    color: var(--tinta);
+  }
+
+  /* --- Below 1024px each row becomes a card (DESIGN.md §Layout) --- */
+
+  @media (max-width: 1023px) {
+    .moves,
+    .moves thead,
+    .moves tbody,
+    .moves tr,
+    .moves td {
+      display: block;
+    }
+
+    /* Clipped, never `display: none`: removing the header row from the
+       accessibility tree would leave every stacked cell without its header. */
+    .moves thead {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    .moves caption {
+      border-bottom: 0;
+    }
+
+    .moves tbody tr {
+      padding: var(--space-3) 0;
+    }
+
+    .moves td {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: var(--space-1) var(--space-3);
+      padding: var(--space-1) var(--space-4);
+    }
+
+    .moves td::before {
+      content: attr(data-label);
+      flex: none;
+      min-width: 11ch;
+      font-size: var(--text-label-size);
+      font-weight: var(--text-label-weight);
+      line-height: var(--text-label-line);
+      letter-spacing: var(--text-label-tracking);
+      text-transform: uppercase;
+      color: var(--tinta-suave);
+    }
+  }
+</style>

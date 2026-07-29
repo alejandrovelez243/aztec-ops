@@ -1,4 +1,4 @@
-"""HTTP behaviour of ``GET /api/v1/workflows`` — the column set a Jira-style board draws from.
+"""HTTP behaviour of ``GET /api/v1/workflows`` — the graph a board and a lifecycle diagram draw from.
 
 ``TestCase``: the route reads and writes nothing, so there is no ``on_commit`` for a
 never-committed transaction to hide.
@@ -7,17 +7,29 @@ The graphs are built here in Python rather than loaded from the seed fixtures, f
 ``portfolio.tests.scenario`` builds its own: the fixtures are the operation's real data and an
 assertion about *which* states come back would fail the day somebody inserts a state, for a reason
 that has nothing to do with this route. What is built here is the smallest pair of graphs that can
-prove the four things the board depends on — every graph is listed, the states are in the
-operator's order, a graph with no states is an empty list, and none of it is readable without a
-credential.
+prove what the board depends on — every graph is listed, the states are in the operator's order, the
+configured edges are published with their reason flag, a withdrawn edge is not, a graph with no
+states or no edges answers with empty lists, and none of it is readable without a credential.
+
+The load-bearing test in this module is
+:class:`ConfiguredEdgeIsNotLegalityTestCase`: it holds the line that publishing the graph did not
+move enforcement. It asserts both halves at once — the edge *is* in the document, and the record is
+*still* refused — because either half alone is satisfiable by a mistake.
 """
 
+from datetime import UTC, datetime
 from typing import Any
 
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 
 from apps.accounts.tests.support import bearer, make_member
 from apps.catalog.models import EngagementType
+from apps.workflow.domain.errors import (
+    GuardRejected,
+    RequiredFieldMissing,
+    TransitionNotAllowed,
+)
+from apps.workflow.domain.views import WorkflowEdgeView, WorkflowShapeView
 from apps.workflow.models import (
     AppliesTo,
     StateCategory,
@@ -26,6 +38,7 @@ from apps.workflow.models import (
     WorkflowState,
     WorkflowTransition,
 )
+from apps.workflow.services.transition import validate_transition
 
 WORKFLOWS_URL = "/api/v1/workflows"
 
@@ -38,6 +51,30 @@ BLOCKED_ORDER = 3
 IN_PROGRESS_ORDER = 2
 BACKLOG_ORDER = 1
 
+#: Domain time for the enforcement calls. Fixed, because a guard that read the clock would make the
+#: same test pass or fail depending on when it ran.
+CHECKED_AT = datetime(2026, 1, 15, 9, 0, tzinfo=UTC)
+
+#: The edge :func:`_build_project_graph` configures and then deactivates — the operator withdrew the
+#: move. It exists as a row and must not exist as an arrow.
+WITHDRAWN_EDGE = ("bloqueado", "ejecucion")
+
+
+class _MovingRecord:
+    """The little :func:`validate_transition` asks of an aggregate, and nothing else.
+
+    A stand-in rather than a ``Project`` or a ``Task``, because the enforcement path takes a
+    structural ``TransitionableEntity`` and this module must not learn what a project is to prove a
+    rule that belongs to the workflow context. ``next_step`` is here because it is the attribute the
+    seeded graphs actually name in ``requires_fields``.
+    """
+
+    def __init__(self, *, code: str, state: WorkflowState, next_step: str = "") -> None:
+        self.code = code
+        self.workflow_state = state
+        self.workflow_state_id = state.pk
+        self.next_step = next_step
+
 
 def _build_project_graph() -> Workflow:
     """Create the project graph the board tests read: three columns, arranged out of insertion order.
@@ -45,8 +82,14 @@ def _build_project_graph() -> Workflow:
     The nodes are inserted last-column-first on purpose, so ``Meta.ordering`` is what puts them
     back in the operator's sequence and not the primary key.
 
+    The edges are the four cases the document has to distinguish: a plain move that names a required
+    field, a move that demands a written reason *and* names a guard, a withdrawn move, and — by its
+    absence — the pair no operator declared, since ``descubrimiento -> bloqueado`` is what a client
+    inventing legality from the column list would assume exists.
+
     Returns:
-        The saved project workflow, bound to one engagement type and holding three states.
+        The saved project workflow, bound to one engagement type, holding three states and four
+        edges of which one is inactive.
     """
     workflow = Workflow.objects.create(
         code="test-project-flow",
@@ -70,7 +113,7 @@ def _build_project_graph() -> Workflow:
         order=IN_PROGRESS_ORDER,
         color="#2563eb",
     )
-    WorkflowState.objects.create(
+    backlog = WorkflowState.objects.create(
         workflow=workflow,
         code="descubrimiento",
         label="Descubrimiento",
@@ -78,13 +121,40 @@ def _build_project_graph() -> Workflow:
         is_initial=True,
         order=BACKLOG_ORDER,
     )
-    # One edge, so the assertion that no edge is published is made against a graph that has one.
+    WorkflowTransition.objects.create(
+        workflow=workflow,
+        from_state=backlog,
+        to_state=in_progress,
+        label="Iniciar ejecucion",
+        requires_fields=["next_step"],
+        order=1,
+    )
+    # Guarded on purpose: the document must publish this edge and must not publish its guard.
     WorkflowTransition.objects.create(
         workflow=workflow,
         from_state=in_progress,
         to_state=blocked,
         label="Marcar como bloqueado",
         requires_reason=True,
+        guard="require_open_blocker",
+        order=1,
+    )
+    WorkflowTransition.objects.create(
+        workflow=workflow,
+        from_state=in_progress,
+        to_state=backlog,
+        label="Devolver a descubrimiento",
+        requires_reason=True,
+        order=2,
+    )
+    # Withdrawn by the operator: configured once, not part of the graph today.
+    WorkflowTransition.objects.create(
+        workflow=workflow,
+        from_state=blocked,
+        to_state=in_progress,
+        label="Reanudar",
+        requires_reason=True,
+        is_active=False,
         order=1,
     )
     WorkflowBinding.objects.create(
@@ -172,18 +242,131 @@ class WorkflowShapeDocumentTestCase(TestCase):
 
         self.assertEqual(by_code["test-task-flow"]["engagement_types"], [])
 
-    def test_no_transition_is_published_anywhere_in_the_document(self) -> None:
-        """The invariant of this route: it publishes shape, never legality.
 
-        The project graph owns an edge, so this fails loudly the day somebody adds edges here to
-        save the board a request — which is what would let a client decide a move is legal without
-        asking the project it is moving.
+class WorkflowGraphEdgeTestCase(TestCase):
+    """The document publishes the graph an operator configured: every edge, with its reason flag."""
+
+    auth: dict[str, str]
+
+    @classmethod
+    def setUpTestData(cls) -> None:
+        make_member(code=MEMBER_CODE)
+        cls.auth = bearer(username=MEMBER_CODE)
+        _build_project_graph()
+
+    def _graph(self) -> Any:
+        body = self.client.get(WORKFLOWS_URL, **self.auth).json()
+        return next(w for w in body["workflows"] if w["code"] == "test-project-flow")
+
+    def test_every_configured_edge_is_published_with_both_of_its_endpoints(self) -> None:
+        pairs = {(edge["from_state"], edge["to_state"]) for edge in self._graph()["transitions"]}
+
+        self.assertEqual(
+            pairs,
+            {
+                ("descubrimiento", "ejecucion"),
+                ("ejecucion", "bloqueado"),
+                ("ejecucion", "descubrimiento"),
+            },
+        )
+
+    def test_an_edge_carries_the_operators_label_and_its_reason_flag(self) -> None:
+        by_pair = {(e["from_state"], e["to_state"]): e for e in self._graph()["transitions"]}
+
+        self.assertEqual(
+            by_pair[("ejecucion", "bloqueado")],
+            {
+                "from_state": "ejecucion",
+                "to_state": "bloqueado",
+                "label": "Marcar como bloqueado",
+                "requires_reason": True,
+                "requires_fields": [],
+            },
+        )
+
+    def test_an_edge_that_needs_no_reason_says_so_rather_than_omitting_the_flag(self) -> None:
+        """A diagram marks the arrows that will ask for text, so the false has to be on the wire."""
+        by_pair = {(e["from_state"], e["to_state"]): e for e in self._graph()["transitions"]}
+
+        self.assertFalse(by_pair[("descubrimiento", "ejecucion")]["requires_reason"])
+
+    def test_an_edge_names_the_aggregate_fields_the_operator_declared_mandatory(self) -> None:
+        by_pair = {(e["from_state"], e["to_state"]): e for e in self._graph()["transitions"]}
+
+        self.assertEqual(by_pair[("descubrimiento", "ejecucion")]["requires_fields"], ["next_step"])
+
+    def test_no_edge_publishes_the_guard_that_may_still_refuse_it(self) -> None:
+        """Naming the guard would invite the client to predict an answer it cannot compute."""
+        payload = self.client.get(WORKFLOWS_URL, **self.auth).content.decode()
+
+        self.assertNotIn("require_open_blocker", payload)
+        self.assertNotIn("guard", payload)
+
+    def test_edges_are_grouped_by_source_column_in_the_operators_order(self) -> None:
+        """Arrows read in the same sequence as the columns, not in the order the states were saved.
+
+        The nodes are inserted last-column-first by the builder, so an edge list ordered by the
+        foreign key would start at ``ejecucion``.
         """
-        payload = self._get().content.decode()
+        self.assertEqual(
+            [(e["from_state"], e["label"]) for e in self._graph()["transitions"]],
+            [
+                ("descubrimiento", "Iniciar ejecucion"),
+                ("ejecucion", "Marcar como bloqueado"),
+                ("ejecucion", "Devolver a descubrimiento"),
+            ],
+        )
 
-        self.assertNotIn("Marcar como bloqueado", payload)
-        self.assertNotIn("transitions", payload)
-        self.assertNotIn("requires_reason", payload)
+    def test_an_edge_references_a_state_the_same_document_publishes_in_full(self) -> None:
+        """Endpoints are codes because the node list is right there; a diagram resolves them."""
+        graph = self._graph()
+        published = {state["code"] for state in graph["states"]}
+
+        endpoints = {e["from_state"] for e in graph["transitions"]} | {
+            e["to_state"] for e in graph["transitions"]
+        }
+        self.assertTrue(endpoints <= published)
+
+
+class WithdrawnEdgeTestCase(TestCase):
+    """An edge an operator deactivated is absent from the graph, not published and flagged."""
+
+    auth: dict[str, str]
+
+    @classmethod
+    def setUpTestData(cls) -> None:
+        make_member(code=MEMBER_CODE)
+        cls.auth = bearer(username=MEMBER_CODE)
+        _build_project_graph()
+
+    def _pairs(self) -> set[tuple[str, str]]:
+        """The ``(from_state, to_state)`` pairs the document draws for the project graph."""
+        body = self.client.get(WORKFLOWS_URL, **self.auth).json()
+        graph = next(w for w in body["workflows"] if w["code"] == "test-project-flow")
+        return {(edge["from_state"], edge["to_state"]) for edge in graph["transitions"]}
+
+    def test_an_inactive_edge_is_not_drawn(self) -> None:
+        """``is_active = False`` withdraws a move; drawing it would advertise a dead arrow."""
+        self.assertNotIn(WITHDRAWN_EDGE, self._pairs())
+
+    def test_reactivating_an_edge_in_the_admin_puts_the_arrow_back(self) -> None:
+        """The graph is data: restoring a move is an ``is_active`` edit and zero code changes."""
+        WorkflowTransition.objects.filter(label="Reanudar").update(is_active=True)
+
+        self.assertIn(WITHDRAWN_EDGE, self._pairs())
+
+    def test_the_projection_excludes_it_even_when_nobody_narrowed_the_query(self) -> None:
+        """``to_shape`` re-checks the flag, so a caller that skipped the prefetch cannot leak it.
+
+        The guarantee has to hold on the model, not only on the route: a withdrawn move surfacing
+        because some other caller built the shape without chaining ``with_shape`` would be the same
+        defect arriving through a different door.
+        """
+        workflow = Workflow.objects.get(code="test-project-flow")
+
+        labels = [edge.label for edge in workflow.to_shape().transitions]
+
+        self.assertNotIn("Reanudar", labels)
 
 
 class WorkflowStateOrderTestCase(TestCase):
@@ -240,6 +423,162 @@ class WorkflowWithoutStatesTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         workflow = next(w for w in response.json()["workflows"] if w["code"] == "test-empty-flow")
         self.assertEqual(workflow["states"], [])
+
+
+class WorkflowWithoutEdgesTestCase(TestCase):
+    """A graph with columns and no declared move keeps its shape: an empty list, never an error."""
+
+    auth: dict[str, str]
+
+    @classmethod
+    def setUpTestData(cls) -> None:
+        make_member(code=MEMBER_CODE)
+        cls.auth = bearer(username=MEMBER_CODE)
+        workflow = Workflow.objects.create(
+            code="test-edgeless-flow",
+            name="Test edgeless flow",
+            applies_to=AppliesTo.PROJECT,
+        )
+        WorkflowState.objects.create(
+            workflow=workflow,
+            code="unico",
+            label="Unico",
+            category=StateCategory.BACKLOG,
+            is_initial=True,
+        )
+
+    def _graph(self) -> Any:
+        body = self.client.get(WORKFLOWS_URL, **self.auth).json()
+        return next(w for w in body["workflows"] if w["code"] == "test-edgeless-flow")
+
+    def test_a_workflow_with_no_edges_is_served_with_an_empty_transition_list(self) -> None:
+        """Isolated columns are a real configuration — an operator mid-setup — not a failure."""
+        response = self.client.get(WORKFLOWS_URL, **self.auth)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self._graph()["transitions"], [])
+
+    def test_the_key_is_present_rather_than_omitted_so_the_client_shape_never_varies(self) -> None:
+        """A generated client destructures ``transitions``; an absent key is a different type."""
+        self.assertIn("transitions", self._graph())
+
+    def test_a_workflow_with_no_edges_still_publishes_its_columns(self) -> None:
+        self.assertEqual([state["code"] for state in self._graph()["states"]], ["unico"])
+
+
+class WorkflowShapeDefaultsTestCase(SimpleTestCase):
+    """The projection's own defaults, proved without a database so the purity of ``domain/`` holds."""
+
+    def test_a_shape_built_without_edges_defaults_to_an_empty_tuple(self) -> None:
+        """Nothing may construct a shape whose ``transitions`` is ``None``."""
+        shape = WorkflowShapeView(code="w", name="W", applies_to=AppliesTo.PROJECT)
+
+        self.assertEqual(shape.transitions, ())
+
+    def test_an_edge_defaults_to_requiring_neither_a_reason_nor_a_field(self) -> None:
+        edge = WorkflowEdgeView(from_state="a", to_state="b", label="Ir")
+
+        self.assertFalse(edge.requires_reason)
+        self.assertEqual(edge.requires_fields, ())
+
+
+class ConfiguredEdgeIsNotLegalityTestCase(TestCase):
+    """The invariant this route was reopened under: an edge is configuration, never a permission.
+
+    Replaces the older assertion that no edge appeared anywhere in the document. That test defended
+    a real rule with a proxy that has now stopped tracking it — the rule was never "the shape hides
+    the graph", it was "a client cannot decide a move from the shape" — so each case here asserts
+    both halves together: the edge **is** published, and the record is **still** refused by
+    :func:`~apps.workflow.services.transition.validate_transition`. Asserting only the second half
+    would pass on a document that publishes nothing, which is exactly the regression the original
+    test was written to catch.
+    """
+
+    auth: dict[str, str]
+
+    @classmethod
+    def setUpTestData(cls) -> None:
+        make_member(code=MEMBER_CODE)
+        cls.auth = bearer(username=MEMBER_CODE)
+        _build_project_graph()
+
+    def _published_edges(self) -> set[tuple[str, str]]:
+        """The ``(from_state, to_state)`` pairs the workflow document draws for the project graph."""
+        body = self.client.get(WORKFLOWS_URL, **self.auth).json()
+        graph = next(w for w in body["workflows"] if w["code"] == "test-project-flow")
+        return {(edge["from_state"], edge["to_state"]) for edge in graph["transitions"]}
+
+    def _record_on(self, state_code: str, *, next_step: str = "") -> _MovingRecord:
+        state = WorkflowState.objects.get(workflow__code="test-project-flow", code=state_code)
+        return _MovingRecord(code="PRJ-TEST", state=state, next_step=next_step)
+
+    def test_an_edge_the_record_is_not_standing_on_is_published_and_still_refused(self) -> None:
+        """The graph says the move exists somewhere; the record says not from here."""
+        self.assertIn(("ejecucion", "bloqueado"), self._published_edges())
+
+        with self.assertRaises(TransitionNotAllowed):
+            validate_transition(
+                entity=self._record_on("descubrimiento"),
+                to_state_code="bloqueado",
+                actor=MEMBER_CODE,
+                now=CHECKED_AT,
+                reason="El cliente no responde",
+            )
+
+    def test_a_guarded_edge_is_published_and_the_guard_still_refuses_the_record(self) -> None:
+        """``GuardRejected`` is why an edge existing cannot mean a move is legal.
+
+        The record is on the edge's source state and supplies the reason the edge demands, so
+        everything the document could possibly tell a client is satisfied — and the move is refused
+        anyway, on a fact about the record that no graph holds.
+        """
+        self.assertIn(("ejecucion", "bloqueado"), self._published_edges())
+
+        with self.assertRaises(GuardRejected):
+            validate_transition(
+                entity=self._record_on("ejecucion"),
+                to_state_code="bloqueado",
+                actor=MEMBER_CODE,
+                now=CHECKED_AT,
+                reason="Esperando accesos del cliente",
+                guard_attributes={"open_blocker_count": 0},
+            )
+
+    def test_a_required_field_is_published_as_a_requirement_and_checked_on_the_record(self) -> None:
+        """``requires_fields`` names an attribute of the aggregate, so only the row answers it."""
+        self.assertIn(("descubrimiento", "ejecucion"), self._published_edges())
+
+        with self.assertRaises(RequiredFieldMissing):
+            validate_transition(
+                entity=self._record_on("descubrimiento", next_step=""),
+                to_state_code="ejecucion",
+                actor=MEMBER_CODE,
+                now=CHECKED_AT,
+            )
+
+    def test_the_same_edge_is_taken_once_the_record_satisfies_it(self) -> None:
+        """The refusals above are about the record, not about the graph being unusable."""
+        check = validate_transition(
+            entity=self._record_on("descubrimiento", next_step="Agendar kickoff"),
+            to_state_code="ejecucion",
+            actor=MEMBER_CODE,
+            now=CHECKED_AT,
+        )
+
+        self.assertEqual(check.to_state_code, "ejecucion")
+        self.assertEqual(check.checked_fields, ("next_step",))
+
+    def test_the_enforcement_path_reads_the_rows_and_not_the_published_document(self) -> None:
+        """Deactivating an edge refuses the move, whatever any client cached from the graph."""
+        WorkflowTransition.objects.filter(label="Iniciar ejecucion").update(is_active=False)
+
+        with self.assertRaises(TransitionNotAllowed):
+            validate_transition(
+                entity=self._record_on("descubrimiento", next_step="Agendar kickoff"),
+                to_state_code="ejecucion",
+                actor=MEMBER_CODE,
+                now=CHECKED_AT,
+            )
 
 
 class WorkflowRouteAuthenticationTestCase(TestCase):

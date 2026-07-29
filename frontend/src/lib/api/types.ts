@@ -138,7 +138,7 @@ export interface paths {
         post?: never;
         /**
          * Delete Member
-         * @description Retire a person from the operation. **Nothing is deleted.**
+         * @description Retire a person from the operation, deleting nothing.
          *
          *     ``DELETE`` because that is the verb an operator reaches for and the one a CRUD client offers,
          *     but the effect is ``is_active = false``: the tasks they are assigned and the projects they own
@@ -235,6 +235,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/catalog/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Roles
+         * @description Every role, including the retired ones, in the operator's own order.
+         *
+         *     Separate from ``GET /catalog`` rather than a flag on it, and the split is the point: the
+         *     catalog is the **pickers**, and a retired value must never appear in one. This route is the
+         *     *editor's* view, which has to show the retired rows or restoring one would be impossible —
+         *     a retire button with no way back is a delete with better manners.
+         *
+         *     Ops lead, like the writes it accompanies: knowing which roles were retired is not something a
+         *     reader needs in order to read the roster.
+         */
+        get: operations["apps_catalog_api_routers_get_roles"];
+        put?: never;
+        /**
+         * Post Role
+         * @description Add a role to the vocabulary, active and last in the picker.
+         *
+         *     The one taxonomy writable from the product, because it is the one an operator needs while
+         *     doing something else: registering somebody who does a job nobody has typed yet. Every change
+         *     writes an ``ActivityRecord``, so the vocabulary has the same audit trail as the work.
+         *
+         *     A code already in use is ``409 conflicting_state`` — **including a retired role's**. The row
+         *     still exists and is merely out of the pickers, so the fix is to restore it rather than create
+         *     a second one that would resolve ambiguously ever after.
+         *
+         *     Errors: ``409 conflicting_state``, ``422 validation_error``, ``403 permission_denied``.
+         */
+        post: operations["apps_catalog_api_routers_post_role"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/roles/{role_code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Patch Role
+         * @description Rename a role, retire it, or restore it. Absent means untouched.
+         *
+         *     Retiring is ``is_active = false`` and never a delete: the role leaves the pickers and keeps
+         *     resolving on the people already classified under it, so nobody is silently unclassified.
+         *
+         *     ``code`` is not writable. It is what those people carry, and what a payload or a filter
+         *     compares against; the label is what changes when the wording does.
+         *
+         *     Errors: ``404 not_found``, ``422 validation_error``, ``403 permission_denied``.
+         */
+        patch: operations["apps_catalog_api_routers_patch_role"];
+        trace?: never;
+    };
     "/api/v1/workflows": {
         parameters: {
             query?: never;
@@ -244,12 +314,13 @@ export interface paths {
         };
         /**
          * Get Workflows
-         * @description Return every configured state graph: its states, in the order an operator arranged them.
+         * @description Return every configured state graph: its states and its edges, as an operator arranged them.
          *
          *     Each state carries ``code``, ``label``, ``category`` and ``color`` — the shared
          *     :class:`~apps.shared.refs.StateRef` every read surface already renders — and each graph carries
-         *     the engagement types bound to it, the kind of aggregate it governs and whether it is the
-         *     fallback for that kind.
+         *     the engagement types bound to it, the kind of aggregate it governs, whether it is the fallback
+         *     for that kind, and ``transitions``: every active edge as ``from_state`` / ``to_state`` codes plus
+         *     the operator's ``label``, ``requires_reason`` and ``requires_fields``.
          *
          *     Authenticated like every other read; the list of routes that opt out is five long and closed
          *     (`docs/API.md` §1.2).
@@ -259,17 +330,30 @@ export interface paths {
          *     force the client to know which type to ask about before its first request, which means
          *     reimplementing the binding precedence ``Workflow.objects.resolve`` owns.
          *
-         *     **This is the shape of a workflow, not a global state list, and it does not publish legality.**
-         *     ``GET /catalog`` deliberately excludes states, and its reasoning holds unchanged: a state is
-         *     scoped to its workflow and the legal moves out of one are ``transitions`` on the project detail
-         *     (§2.2), so a *flat* list of states would invite the client to guess which move is allowed.
-         *     Nothing here is flat — states arrive grouped under the graph that owns them and no edge is
-         *     published at all, so the only question this answers is which columns exist. A board needs that
-         *     and cannot derive it: columns inferred from the states projects happen to occupy cannot
-         *     represent an empty one, so a workflow whose ``Bloqueado`` state is unoccupied has no such
-         *     column, cannot say "nothing is blocked", and cannot accept a card dropped into it. Whether that
-         *     drop is legal is still answered only by ``transitions``, and a card dragged somewhere it may not
-         *     go gets the typed 409 that carries the moves it may take (§1.5).
+         *     **Why publishing edges here does not reopen the decision that kept them out.** This route
+         *     deliberately shipped without edges so that a client could not compute legality locally and skip
+         *     the per-project and per-task ``transitions`` list. That rule stands, unchanged and unweakened.
+         *     What makes edges safe on *this* document is a real distinction, not a rhetorical one: this
+         *     document describes the graph **as an operator configured it**, while a project's or a task's own
+         *     ``transitions`` says what **that record** may do **right now**. The two can legitimately
+         *     disagree, and the ways they disagree are the whole argument. A configured edge is refused when
+         *     the record is not sitting on its ``from_state``; when a guard rejects it — ``GuardRejected`` is
+         *     in the error mapping (§1.5) precisely because a declared edge can be denied; and when a field
+         *     named in ``requires_fields`` is empty *on that record*, which is a fact about a row, not about
+         *     the graph. **So an edge existing is not a move being legal.** A client that reads an arrow here
+         *     and acts on it without asking the record meets exactly the same typed 409 it met before, now
+         *     carrying ``details.allowed``. Every enforcement path stays where it is: nothing in this route is
+         *     read by ``validate_transition``, which re-reads the rows each time it decides.
+         *
+         *     **Nor does it become the global state list §2.17 refuses.** ``GET /catalog`` excludes states
+         *     because a state code is unique only inside its workflow, so a *flat* list invites the client to
+         *     guess. Nothing here is flat: states arrive grouped under the graph that owns them, and each edge
+         *     names its endpoints by code inside that same graph, so ``bloqueada`` in two workflows still
+         *     cannot be confused. A board needs the columns and cannot derive them — columns inferred from the
+         *     states projects happen to occupy cannot represent an empty one, so a workflow whose ``Bloqueado``
+         *     state is unoccupied has no such column, cannot say "nothing is blocked", and cannot accept a card
+         *     dropped into it — and a screen that draws the lifecycle needs the arrows and cannot derive those
+         *     either, since an unused edge is invisible to every record that never took it.
          */
         get: operations["apps_workflow_api_routers_get_workflows"];
         put?: never;
@@ -1083,6 +1167,38 @@ export interface components {
             minor_units: number;
         };
         /**
+         * RoleCreateIn
+         * @description Body of ``POST /api/v1/catalog/roles``.
+         *
+         *     Two fields and not one: ``code`` is the ASCII slug every payload and filter compares against
+         *     and it never changes, ``label`` is the Spanish an operator reads and may fix at any time.
+         *     Slugifying the label into a code instead would tie the identifier to the wording, and the
+         *     first typo fix would silently unclassify everybody (CLAUDE.md rule 1).
+         *
+         *     ``order`` is absent: a new role goes to the end of the picker, and rearranging the vocabulary
+         *     is a deliberate act done in the admin rather than a number typed into a form that was really
+         *     about registering a person.
+         */
+        RoleCreateIn: {
+            /** Code */
+            code: string;
+            /** Label */
+            label: string;
+        };
+        /**
+         * RoleUpdateIn
+         * @description Body of ``PATCH /api/v1/catalog/roles/{code}``.
+         *
+         *     Both fields optional, and absent means untouched. ``code`` is not among them: it is the
+         *     address, and the people already classified under this role carry it.
+         */
+        RoleUpdateIn: {
+            /** Label */
+            label?: string | null;
+            /** Is Active */
+            is_active?: boolean | null;
+        };
+        /**
          * StateRef
          * @description One workflow state, ready to render and safe to branch on.
          *
@@ -1123,6 +1239,62 @@ export interface components {
             workflows: components["schemas"]["WorkflowShapeView"][];
         };
         /**
+         * WorkflowEdgeView
+         * @description One edge an operator declared between two states of the same graph.
+         *
+         *     **This is configuration, not permission.** It says the operator drew this arrow; it does not say
+         *     the record you are looking at may follow it. Three things stand between the two claims, and none
+         *     of them is knowable from this shape: the record has to be sitting on ``from_state`` to begin
+         *     with, the fields named in ``requires_fields`` have to be non-empty *on that record*, and the
+         *     edge's guard — if it names one — has to accept it, which is a question about facts the record's
+         *     own context supplies. So a graph drawn from these edges is a picture of the workflow, and
+         *     ``transitions`` on the project or task detail (`docs/API.md` §2.2) remains the only answer to
+         *     "may this record move there now".
+         *
+         *     Attributes:
+         *         from_state: ``WorkflowState.code`` of the source node.
+         *         to_state: ``WorkflowState.code`` of the target node.
+         *         label: The operator's own wording for the move — ``Aprobar``, ``Pedir cambios``. Rendered as
+         *             the arrow's caption; never compared against.
+         *         requires_reason: The operator marked this move as needing a written reason. Descriptive
+         *             here — the transition service re-checks it and raises ``ReasonRequired`` — but it is
+         *             what lets a diagram mark which arrows will ask for text before they are taken.
+         *         requires_fields: Names of aggregate attributes (``next_step``) the operator declared must be
+         *             non-empty before this move. Whether they *are* empty is a fact about a record, so this
+         *             shape lists the requirement and never its outcome.
+         *
+         *     Notes:
+         *         The endpoints are codes rather than :class:`~apps.shared.refs.StateRef` values, unlike
+         *         :class:`TransitionOption`. An edge is a relation between two nodes the same document already
+         *         publishes in full under ``states``: repeating the label, category and color on both ends of
+         *         every arrow would let a client render an edge without ever resolving its nodes, and the day
+         *         an operator renames a state the two copies disagree inside one response. ``TransitionOption``
+         *         embeds the full reference for the opposite reason — its consumer holds no node list, only the
+         *         record.
+         *
+         *         The ``guard`` name is omitted, exactly as it is on :class:`TransitionOption`. Whether a guard
+         *         passes depends on facts no row in this graph holds, so naming it would invite a client to
+         *         predict the answer — which is the one thing this projection must not enable.
+         */
+        WorkflowEdgeView: {
+            /** From State */
+            from_state: string;
+            /** To State */
+            to_state: string;
+            /** Label */
+            label: string;
+            /**
+             * Requires Reason
+             * @default false
+             */
+            requires_reason: boolean;
+            /**
+             * Requires Fields
+             * @default []
+             */
+            requires_fields: string[];
+        };
+        /**
          * WorkflowShapeView
          * @description One state graph as a board sees it: its columns, in the operator's order.
          *
@@ -1131,12 +1303,22 @@ export interface components {
          *     empty one, so a board built that way can neither say "nothing is blocked" nor accept a card
          *     dropped into ``Bloqueado`` — the column is simply absent.
          *
-         *     What is deliberately **not** here is any edge. This shape says which columns exist; it never
-         *     says which move between them is allowed. That answer stays on the project detail's
-         *     ``transitions`` (`docs/API.md` §2.2), computed against the state the project is actually in,
-         *     against ``is_active`` and against the guard. A client that drags a card into a column it may
-         *     not enter gets a typed 409 carrying the moves it may take — the same failure mode as a stale
-         *     button — instead of a board that quietly disagrees with the backend.
+         *     ``transitions`` carries the arrows between those columns, and it is a description of what an
+         *     operator configured — see :class:`WorkflowEdgeView`. What this shape still never says is which
+         *     move a given record may make: that is computed per project and per task against the state it is
+         *     actually in, against ``is_active`` and against the guard, and it stays on the detail's own
+         *     ``transitions`` (`docs/API.md` §2.2). A client that acts on an edge published here without
+         *     asking gets a typed 409 carrying the moves the record may actually take — the same failure mode
+         *     as a stale button — so the graph is drawable and the enforcement path is untouched.
+         *
+         *     Nodes and edges are siblings here rather than the edges hanging off the state they leave. A
+         *     graph is a pair of sets, and an arrow belongs to neither endpoint: nesting the moves under
+         *     ``from_state`` would make "what leads *into* ``bloqueada``" a scan of every node, and — the
+         *     deciding reason — it would put a key named ``transitions`` on a state object, one nesting level
+         *     away from the per-record ``transitions`` that means "legal right now". Two lists with the same
+         *     name and different authority is exactly the confusion this document must not create. As
+         *     siblings they are also structurally different — an edge names both of its endpoints, an option
+         *     names only a target — so no client can feed one where the other is expected.
          *
          *     Attributes:
          *         applies_to: ``PROJECT`` | ``TASK`` — the kind of aggregate this graph governs. Load-bearing
@@ -1155,6 +1337,13 @@ export interface components {
          *         states: Every node, ordered by the ``order`` an operator arranged in the admin, ``code``
          *             breaking ties. Empty is a legitimate answer — a graph whose states nobody has
          *             configured yet — and the board renders no columns rather than treating it as a failure.
+         *         transitions: Every **active** edge of the graph, grouped by the source node in the same
+         *             column order as ``states`` and then by the operator's own ``order`` within it. A
+         *             deactivated edge is absent rather than flagged: ``is_active = False`` is how an operator
+         *             withdraws a move, the transition service refuses it, and publishing it as a drawable
+         *             arrow would advertise a move nothing can take. Empty is legitimate and means the
+         *             operator has declared no move yet — a graph of isolated columns, which is a real
+         *             configuration and not a failure.
          */
         WorkflowShapeView: {
             /** Code */
@@ -1183,6 +1372,11 @@ export interface components {
              * @default []
              */
             states: components["schemas"]["StateRef"][];
+            /**
+             * Transitions
+             * @default []
+             */
+            transitions: components["schemas"]["WorkflowEdgeView"][];
         };
         /**
          * QueueQuery
@@ -2727,6 +2921,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CatalogView"];
+                };
+            };
+        };
+    };
+    apps_catalog_api_routers_get_roles: {
+        parameters: {
+            query?: {
+                status?: "active" | "inactive" | "all";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaxonomyRef"][];
+                };
+            };
+        };
+    };
+    apps_catalog_api_routers_post_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleCreateIn"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaxonomyRef"];
+                };
+            };
+        };
+    };
+    apps_catalog_api_routers_patch_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                role_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleUpdateIn"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TaxonomyRef"];
                 };
             };
         };

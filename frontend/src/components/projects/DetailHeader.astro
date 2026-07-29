@@ -17,7 +17,7 @@
  * repaint the whole header, the transition bar and the risk list from the
  * response, which is the project re-read after the write.
  */
-import DueChip from "./DueChip.astro";
+import DateField from "../ui/DateField.astro";
 import NextStepField from "./NextStepField.astro";
 import OwnerMenu from "./OwnerMenu.astro";
 import StateChip from "./StateChip.astro";
@@ -122,7 +122,14 @@ const health = healthTone(healthCode);
     </div>
     <div class="fact">
       <dt class="label">Fecha objetivo</dt>
-      <dd><DueChip date={targetDate} /></dd>
+      <dd>
+        <DateField
+          scope="project"
+          code={code}
+          date={targetDate}
+          label="Fecha objetivo"
+        />
+      </dd>
     </div>
     <div class="fact wide">
       <dt class="label">Próximo paso</dt>

@@ -1,0 +1,221 @@
+---
+/**
+ * The roster as a table: every person on one line, for comparing rather than reading.
+ *
+ * A real `<table>` with `<th scope="col">`, not a grid of divs: the column a figure belongs to
+ * is information, and a screen reader that cannot announce it is reading a list of unlabelled
+ * numbers.
+ *
+ * Sorting is the **server's**. Each sortable header is a button carrying the wire field name;
+ * the island puts it in the URL and refetches. Sorting the rows in the browser instead would be
+ * a second ordering that disagrees with the link somebody shares.
+ *
+ * `aria-sort` on the active header is what makes the order audible; without it the arrow is a
+ * decoration only sighted readers can act on.
+ */
+import Icon from "../ui/Icon.astro";
+import MemberRow from "./MemberRow.astro";
+import type { RosterQuery, SortField } from "./table";
+import type { TeamLoadEntry } from "../../lib/api/domain";
+// The table grammar this surface established, now shared with the activity feed
+// (`src/styles/table.css`). What stays below is only what is the roster's own:
+// its sort control, its column widths and which of them drop when.
+import "../../styles/table.css";
+
+export interface Props {
+  entries: readonly TeamLoadEntry[];
+  /** The question currently being asked; decides which header renders as active. */
+  query: RosterQuery;
+}
+
+interface Column {
+  readonly field: SortField;
+  readonly label: string;
+  /** Extra classes, matching `MemberRow`'s cells so a column hides in both halves at once. */
+  readonly className: string;
+  /** Screen-reader expansion for the abbreviated numeric headers. */
+  readonly title?: string;
+}
+
+const { entries, query } = Astro.props;
+
+const COLUMNS: readonly Column[] = [
+  { field: "label", label: "Persona", className: "col-person" },
+  { field: "role", label: "Rol", className: "col-role" },
+  { field: "utilization", label: "Carga", className: "col-load" },
+  {
+    field: "load_points",
+    label: "Puntos",
+    className: "col-points right",
+    title: "Puntos asignados sobre la capacidad semanal",
+  },
+  {
+    field: "open_tasks",
+    label: "Abiertas",
+    className: "col-num col-open right",
+  },
+  {
+    field: "overdue_tasks",
+    label: "Vencidas",
+    className: "col-num col-overdue right",
+  },
+  {
+    field: "blocked_tasks",
+    label: "Bloqueadas",
+    className: "col-num col-blocked right",
+  },
+  {
+    field: "urgent_tasks",
+    label: "Urgentes",
+    className: "col-num col-urgent right",
+  },
+  {
+    field: "projects_owned",
+    label: "Proyectos",
+    className: "col-num col-projects right",
+  },
+];
+
+/** `ascending` / `descending` / `none`, as `aria-sort` spells them. */
+const ariaSortOf = (field: SortField): "ascending" | "descending" | "none" => {
+  if (query.sort !== field) return "none";
+  return query.descending ? "descending" : "ascending";
+};
+---
+
+<div class="table-wrap card" data-roster-table>
+  <table class="data-table head-controls">
+    <caption class="visually-hidden">
+      Carga y estado de cada persona del equipo
+    </caption>
+    <thead>
+      <tr>
+        {
+          COLUMNS.map((column) => (
+            <th
+              class:list={["label", column.className]}
+              scope="col"
+              aria-sort={ariaSortOf(column.field)}
+              data-sort-header={column.field}
+            >
+              <button
+                class="sort"
+                type="button"
+                data-sort={column.field}
+                title={column.title}
+              >
+                <span>{column.label}</span>
+                <Icon name="chevron-down" size={14} />
+              </button>
+            </th>
+          ))
+        }
+        <th class="label col-status" scope="col">Estado</th>
+        <th class="label col-actions right" scope="col">
+          <span class="visually-hidden">Acciones</span>
+        </th>
+      </tr>
+    </thead>
+    <tbody data-rows>
+      {entries.map((entry) => <MemberRow entry={entry} />)}
+    </tbody>
+  </table>
+</div>
+
+{/* Cloned by the island for anybody who was not in the previous answer. */}
+<template data-row-template>
+  <MemberRow
+    entry={{
+      alias: "",
+      label: "",
+      role: null,
+      role_code: null,
+      is_active: true,
+      has_password: false,
+      weekly_capacity_points: 1,
+      load_points: 0,
+      utilization: 0,
+      is_overloaded: false,
+      open_tasks: 0,
+      blocked_tasks: 0,
+      high_or_critical_open: 0,
+      overdue_tasks: 0,
+      projects_owned: 0,
+    }}
+  />
+</template>
+
+<style>
+  /* Everything the roster shares with the activity feed — the scrolling card, the
+     sticky header, the row rhythm, the hover — is `src/styles/table.css`. Below is
+     only what belongs to this table. */
+  table {
+    min-width: 900px;
+  }
+
+  .sort {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    width: 100%;
+    padding: var(--space-3);
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    cursor: pointer;
+  }
+
+  .right .sort {
+    justify-content: flex-end;
+  }
+
+  .sort:hover {
+    color: var(--cobalto);
+  }
+
+  /* The arrow only exists for the column actually in force: an indicator on every header
+     tells the reader nothing about which one is sorted. */
+  .sort :global(svg) {
+    opacity: 0;
+    transition: transform var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  th[aria-sort="ascending"] .sort :global(svg) {
+    opacity: 1;
+    transform: rotate(180deg);
+  }
+
+  th[aria-sort="descending"] .sort :global(svg) {
+    opacity: 1;
+  }
+
+  th[aria-sort="ascending"],
+  th[aria-sort="descending"] {
+    color: var(--tinta);
+  }
+
+  /* Estado and Acciones hold no sort button, so the shared sheet's `:has(button)`
+     rule leaves them with the ordinary cell padding — nothing to restate here. */
+
+  @media (max-width: 1279px) {
+    .col-projects {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1119px) {
+    .col-urgent {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1023px) {
+    .col-role,
+    .col-points {
+      display: none;
+    }
+  }
+</style>

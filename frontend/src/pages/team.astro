@@ -1,48 +1,83 @@
 ---
 /**
- * Equipo (`/team`): who is carrying how much, right now.
+ * Equipo (`/team`): who is on the team, what they are carrying, and who changes that.
  *
- * First paint is fetched here (`GET /api/v1/team/load`) and the island below keeps it honest.
- * Load is computed from task rows at read time and never stored (`docs/API.md` §2.14), so
- * there is no entity to patch from an envelope: a task event means "the answer changed",
- * which this surface honours with a debounced refetch rather than by doing arithmetic the
- * server owns.
+ * The container (`docs/standards/PATTERNS_FRONTEND.md` §5): this frontmatter performs the reads
+ * for the first paint and composes presentational components; the island underneath refetches
+ * and writes, and owns no copy of its own.
+ *
+ * **The question lives in the URL.** Search, facets and ordering are read from
+ * `Astro.url.searchParams` and passed straight to `GET /api/v1/team/load`, so a shared link
+ * opens on the view it promises and the server renders exactly what the toolbar shows. Nothing
+ * is filtered or sorted in the browser — a second ordering here would disagree with the link.
+ *
+ * Load is computed from task rows at read time and never stored (`docs/API.md` §2.14), so there
+ * is no entity to patch from an envelope: a task event means "the answer changed", which this
+ * surface honours with a debounced refetch rather than by doing arithmetic the server owns.
  *
  * The four view states are real markup, one arm at a time, selected by `data-view` on the
  * region — including `disconnected`, which keeps the rows on screen and marks them stale
  * instead of blanking the roster.
  */
-import LoadRow from "../components/team/LoadRow.astro";
-import LoadRowSkeleton from "../components/team/LoadRowSkeleton.astro";
+import ConfirmDialog from "../components/team/ConfirmDialog.astro";
+import MemberDialog from "../components/team/MemberDialog.astro";
+import PasswordDialog from "../components/team/PasswordDialog.astro";
+import RolesDialog from "../components/team/RolesDialog.astro";
+import RosterTable from "../components/team/RosterTable.astro";
+import RosterToolbar from "../components/team/RosterToolbar.astro";
 import {
-  BLANK_ENTRY,
   EMPTY_MESSAGE,
+  EMPTY_ROSTER_MESSAGE,
   errorCopy,
   formatClock,
   formatStamp,
   formatSummary,
-  sortByLoad,
-} from "../components/team/load";
+  isFiltered,
+  orderByOf,
+  queryFromParams,
+} from "../components/team/table";
 import Icon from "../components/ui/Icon.astro";
 import Shell from "../layouts/Shell.astro";
-import { getTeamLoad } from "../lib/api/client";
+import { getCatalog, getTeamLoad } from "../lib/api/client";
 import { toViewState } from "../lib/view-state";
 
-const result = await getTeamLoad();
+const query = queryFromParams(Astro.url.searchParams);
 
 /**
- * `"connecting"` because the stream has no meaning during SSR: there is no `EventSource` on
- * the server, and a fresh response is authoritative whether or not the browser's stream has
- * finished opening. It also makes `disconnected` unreachable here — that arm is entered by
- * the island, from a real status change.
+ * Both reads at once: the roster is the page, and the roles are what its pickers and its role
+ * facet are drawn from. Sequential would cost a round trip for no reason — neither depends on
+ * the other.
+ */
+const [result, catalog] = await Promise.all([
+  getTeamLoad({
+    q: query.search,
+    role: query.role === null ? [] : [query.role],
+    status: query.status,
+    ...(query.overloaded === null ? {} : { overloaded: query.overloaded }),
+    order_by: orderByOf(query),
+  }),
+  getCatalog(),
+]);
+
+/**
+ * `"connecting"` because the stream has no meaning during SSR: there is no `EventSource` on the
+ * server, and a fresh response is authoritative whether or not the browser's stream has
+ * finished opening. It also makes `disconnected` unreachable here — that arm is entered by the
+ * island, from a real status change.
  */
 const state = toViewState(result, "connecting", {
   isEmpty: (data) => data.items.length === 0,
-  emptyMessage: EMPTY_MESSAGE,
+  emptyMessage: isFiltered(query) ? EMPTY_MESSAGE : EMPTY_ROSTER_MESSAGE,
   lastEventAt: null,
 });
 
-const entries = state.kind === "ready" ? sortByLoad(state.data.items) : [];
+const entries = state.kind === "ready" ? state.data.items : [];
+
+/**
+ * An empty role list is a legitimate first paint, not a failure: the facet and the pickers
+ * render with only "Todos" / "Sin rol", which is the truth about a catalog nobody has filled.
+ */
+const roles = catalog.ok ? catalog.data.roles : [];
 
 /** Filled even when this arm is hidden, so the card is never blank the moment it appears. */
 const errorMessage = errorCopy(
@@ -54,7 +89,7 @@ const fetchedAt = new Date().toISOString();
 
 const CRUMBS = [{ label: "Resumen", href: "/" }, { label: "Equipo" }];
 
-/** Skeleton rows shown while a retry is in flight: the roster is five people. */
+/** Skeleton rows shown while a retry is in flight. */
 const SKELETON_ROWS = [0, 1, 2, 3, 4];
 ---
 
@@ -78,6 +113,8 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
       </p>
     </header>
 
+    <RosterToolbar query={query} roles={roles} />
+
     <div class="stale card tone-ambar" data-stale role="status">
       <span class="dot" aria-hidden="true"></span>
       <p class="stale-text">
@@ -92,34 +129,48 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
       <button
         class="btn btn-secondary"
         type="button"
-        data-team-action="reconnect"
+        data-roster-action="reconnect"
       >
         <Icon name="refresh" />
         Reconectar
       </button>
     </div>
 
-    <ul class="rows" data-rows>
-      {entries.map((entry) => <LoadRow entry={entry} />)}
-    </ul>
+    <div data-table-arm>
+      <RosterTable entries={entries} query={query} />
+    </div>
 
-    <ul class="rows" data-skeletons aria-hidden="true">
-      {SKELETON_ROWS.map(() => <LoadRowSkeleton />)}
-    </ul>
+    <div class="card skeletons" data-skeletons aria-hidden="true">
+      {SKELETON_ROWS.map(() => <p class="skeleton-row" />)}
+    </div>
 
     <div class="state card" data-empty-arm>
       <span class="state-icon tone-piedra" aria-hidden="true">
         <Icon name="users" />
       </span>
-      <h2 class="h2">Todavía no hay nadie en el equipo</h2>
-      <p class="body-text" data-empty-copy>{EMPTY_MESSAGE}</p>
-      <p>
+      <h2 class="h2">Nadie que mostrar</h2>
+      <p class="body-text" data-empty-copy>
+        {state.kind === "empty" ? state.message : EMPTY_MESSAGE}
+      </p>
+      <p class="state-actions">
         <button
           class="btn btn-secondary"
           type="button"
-          data-team-action="retry"
+          data-roster-action="clear"
+          data-empty-clear
+          hidden
         >
-          Volver a consultar
+          Limpiar filtros
+        </button>
+        <button
+          class="btn btn-primary"
+          type="button"
+          data-roster-action="create"
+          data-roster-actions
+          hidden
+        >
+          <Icon name="plus" size={16} />
+          Añadir persona
         </button>
       </p>
     </div>
@@ -128,507 +179,32 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
       <span class="state-icon tone-rojo" aria-hidden="true">
         <Icon name="alert" />
       </span>
-      <h2 class="h2">No pudimos leer la carga del equipo</h2>
+      <h2 class="h2">No pudimos leer el equipo</h2>
       <p class="body-text" data-error-copy>{errorMessage}</p>
       <p>
         <button
           class="btn btn-secondary"
           type="button"
-          data-team-action="retry"
+          data-roster-action="retry"
         >
           Reintentar
         </button>
       </p>
     </div>
 
-    {
-      /* Cloned by the island when the refetch brings back somebody who had no row yet. */
-    }
-    <template data-row-template><LoadRow entry={BLANK_ENTRY} /></template>
+    <MemberDialog roles={roles} />
+    <PasswordDialog />
+    <ConfirmDialog />
+    <RolesDialog />
   </section>
+
+  <script>
+    import { onPage } from "../components/projects/island";
+    import { mountRoster } from "../components/team/roster-island";
+
+    onPage("[data-team-region]", mountRoster);
+  </script>
 </Shell>
-
-<script>
-  /**
-   * The Equipo island: keeps a computed-on-read roster honest over SSE.
-   *
-   * It never patches numbers out of an envelope, because no envelope carries them — load is
-   * derived from task rows when the endpoint is called. A watched topic therefore means "the
-   * answer may have changed" and the island refetches, debounced so a burst of task events is
-   * one request. Out-of-order answers are dropped by sequence, so a slow early response can
-   * never overwrite a fast later one.
-   *
-   * Failure to tear down on `astro:before-swap` would leave the subscriptions patching rows
-   * that are no longer in the document and hold the shared connection open for a page that
-   * shows none of it.
-   */
-  import {
-    barPercent,
-    chipsFor,
-    EMPTY_MESSAGE,
-    errorCopy,
-    formatClock,
-    formatMeta,
-    formatPoints,
-    formatStamp,
-    formatSummary,
-    formatUtilization,
-    loadTone,
-    sortByLoad,
-    TONE_CLASSES,
-    type ToneClass,
-  } from "../components/team/load";
-  import { getTeamLoad } from "../lib/api/client";
-  import type { TeamLoad, TeamLoadEntry } from "../lib/api/domain";
-  import { avatarHue, initials } from "../lib/auth/session";
-  import {
-    countUp,
-    flip,
-    prefersReducedMotion,
-    sampleSpring,
-  } from "../lib/motion/spring";
-  import {
-    onReset,
-    onStatus,
-    retry,
-    subscribe,
-    type Envelope,
-    type Status,
-  } from "../lib/stream/store";
-  import type { Topic } from "../lib/stream/topics";
-  import { toast } from "../lib/toast";
-  import { assertNever, toViewState, type ViewState } from "../lib/view-state";
-
-  /**
-   * Topics that can change a number this surface renders.
-   *
-   * The task topics move the load itself; the project topics move `projects_owned`, which is
-   * on the same card — a rendered figure whose event nobody listens for goes stale in silence,
-   * which is the one failure an operations board must not have. `blocker.*` is deliberately
-   * absent: `blocked_tasks` counts tasks whose *workflow state* is blocked, and that arrives
-   * as `task.state_changed`.
-   */
-  const WATCHED_TOPICS: readonly Topic[] = [
-    "task.created",
-    "task.updated",
-    "task.state_changed",
-    "project.created",
-    "project.updated",
-  ];
-
-  /** A burst of task events during one drain must cost one request, not one each. */
-  const REFRESH_DEBOUNCE_MS = 600;
-
-  /** Delay between consecutive bars in the entrance, so the roster reads top-down. */
-  const INTRO_STAGGER_MS = 45;
-
-  /** Which arm of the view-state union the region is currently rendering. */
-  type Arm = ViewState<TeamLoad>["kind"];
-
-  let cleanups: Array<() => void> = [];
-  let introTimers: number[] = [];
-  let refreshTimer: number | null = null;
-  /** Monotonic request id; a response whose id is stale is discarded, never rendered. */
-  let requestSeq = 0;
-  let status: Status = "connecting";
-  let lastEventAt: string | null = null;
-  /** True while the last refresh failed, so a broken API toasts once and not per event. */
-  let refreshFailed = false;
-  /** True once the connection dropped: what the stream missed can only come from a refetch. */
-  let missedEvents = false;
-  let reconnectButton: HTMLButtonElement | null = null;
-
-  function region(): HTMLElement | null {
-    return document.querySelector<HTMLElement>("[data-team-region]");
-  }
-
-  function setArm(root: HTMLElement, arm: Arm): void {
-    root.dataset.view = arm;
-  }
-
-  function hasRows(root: HTMLElement): boolean {
-    return root.querySelector("[data-rows] [data-alias]") !== null;
-  }
-
-  function field(row: HTMLElement, name: string): HTMLElement | null {
-    return row.querySelector<HTMLElement>(`[data-field="${name}"]`);
-  }
-
-  function setText(row: HTMLElement, name: string, text: string): void {
-    const el = field(row, name);
-    if (el !== null) el.textContent = text;
-  }
-
-  /** Swaps the tone class without touching the rest, which includes Astro's scope marker. */
-  function setTone(el: HTMLElement, tone: ToneClass): void {
-    el.classList.remove(...TONE_CLASSES);
-    el.classList.add(tone);
-  }
-
-  function markBusy(button: HTMLButtonElement | null): void {
-    if (button === null) return;
-    button.classList.add("is-loading");
-    button.disabled = true;
-  }
-
-  function clearBusy(button: HTMLButtonElement | null): void {
-    if (button === null) return;
-    button.classList.remove("is-loading");
-    button.disabled = false;
-  }
-
-  /**
-   * Writes one roster row into an existing card.
-   *
-   * Every value goes through the same functions the server rendered with, so a patched row and
-   * a freshly rendered one are indistinguishable. The utilization figure counts from what the
-   * card already showed to the new value — the number moving is how a change announces itself
-   * (`DESIGN.md` §Motion, feedback inventory).
-   */
-  function applyEntry(row: HTMLElement, entry: TeamLoadEntry): void {
-    row.dataset.alias = entry.alias;
-    setTone(row, loadTone(entry.is_overloaded));
-    row.classList.toggle("is-overloaded", entry.is_overloaded);
-
-    const avatar = field(row, "avatar");
-    if (avatar !== null) {
-      avatar.textContent = initials(entry.label);
-      avatar.style.setProperty("--avatar-h", String(avatarHue(entry.alias)));
-    }
-
-    setText(row, "label", entry.label);
-    setText(row, "meta", formatMeta(entry.role, entry.projects_owned));
-    setText(
-      row,
-      "points",
-      formatPoints(entry.load_points, entry.weekly_capacity_points),
-    );
-
-    const bar = field(row, "bar");
-    if (bar !== null) bar.style.width = `${barPercent(entry.utilization)}%`;
-
-    const utilization = field(row, "utilization");
-    if (utilization !== null) {
-      const shown = Number(row.dataset.utilization ?? "0");
-      countUp(
-        utilization,
-        Number.isFinite(shown) ? shown : 0,
-        entry.utilization,
-        formatUtilization,
-      );
-    }
-    row.dataset.utilization = String(entry.utilization);
-
-    for (const chip of chipsFor(entry)) {
-      const el = row.querySelector<HTMLElement>(`[data-chip="${chip.key}"]`);
-      if (el === null) continue;
-      el.textContent = chip.text;
-      el.hidden = !chip.visible;
-      setTone(el, chip.tone);
-    }
-  }
-
-  function cloneRow(template: HTMLTemplateElement): HTMLElement | null {
-    const clone = template.content.firstElementChild?.cloneNode(true) ?? null;
-    return clone instanceof HTMLElement ? clone : null;
-  }
-
-  /**
-   * Reconciles the rendered cards with a fresh payload: patch what exists, clone what is new,
-   * drop whoever left the roster, and let FLIP carry the reordering.
-   *
-   * Cards are matched by `alias` and moved rather than recreated, so the elements FLIP measured
-   * before the mutation are the same ones it animates after it. Rebuilding the list instead
-   * would leave FLIP measuring detached nodes and the roster would teleport into its new order.
-   */
-  async function syncRows(
-    root: HTMLElement,
-    items: readonly TeamLoadEntry[],
-  ): Promise<void> {
-    const list = root.querySelector<HTMLElement>("[data-rows]");
-    const template = root.querySelector<HTMLTemplateElement>(
-      "[data-row-template]",
-    );
-    if (list === null || template === null) return;
-
-    const ordered = sortByLoad(items);
-    const existing = new Map<string, HTMLElement>();
-    for (const row of list.querySelectorAll<HTMLElement>("[data-alias]")) {
-      const alias = row.dataset.alias;
-      if (alias !== undefined) existing.set(alias, row);
-    }
-
-    await flip([...existing.values()], () => {
-      for (const entry of ordered) {
-        const row = existing.get(entry.alias) ?? cloneRow(template);
-        if (row === null) continue;
-        applyEntry(row, entry);
-        // `appendChild` moves a node that is already in the list, so one pass both
-        // reorders the survivors and inserts the newcomers in their ranked position.
-        list.appendChild(row);
-        existing.delete(entry.alias);
-      }
-      for (const gone of existing.values()) gone.remove();
-    });
-
-    const summary = root.querySelector<HTMLElement>("[data-summary]");
-    if (summary !== null) summary.textContent = formatSummary(ordered);
-  }
-
-  function renderStale(root: HTMLElement, at: string | null): void {
-    const clock = root.querySelector<HTMLElement>("[data-stale-time]");
-    if (clock === null) return;
-    const stamp = at ?? root.dataset.fetchedAt ?? null;
-    if (stamp === null) {
-      clock.textContent = "hora desconocida";
-      return;
-    }
-    clock.textContent = formatClock(stamp);
-    clock.title = formatStamp(stamp);
-    if (clock instanceof HTMLTimeElement) clock.dateTime = stamp;
-  }
-
-  async function render(
-    root: HTMLElement,
-    view: ViewState<TeamLoad>,
-  ): Promise<void> {
-    switch (view.kind) {
-      case "loading":
-        setArm(root, "loading");
-        return;
-      case "ready":
-        await syncRows(root, view.data.items);
-        setArm(root, "ready");
-        return;
-      case "disconnected":
-        await syncRows(root, view.data.items);
-        // Arm first, then the timestamp: a `role="status"` announces a change it was visible
-        // for, so writing the clock into a hidden banner would announce nothing.
-        setArm(root, "disconnected");
-        renderStale(root, view.lastEventAt);
-        return;
-      case "empty": {
-        const copy = root.querySelector<HTMLElement>("[data-empty-copy]");
-        if (copy !== null) copy.textContent = view.message;
-        setArm(root, "empty");
-        return;
-      }
-      case "error": {
-        const copy = root.querySelector<HTMLElement>("[data-error-copy]");
-        if (copy !== null) copy.textContent = errorCopy(view.code);
-        setArm(root, "error");
-        return;
-      }
-      default:
-        assertNever(view);
-    }
-  }
-
-  /**
-   * Reads the roster again and renders the outcome.
-   *
-   * A failure while cards are on screen keeps them and says so in a toast: blanking a good
-   * board because one background read failed is worse than the read failing. It toasts once
-   * per outage rather than once per event, and a failure with nothing on screen falls through
-   * to the `error` arm, which owns the retry.
-   */
-  async function fetchAndRender(): Promise<void> {
-    const seq = (requestSeq += 1);
-    const result = await getTeamLoad();
-    if (seq !== requestSeq) return;
-    const root = region();
-    if (root === null) return;
-
-    const view = toViewState(result, status, {
-      isEmpty: (data) => data.items.length === 0,
-      emptyMessage: EMPTY_MESSAGE,
-      lastEventAt,
-    });
-
-    if (view.kind === "error" && hasRows(root)) {
-      if (!refreshFailed) {
-        toast({
-          kind: "error",
-          title: "No pudimos actualizar la carga del equipo",
-          detail: errorCopy(view.code),
-        });
-      }
-      refreshFailed = true;
-      return;
-    }
-    refreshFailed = false;
-    await render(root, view);
-  }
-
-  /** The explicit retry of the `error` and `empty` arms: skeletons first, then the answer. */
-  async function retryNow(button: HTMLButtonElement | null): Promise<void> {
-    const root = region();
-    if (root === null) return;
-    markBusy(button);
-    setArm(root, "loading");
-    await fetchAndRender();
-    clearBusy(button);
-  }
-
-  /** The stream-driven refresh: the cards stay up while it runs, so nothing flashes. */
-  function scheduleRefresh(): void {
-    if (refreshTimer !== null) window.clearTimeout(refreshTimer);
-    refreshTimer = window.setTimeout(() => {
-      refreshTimer = null;
-      void fetchAndRender();
-    }, REFRESH_DEBOUNCE_MS);
-  }
-
-  function handleEnvelope(envelope: Envelope): void {
-    // ISO-8601 UTC instants compare lexicographically, so the newest one wins without parsing.
-    if (lastEventAt === null || envelope.occurred_at > lastEventAt) {
-      lastEventAt = envelope.occurred_at;
-    }
-    scheduleRefresh();
-  }
-
-  /**
-   * Follows the shared connection.
-   *
-   * `connecting` deliberately changes nothing: a reconnect in flight is still not live data,
-   * and hiding the staleness marker the moment somebody presses "Reconectar" would promise a
-   * recovery that has not happened yet. Only a connection that actually opened clears it.
-   */
-  function handleStatus(next: Status): void {
-    status = next;
-    const root = region();
-    if (root === null) return;
-    if (next === "connecting") return;
-
-    clearBusy(reconnectButton);
-    reconnectButton = null;
-
-    if (next === "disconnected") {
-      missedEvents = true;
-      if (root.dataset.view === "ready") setArm(root, "disconnected");
-      renderStale(root, lastEventAt);
-      return;
-    }
-
-    if (root.dataset.view === "disconnected") setArm(root, "ready");
-    // The transport cannot replay what it missed (Redis pub/sub is live-only), so the end of
-    // an outage — and only that — is the moment to ask the server what changed meanwhile.
-    if (!missedEvents) return;
-    missedEvents = false;
-    void fetchAndRender();
-  }
-
-  function bindActions(root: HTMLElement): void {
-    for (const button of root.querySelectorAll<HTMLButtonElement>(
-      "[data-team-action]",
-    )) {
-      const action = button.dataset.teamAction;
-      if (action === "retry") {
-        button.addEventListener("click", () => {
-          void retryNow(button);
-        });
-        continue;
-      }
-      if (action !== "reconnect") continue;
-      button.addEventListener("click", () => {
-        reconnectButton = button;
-        markBusy(button);
-        retry();
-      });
-    }
-  }
-
-  /**
-   * The surface's one authored motion moment: the bars grow in once, staggered, while their
-   * percentages count up from zero.
-   *
-   * Layout is already final — the server rendered every width and every figure — so this only
-   * makes the measurement visible. Under reduced motion there is nothing to do: the answer is
-   * already on screen, and the entrance is the only thing being skipped.
-   */
-  function playIntro(root: HTMLElement): void {
-    if (root.dataset.view !== "ready") return;
-    if (prefersReducedMotion()) return;
-    const { duration, easing } = sampleSpring("carta");
-
-    root
-      .querySelectorAll<HTMLElement>("[data-rows] [data-alias]")
-      .forEach((row, index) => {
-        const shown = Number(row.dataset.utilization ?? "0");
-        const target = Number.isFinite(shown) ? shown : 0;
-        const utilization = field(row, "utilization");
-        const bar = field(row, "bar");
-
-        if (bar !== null) {
-          bar.animate(
-            [{ transform: "scaleX(0)" }, { transform: "scaleX(1)" }],
-            {
-              duration,
-              easing,
-              delay: index * INTRO_STAGGER_MS,
-              fill: "backwards",
-            },
-          );
-        }
-        if (utilization === null) return;
-        introTimers.push(
-          window.setTimeout(() => {
-            countUp(utilization, 0, target, formatUtilization);
-          }, index * INTRO_STAGGER_MS),
-        );
-      });
-  }
-
-  function stop(): void {
-    for (const off of cleanups) off();
-    cleanups = [];
-    for (const timer of introTimers) window.clearTimeout(timer);
-    introTimers = [];
-    if (refreshTimer !== null) {
-      window.clearTimeout(refreshTimer);
-      refreshTimer = null;
-    }
-    // Invalidates any response still in flight: it must not render into the next page.
-    requestSeq += 1;
-    reconnectButton = null;
-  }
-
-  function start(): void {
-    stop();
-    const root = region();
-    if (root === null) return;
-
-    lastEventAt = null;
-    refreshFailed = false;
-    // The server just answered, so nothing is missing yet: an outage from a previous visit
-    // must not make this paint refetch data that is one round trip old.
-    missedEvents = false;
-
-    cleanups.push(onStatus(handleStatus));
-    cleanups.push(
-      onReset(() => {
-        void fetchAndRender();
-      }),
-    );
-    for (const topic of WATCHED_TOPICS) {
-      cleanups.push(subscribe(topic, handleEnvelope));
-    }
-
-    bindActions(root);
-    playIntro(root);
-
-    // The server render carries no session — the credential lives in localStorage, which SSR
-    // cannot read — so a first paint that failed is retried here, where the token exists.
-    if (root.dataset.view === "error") void retryNow(null);
-  }
-
-  document.addEventListener("astro:page-load", () => {
-    start();
-  });
-  document.addEventListener("astro:before-swap", () => {
-    stop();
-  });
-</script>
 
 <style>
   .team {
@@ -647,10 +223,6 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
   .lead {
     margin-top: var(--space-2);
     color: var(--tinta-media);
-  }
-
-  .rows {
-    gap: var(--space-3);
   }
 
   .stale {
@@ -686,9 +258,27 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
     color: var(--tone-ink);
   }
 
+  .state-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .skeletons {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+  }
+
+  .skeleton-row {
+    height: var(--space-6);
+    border-radius: var(--radius-chip);
+    background-color: var(--pozo);
+  }
+
   /* --- View-state arms: one at a time, selected by `data-view` on the region --- */
 
-  [data-rows],
+  [data-table-arm],
   [data-skeletons],
   [data-stale],
   [data-empty-arm],
@@ -696,10 +286,10 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
     display: none;
   }
 
-  [data-view="ready"] [data-rows],
-  [data-view="disconnected"] [data-rows],
+  [data-view="ready"] [data-table-arm],
+  [data-view="disconnected"] [data-table-arm],
   [data-view="loading"] [data-skeletons] {
-    display: grid;
+    display: block;
   }
 
   [data-view="disconnected"] [data-stale] {
@@ -709,6 +299,12 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
   [data-view="empty"] [data-empty-arm],
   [data-view="error"] [data-error-arm] {
     display: grid;
+  }
+
+  /* The toolbar survives every arm: the way out of an empty result is the filter that
+     produced it, so hiding the controls would strand the reader in it. */
+  [data-view="error"] [data-roster-toolbar] {
+    display: none;
   }
 
   /* A count of a roster we could not read would be a number pretending to be a fact. */

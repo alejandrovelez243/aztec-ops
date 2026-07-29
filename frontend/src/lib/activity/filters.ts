@@ -207,3 +207,48 @@ export function pageCount(count: number, pageSize: number): number {
   if (pageSize <= 0) return 1;
   return Math.max(1, Math.ceil(count / pageSize));
 }
+
+/** How many numbered links surround the current page before it starts eliding. */
+const PAGER_WINDOW = 2;
+
+/**
+ * Which page links the pager shows.
+ *
+ * Computed here rather than inside the component because two renderers need the
+ * same answer: the server's first paint and the island's rebuild after a live
+ * filter change. Two copies of this arithmetic would eventually disagree about
+ * which page is current, which is the one thing a pager may not do.
+ */
+export interface PagerModel {
+  readonly page: number;
+  readonly pageCount: number;
+  /** The contiguous window around the current page, in ascending order. */
+  readonly numbers: readonly number[];
+  /** Whether the standalone link to page one is needed before the window. */
+  readonly showFirst: boolean;
+  readonly leadGap: boolean;
+  readonly trailGap: boolean;
+  readonly showLast: boolean;
+  readonly hasPrevious: boolean;
+  readonly hasNext: boolean;
+  /** A single page needs no control at all. */
+  readonly visible: boolean;
+}
+
+/** Builds the pager's shape for one reading. */
+export function pagerModel(page: number, pages: number): PagerModel {
+  const first = Math.max(1, page - PAGER_WINDOW);
+  const last = Math.min(pages, page + PAGER_WINDOW);
+  return {
+    page,
+    pageCount: pages,
+    numbers: Array.from({ length: last - first + 1 }, (_, i) => first + i),
+    showFirst: first > 1,
+    leadGap: first > 2,
+    trailGap: last < pages - 1,
+    showLast: last < pages,
+    hasPrevious: page > 1,
+    hasNext: page < pages,
+    visible: pages > 1,
+  };
+}

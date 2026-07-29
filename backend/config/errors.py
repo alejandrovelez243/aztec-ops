@@ -123,6 +123,27 @@ def _ops_lead_details(exc: Exception) -> dict[str, JsonValue]:
     return {"required": "ops_lead", "action": getattr(exc, "action", "")}
 
 
+def _taxonomy_not_found(exc: Exception) -> dict[str, JsonValue]:
+    """Render ``{entity, id}`` for a taxonomy row addressed by a code that resolves to nothing."""
+    return {
+        "entity": str(getattr(exc, "taxonomy", "")),
+        "id": str(getattr(exc, "code", "")),
+    }
+
+
+def _taxonomy_conflict(exc: Exception) -> dict[str, JsonValue]:
+    """Render ``{entity, id, current}`` for a taxonomy code that is already taken.
+
+    ``entity`` is read off the error rather than fixed, because one class serves every taxonomy
+    and a hardcoded ``"role"`` would start lying the day a second one becomes writable.
+    """
+    return {
+        "entity": str(getattr(exc, "taxonomy", "")),
+        "id": str(getattr(exc, "code", "")),
+        "current": "exists",
+    }
+
+
 def _password_details(exc: Exception) -> dict[str, JsonValue]:
     """Render every rule the proposed password broke under ``fields.password``.
 
@@ -177,6 +198,10 @@ _DESCRIPTORS: Final[
     work_errors.PriorityNotFound: (404, CODE_NOT_FOUND, _not_found("priority")),
     work_errors.PersonNotFound: (404, CODE_NOT_FOUND, _not_found("person")),
     accounts_errors.MemberNotFound: (404, CODE_NOT_FOUND, _not_found("person")),
+    # More specific than its ``UnknownCode`` base, which stays 422: the engine failing to resolve
+    # a code it read is a broken contract, while a client editing a row somebody deleted has
+    # simply addressed something that is not there.
+    catalog_errors.TaxonomyRowNotFound: (404, CODE_NOT_FOUND, _taxonomy_not_found),
     # --- 401 / 403: who is asking, and whether they may -------------------------------------
     # Three distinct 401 codes rather than one, because the client's next move differs: no
     # credential means "sign in", a refused token means "refresh first", and bad credentials mean
@@ -219,6 +244,13 @@ _DESCRIPTORS: Final[
         409,
         CODE_CONFLICTING_STATE,
         _conflict("person", "exists"),
+    ),
+    # ``current: "exists"`` covers a retired row too, on purpose: the code is taken either way,
+    # and the client's move — restore it, do not create a second one — is the same.
+    catalog_errors.DuplicateTaxonomyCode: (
+        409,
+        CODE_CONFLICTING_STATE,
+        _taxonomy_conflict,
     ),
     # --- 422: the request is well-formed and the domain refuses it ---------------------------
     workflow_errors.ReasonRequired: (422, CODE_VALIDATION_ERROR, _field("reason")),

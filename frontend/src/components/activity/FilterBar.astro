@@ -1,184 +1,130 @@
 ---
 /**
- * The feed's facets, as a plain `GET` form.
+ * The feed's facets, in this interface's own controls.
  *
- * A form and not a JavaScript filter bar on purpose: the state it edits *is* the
- * URL, so submitting it navigates and the resulting feed is a link somebody can
- * paste into a thread and reopen next week. That also makes every filter work
- * with no client runtime at all, which is why this component ships none.
+ * Nothing here is a native form control: the dropdowns are the shared
+ * `MenuSelect`, "quién" is the person picker, "qué cambió" is a row of pressed
+ * chips, and the range is one `DateRangeField`. A `<select>` popup and a
+ * `<input type="date">` calendar are both drawn by the operating system: they
+ * land as grey system panels in the middle of a surface that is otherwise all
+ * paper and ink, they differ per browser, and no token reaches inside them.
  *
- * `page` is deliberately absent from the form: changing a facet starts a new
- * reading, and carrying page 7 into it would show an empty page and call it an
- * empty result. `correlation_id` is carried as a hidden field instead, so a
- * reader who narrowed to one decision does not lose it by touching another
- * control — dropping it is an explicit action, offered beside the feed.
+ * There is no "apply": filtering is live. Every control announces its change
+ * through the DOM and the island refetches, rewriting the query string in the
+ * same beat — so the URL is still the single source of filter state and a
+ * narrowed feed is still a link somebody can paste into a thread.
+ *
+ * Presentational: props in, DOM out. It knows what a facet is called, not what
+ * choosing one does.
  */
 import {
   entityTypeOptions,
   originOptions,
   verbOptions,
-  type VocabularyOption,
 } from "../../lib/activity/vocabulary";
 import type { ActivityFilters } from "../../lib/activity/filters";
+import DateRangeField from "../ui/DateRangeField.astro";
 import Icon from "../ui/Icon.astro";
+import MenuSelect from "../ui/MenuSelect.astro";
+import ActorSelect from "./ActorSelect.astro";
 import { FILTER_COPY, filterSummaryText } from "./copy";
 
 export interface Props {
   /** The reading currently on screen; every control renders its own value. */
   filters: ActivityFilters;
   /**
-   * Who can be filtered on, from the roster the app already fetched. An actor
-   * present in the URL but absent from the roster is added by the page, so a
-   * saved link keeps showing what it is filtering by.
+   * Display name of `filters.actor`, resolved by the page from the roster it
+   * already read; the raw alias when the roster does not know them.
    */
-  actors: readonly VocabularyOption[];
+  actorLabel: string;
   /** Facets currently narrowing the feed; drives the summary and "Limpiar". */
   activeCount: number;
 }
 
-const { filters, actors, activeCount } = Astro.props;
+const { filters, actorLabel, activeCount } = Astro.props;
 
-const summary = filterSummaryText(activeCount);
-const entityTypes = entityTypeOptions();
-const origins = originOptions();
+const any = { value: "", label: FILTER_COPY.any };
+const entityTypes = [any, ...entityTypeOptions()];
+const origins = [any, ...originOptions()];
 const verbs = verbOptions();
+const summary = filterSummaryText(activeCount);
 ---
 
-<form class="card filters" method="get" action="/activity">
+<div class="filters card" data-activity-filters>
   <div class="row">
-    <label class="field">
-      <span class="label">{FILTER_COPY.entityType}</span>
-      <select class="input" name="entity_type">
-        <option value="" selected={filters.entityType === null}>
-          {FILTER_COPY.any}
-        </option>
-        {
-          entityTypes.map((option) => (
-            <option
-              value={option.value}
-              selected={filters.entityType === option.value}
-            >
-              {option.label}
-            </option>
-          ))
-        }
-      </select>
-    </label>
+    <MenuSelect
+      facet="entity_type"
+      label={FILTER_COPY.entityType}
+      options={entityTypes}
+      value={filters.entityType ?? ""}
+    />
+
+    <MenuSelect
+      facet="origin"
+      label={FILTER_COPY.origin}
+      options={origins}
+      value={filters.origin ?? ""}
+    />
+
+    <ActorSelect value={filters.actor} valueLabel={actorLabel} />
 
     <label class="field">
       <span class="label">{FILTER_COPY.entityId}</span>
       <input
         class="input"
         type="text"
-        name="entity_id"
+        data-facet="entity_id"
         value={filters.entityId ?? ""}
         placeholder={FILTER_COPY.entityIdPlaceholder}
         autocomplete="off"
+        spellcheck="false"
       />
     </label>
 
-    <label class="field">
-      <span class="label">{FILTER_COPY.origin}</span>
-      <select class="input" name="origin">
-        <option value="" selected={filters.origin === null}>
-          {FILTER_COPY.any}
-        </option>
-        {
-          origins.map((option) => (
-            <option
-              value={option.value}
-              selected={filters.origin === option.value}
-            >
-              {option.label}
-            </option>
-          ))
-        }
-      </select>
-    </label>
-
-    <label class="field">
-      <span class="label">{FILTER_COPY.actor}</span>
-      <select class="input" name="actor">
-        <option value="" selected={filters.actor === null}>
-          {FILTER_COPY.any}
-        </option>
-        {
-          actors.map((option) => (
-            <option
-              value={option.value}
-              selected={filters.actor === option.value}
-            >
-              {option.label}
-            </option>
-          ))
-        }
-      </select>
-    </label>
-
-    <label class="field">
-      <span class="label">{FILTER_COPY.since}</span>
-      <input
-        class="input"
-        type="date"
-        name="since"
-        value={filters.since ?? ""}
-      />
-    </label>
-
-    <label class="field">
-      <span class="label">{FILTER_COPY.until}</span>
-      <input
-        class="input"
-        type="date"
-        name="until"
-        value={filters.until ?? ""}
-      />
-    </label>
+    <DateRangeField
+      facet="range"
+      label={FILTER_COPY.range}
+      since={filters.since}
+      until={filters.until}
+    />
   </div>
 
-  <fieldset class="verbs">
-    <legend class="label">{FILTER_COPY.verb}</legend>
-    {
-      verbs.map((option) => (
-        <label class="verb">
-          <input
-            type="checkbox"
-            name="verb"
-            value={option.value}
-            checked={filters.verbs.includes(option.value)}
-          />
-          <span class="small">{option.label}</span>
-        </label>
-      ))
-    }
-  </fieldset>
+  <div class="row verbs-row">
+    <span class="label" id="activity-verbs-label">{FILTER_COPY.verb}</span>
+    <div class="pills" role="group" aria-labelledby="activity-verbs-label">
+      {
+        verbs.map((option) => (
+          <button
+            class="chip pill filter"
+            type="button"
+            data-facet="verb"
+            data-value={option.value}
+            aria-pressed={filters.verbs.includes(option.value)}
+          >
+            {option.label}
+          </button>
+        ))
+      }
+    </div>
 
-  {
-    filters.correlationId !== null && (
-      <input
-        type="hidden"
-        name="correlation_id"
-        value={filters.correlationId}
-      />
-    )
-  }
-
-  <div class="actions">
-    <button class="btn btn-primary" type="submit">
-      <Icon name="search" size={18} />
-      {FILTER_COPY.apply}
+    <p
+      class="small summary"
+      data-field="filter-summary"
+      hidden={summary === ""}
+    >
+      {summary}
+    </p>
+    <button
+      class="btn btn-ghost clear"
+      type="button"
+      data-action="clear-filters"
+      hidden={activeCount === 0}
+    >
+      <Icon name="close" size={16} />
+      {FILTER_COPY.clear}
     </button>
-    {
-      activeCount > 0 && (
-        <a class="btn btn-ghost" href="/activity">
-          <Icon name="close" size={18} />
-          {FILTER_COPY.clear}
-        </a>
-      )
-    }
-    {summary !== "" && <span class="small summary">{summary}</span>}
   </div>
-</form>
+</div>
 
 <style>
   .filters {
@@ -190,8 +136,16 @@ const verbs = verbOptions();
 
   .row {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
     gap: var(--space-3);
+    align-items: end;
+  }
+
+  .verbs-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-3);
   }
 
   .field {
@@ -201,47 +155,60 @@ const verbs = verbOptions();
     min-width: 0;
   }
 
-  .verbs {
-    border: 0;
-    padding: 0;
-    margin: 0;
+  .pills {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-2) var(--space-3);
+    gap: var(--space-2);
   }
 
-  .verbs legend {
-    padding: 0;
-    margin-bottom: var(--space-2);
+  .filter {
+    min-height: 32px;
+    padding: var(--space-1) var(--space-3);
+    border: var(--border-width) solid transparent;
+    transition:
+      background-color var(--motion-micro-duration) var(--motion-micro-ease),
+      border-color var(--motion-micro-duration) var(--motion-micro-ease),
+      color var(--motion-micro-duration) var(--motion-micro-ease);
   }
 
-  .verb {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    padding: var(--space-1) var(--space-2);
-    border-radius: var(--radius-chip);
-    background-color: var(--pozo);
-    cursor: pointer;
+  .filter:hover {
+    border-color: var(--tinta-suave);
   }
 
-  .verb:hover {
+  .filter[aria-pressed="true"] {
     background-color: var(--cobalto-papel);
-  }
-
-  .verb input {
-    accent-color: var(--cobalto);
-  }
-
-  .actions {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--space-3);
+    border-color: var(--cobalto);
+    color: var(--cobalto);
   }
 
   .summary {
     margin-left: auto;
+    white-space: nowrap;
+  }
+
+  .summary[hidden] {
+    display: none;
+  }
+
+  .clear {
+    height: 32px;
+    padding: 0 var(--space-2);
+    font-size: var(--text-small-size);
+  }
+
+  .clear[hidden] {
+    display: none;
+  }
+
+  @media (pointer: coarse) {
+    .filter {
+      min-height: 40px;
+    }
+  }
+
+  @media (max-width: 767px) {
+    .summary {
+      margin-left: 0;
+    }
   }
 </style>

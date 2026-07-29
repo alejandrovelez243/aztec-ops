@@ -21,6 +21,7 @@ from apps.shared.refs import StateRef
 from apps.workflow.domain.errors import WorkflowNotConfigured
 from apps.workflow.domain.views import (
     TransitionOption,
+    WorkflowEdgeView,
     WorkflowShapeView,
     required_field_names,
 )
@@ -76,16 +77,18 @@ class WorkflowQuerySet(models.QuerySet["Workflow"]):
         return self.filter(is_default=True)
 
     def with_shape(self) -> Self:
-        """Load what :meth:`Workflow.to_shape` reads, in two extra queries for the whole chain.
+        """Load what :meth:`Workflow.to_shape` reads, in three extra queries for the whole chain.
 
-        Prefetches the nodes and the engagement-type bindings of every selected graph, so the board
-        document costs three index scans instead of two per workflow. The bindings are prefetched
-        already narrowed to :meth:`WorkflowBindingQuerySet.engagement_typed`, which is why
-        `to_shape` re-checks each one: the projection has to stay correct when nobody chained this.
+        Prefetches the nodes, the edges and the engagement-type bindings of every selected graph, so
+        the board document costs four index scans instead of three per workflow. Bindings and edges
+        are prefetched already narrowed — to :meth:`WorkflowBindingQuerySet.engagement_typed` and
+        :meth:`WorkflowTransitionQuerySet.drawable` — which is why `to_shape` re-checks each one:
+        the projection has to stay correct when nobody chained this.
         """
         return self.prefetch_related(
             "states",
             models.Prefetch("bindings", queryset=WorkflowBinding.objects.engagement_typed()),
+            models.Prefetch("transitions", queryset=WorkflowTransition.objects.drawable()),
         )
 
 
@@ -179,22 +182,28 @@ class Workflow(models.Model):
         return f"{self.name} ({self.applies_to})"
 
     def to_shape(self) -> WorkflowShapeView:
-        """Describe this graph as the column set a board draws.
+        """Describe this graph as an operator configured it: every node, and every active edge.
 
-        Publishes every node — including the ones no aggregate currently occupies, which is the
-        whole point — and no edge at all: which move is legal is answered per project by
-        ``transitions`` on the detail, never by this shape.
+        Publishes the nodes no aggregate currently occupies — which is the whole point of a column
+        set — and the edges between them as *declared*, which is a different claim from "this record
+        may move there". An edge here is drawable, not takeable: whether a specific project or task
+        may follow it depends on the state it is actually sitting on, on the fields filled in on that
+        row and on the guard, and that answer stays on the detail's own ``transitions``. Nothing
+        about this projection is consulted by :func:`~apps.workflow.services.transition
+        .validate_transition`, which re-reads the rows.
 
-        Reads ``states`` and ``bindings``, so callers chain
-        :meth:`WorkflowQuerySet.with_shape`; without it this is two queries per workflow. Bindings
-        are re-filtered here rather than trusted from the prefetch, so an unprefetched call
-        describes the same graph instead of raising on the per-kind default binding, whose
-        ``engagement_type`` is null by definition.
+        Reads ``states``, ``bindings`` and ``transitions``, so callers chain
+        :meth:`WorkflowQuerySet.with_shape`; without it this is three queries per workflow plus two
+        per edge. Bindings and edges are re-filtered here rather than trusted from the prefetch: an
+        unprefetched call has to describe the same graph, and for the edges that is the load-bearing
+        half — a withdrawn move must never surface as an arrow just because nobody chained the
+        narrowed prefetch.
 
         Returns:
             The graph as an immutable
             :class:`~apps.workflow.domain.views.WorkflowShapeView`, its states in the operator's
-            ``order`` and its engagement types in the catalog's.
+            ``order``, its edges grouped by source state and its engagement types in the catalog's
+            order.
         """
         return WorkflowShapeView(
             code=self.code,
@@ -208,6 +217,11 @@ class Workflow(models.Model):
                 if binding.is_active and binding.engagement_type is not None
             ),
             states=tuple(state.to_ref() for state in self.states.all()),
+            transitions=tuple(
+                transition.to_edge()
+                for transition in self.transitions.all()
+                if transition.is_active
+            ),
         )
 
 
@@ -303,11 +317,16 @@ class WorkflowState(models.Model):
 
 
 class WorkflowTransitionQuerySet(models.QuerySet["WorkflowTransition"]):
-    """The legal-move set, sliced the three ways the operation asks for it.
+    """The edge set, sliced the ways the operation asks for it — for deciding, and for describing.
 
     `active().from_state(id)` is the definition the whole context turns on: it is what the detail
     endpoint renders as buttons and what the transition service validates against, and the two must
     never disagree — which is why `is_active` is filtered here rather than by each caller.
+
+    :meth:`drawable` is the other audience, and it is narrower in what it *claims*, not in what it
+    returns: it selects every active edge of a graph so the workflow document can draw the arrows an
+    operator configured. Nothing on that path is consulted when a move is validated, so a graph read
+    can never widen what a record is allowed to do.
     """
 
     def active(self) -> Self:
@@ -343,6 +362,29 @@ class WorkflowTransitionQuerySet(models.QuerySet["WorkflowTransition"]):
     def with_states(self) -> Self:
         """Load both endpoints and the workflow, for callers that read the labels off each edge."""
         return self.select_related("from_state", "to_state", "workflow")
+
+    def in_graph_order(self) -> Self:
+        """Group the edges by their source column, in the order the operator arranged the columns.
+
+        `Meta.ordering` sorts by ``from_state`` — the foreign key, so by the order somebody inserted
+        the state rows — which is precisely the accident `WorkflowState.Meta.ordering` avoids for the
+        columns themselves. A document listing its columns in the operator's arrangement and its
+        arrows in insertion order disagrees with itself, so a graph read sorts by the source state's
+        own ``order``, ``code`` breaking ties, then by the edge's ``order`` within that state.
+        """
+        return self.order_by("from_state__order", "from_state__code", "order", "id")
+
+    def drawable(self) -> Self:
+        """Every edge a graph document may render, loaded and ordered for :meth:`to_edge`.
+
+        The three narrowings a diagram needs and no fourth: ``is_active``, because a withdrawn move
+        is not part of the configured graph and the transition service refuses it; both endpoints,
+        because each edge is rendered by the codes of its nodes; and the source column's order, so
+        the arrows read in the same sequence as the columns. This is a read for *describing* the
+        graph — the enforcement path narrows for itself with
+        :meth:`active` and :meth:`from_state`, which is the query that decides a move.
+        """
+        return self.active().with_states().in_graph_order()
 
     def as_options(self) -> tuple[TransitionOption, ...]:
         """Materialise the selected edges as the projection the detail endpoint renders.
@@ -448,6 +490,37 @@ class WorkflowTransition(models.Model):
         """
         return TransitionOption(
             to_state=self.to_state.to_ref(),
+            label=self.label,
+            requires_reason=self.requires_reason,
+            requires_fields=required_field_names(self.requires_fields),
+        )
+
+    def to_edge(self) -> WorkflowEdgeView:
+        """Describe this edge as the arrow a graph diagram draws.
+
+        The sibling of :meth:`to_option`, and the difference between them is the difference between
+        the two questions. An option is offered to a client holding one record and says "you may take
+        this now"; an edge is offered to a client holding a whole workflow and says "an operator drew
+        this". So the endpoints are codes, not :class:`~apps.shared.refs.StateRef` values — the same
+        document already publishes every node in full, and duplicating the labels onto both ends of
+        every arrow is how one response ends up disagreeing with itself after a rename — and the
+        source state is named, which an option never needs because its source is the record.
+
+        ``requires_reason`` and ``requires_fields`` travel because they are properties of the edge an
+        operator configured, and a diagram legitimately marks which arrows will ask for text. Neither
+        becomes a permission: the transition service re-reads both off this row and raises
+        ``ReasonRequired`` / ``RequiredFieldMissing`` regardless of what any client concluded. The
+        guard is omitted for the same reason :meth:`to_option` omits it.
+
+        Reads ``from_state`` and ``to_state``, so callers chain
+        :meth:`WorkflowTransitionQuerySet.drawable`.
+
+        Returns:
+            The edge as an immutable :class:`~apps.workflow.domain.views.WorkflowEdgeView`.
+        """
+        return WorkflowEdgeView(
+            from_state=self.from_state.code,
+            to_state=self.to_state.code,
             label=self.label,
             requires_reason=self.requires_reason,
             requires_fields=required_field_names(self.requires_fields),

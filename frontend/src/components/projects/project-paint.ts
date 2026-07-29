@@ -15,6 +15,7 @@
  */
 
 import { applyTone, cloneTemplate, pulse, setField } from "./dom";
+import { renderDateControl } from "../ui/date-field";
 import { dueState } from "./format";
 import { joinFields, riskLabel } from "./messages";
 import { renderOwnerControl } from "./owner-menu";
@@ -43,13 +44,11 @@ export function applyProjectDetail(project: ProjectDetail): void {
       health.textContent = project.health.label;
     }
 
-    const dueChip = header.querySelector<HTMLElement>("[data-due-chip]");
-    if (dueChip !== null) {
-      const due = dueState(project.target_date ?? null);
-      applyTone(dueChip, semanticTone(due.tone));
-      setField(dueChip, "due-label", due.label);
-      if ("title" in due) dueChip.setAttribute("title", due.title);
-      else dueChip.removeAttribute("title");
+    // The target date is a control now, not a chip: one painter, so a date this
+    // screen set and one a colleague set leave it reading the same thing.
+    const dueControl = header.querySelector<HTMLElement>("[data-date-control]");
+    if (dueControl !== null) {
+      renderDateControl(dueControl, project.target_date ?? null);
     }
 
     const owner = header.querySelector<HTMLElement>("[data-owner-control]");

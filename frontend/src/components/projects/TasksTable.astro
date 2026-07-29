@@ -11,10 +11,9 @@
  * named. The frontend never derives a legal move from a state code.
  *
  * **Reassign it.** `OwnerMenu`, the same control the header uses, against the
- * task. `PATCH /api/v1/tasks/{code}` is not in the client yet, so the trigger is
- * disabled with the reason in its tooltip rather than absent — an operator who
- * can see the affordance and read why it is off is better served than one who
- * is left wondering whether reassignment exists.
+ * task, writing through `PATCH /api/v1/tasks/{code}`. The name that lands is the
+ * one the response carries, not the one that was clicked, so a row never claims
+ * an owner the database refused.
  *
  * It stays a table: `<th scope="col">`, one row per task, controls inside cells.
  * A menu is a button and a list of buttons, so every row is fully keyboard
@@ -24,11 +23,11 @@
  * (`raw_label`): 61 of the 82 source tasks describe their prerequisite in prose,
  * so an unresolved reference is the normal case, not a defect.
  */
-import DueChip from "./DueChip.astro";
+import DateField from "../ui/DateField.astro";
 import OwnerMenu from "./OwnerMenu.astro";
 import TaskMoveMenu from "./TaskMoveMenu.astro";
-import { TASK_OWNER_UNAVAILABLE } from "./messages";
 import { taskMoves } from "./task-moves";
+import { taxonomyTone, toneStyle } from "./tone";
 import type { TaskItem } from "../../lib/api/domain";
 
 export interface Props {
@@ -58,6 +57,7 @@ function taskHref(code: string): string {
         <tr>
           <th class="label" scope="col">Tarea</th>
           <th class="label" scope="col">Estado</th>
+          <th class="label" scope="col">Prioridad</th>
           <th class="label" scope="col">Responsable</th>
           <th class="label" scope="col">Vence</th>
           <th class="label" scope="col">Depende de</th>
@@ -86,17 +86,30 @@ function taskHref(code: string): string {
                 />
               </td>
               <td>
+                <span
+                  class:list={["chip", taxonomyTone(task.priority.color).className]}
+                  style={toneStyle(taxonomyTone(task.priority.color))}
+                  data-priority-chip
+                >
+                  <span data-field="priority-label">{task.priority.label}</span>
+                </span>
+              </td>
+              <td>
                 <OwnerMenu
                   scope="task"
                   code={task.code}
                   alias={task.assignee?.alias ?? null}
                   label={task.assignee?.label ?? null}
                   compact
-                  disabledReason={TASK_OWNER_UNAVAILABLE}
                 />
               </td>
               <td class="col-due">
-                <DueChip date={task.due_date ?? null} />
+                <DateField
+                  scope="task"
+                  code={task.code}
+                  date={task.due_date ?? null}
+                  label="Vence"
+                />
                 <span
                   class="chip tone-rojo"
                   data-field="overdue"
@@ -140,19 +153,15 @@ function taskHref(code: string): string {
         />
       </td>
       <td>
-        <OwnerMenu
-          scope="task"
-          code=""
-          alias={null}
-          label={null}
-          compact
-          disabledReason={TASK_OWNER_UNAVAILABLE}
-        />
+        <span class="chip" data-priority-chip
+          ><span data-field="priority-label"></span></span
+        >
+      </td>
+      <td>
+        <OwnerMenu scope="task" code="" alias={null} label={null} compact />
       </td>
       <td class="col-due">
-        <span class="chip tone-piedra" data-due-chip
-          ><span data-field="due-label"></span></span
-        >
+        <DateField scope="task" code="" date={null} label="Vence" />
         <span class="chip tone-rojo" data-field="overdue" hidden>vencida</span>
       </td>
       <td class="col-deps" data-field="dependencies"></td>

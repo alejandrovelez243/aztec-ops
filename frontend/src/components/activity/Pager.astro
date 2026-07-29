@@ -3,17 +3,25 @@
  * Numbered paging, as links.
  *
  * The API sends no next/prev links because the page belongs in the URL beside
- * the filters (`backend/apps/shared/pagination.py`), so this component derives
- * the page count from `count` and renders one `<a>` per reachable page. Links
- * and not buttons: page 4 of a filtered feed has to be addressable, has to work
- * with the back button, and has to survive a reload — which is the same reason
- * the filters are a form and not a JavaScript control.
+ * the filters (`backend/apps/shared/pagination.py`), so the shape is derived
+ * from `count` and rendered as one `<a>` per reachable page. Links and not
+ * buttons: page 4 of a filtered feed has to be addressable, has to work with the
+ * back button, and has to survive a reload.
  *
- * The current page renders as a non-link with `aria-current`, and the edges
- * render dead rather than disappearing, so the control does not change width as
- * the reader moves through it.
+ * Changing a *facet* is live and never navigates, so the island rebuilds this
+ * control in place from the same `pagerModel` the server used — which is why the
+ * link and gap markup live in `<template>`s here rather than in TypeScript.
+ * Changing the *page* is a real navigation: the whole reading changes, and a
+ * server render is the honest way to get it.
+ *
+ * The edges render dead rather than disappearing, so the control does not change
+ * width as the reader moves through it.
  */
-import { hrefForPage, type ActivityFilters } from "../../lib/activity/filters";
+import {
+  hrefForPage,
+  pagerModel,
+  type ActivityFilters,
+} from "../../lib/activity/filters";
 import Icon from "../ui/Icon.astro";
 import { PAGER_COPY } from "./copy";
 
@@ -26,87 +34,99 @@ export interface Props {
 }
 
 const { filters, page, pageCount } = Astro.props;
-
-/** How many numbered links surround the current page before it starts eliding. */
-const WINDOW = 2;
-
-const first = Math.max(1, page - WINDOW);
-const last = Math.min(pageCount, page + WINDOW);
-const numbers = Array.from({ length: last - first + 1 }, (_, i) => first + i);
-
-const hasPrevious = page > 1;
-const hasNext = page < pageCount;
+const model = pagerModel(page, pageCount);
 ---
 
-{
-  pageCount > 1 && (
-    <nav class="pager" aria-label={PAGER_COPY.label}>
-      {hasPrevious ? (
-        <a class="btn btn-secondary" href={hrefForPage(filters, page - 1)}>
-          <Icon name="back" size={18} />
-          {PAGER_COPY.previous}
-        </a>
-      ) : (
-        <span class="btn btn-secondary is-dead" aria-disabled="true">
-          <Icon name="back" size={18} />
-          {PAGER_COPY.previous}
-        </span>
-      )}
+<nav
+  class="pager"
+  aria-label={PAGER_COPY.label}
+  data-pager
+  hidden={!model.visible}
+>
+  <a
+    class="btn btn-secondary"
+    data-pager-prev
+    href={model.hasPrevious ? hrefForPage(filters, page - 1) : undefined}
+    aria-disabled={model.hasPrevious ? undefined : "true"}
+  >
+    <Icon name="back" size={18} />
+    {PAGER_COPY.previous}
+  </a>
 
-      <ol class="numbers">
-        {first > 1 && (
-          <li>
-            <a class="page-link figure" href={hrefForPage(filters, 1)}>
-              1
+  <ol class="numbers" data-pager-numbers>
+    {
+      model.showFirst && (
+        <li>
+          <a class="page-link figure" href={hrefForPage(filters, 1)}>
+            1
+          </a>
+        </li>
+      )
+    }
+    {
+      model.leadGap && (
+        <li class="gap" aria-hidden="true">
+          …
+        </li>
+      )
+    }
+    {
+      model.numbers.map((number) => (
+        <li>
+          {number === page ? (
+            <span class="page-link figure is-current" aria-current="page">
+              {number}
+            </span>
+          ) : (
+            <a class="page-link figure" href={hrefForPage(filters, number)}>
+              {number}
             </a>
-          </li>
-        )}
-        {first > 2 && (
-          <li class="gap" aria-hidden="true">
-            …
-          </li>
-        )}
-        {numbers.map((number) => (
-          <li>
-            {number === page ? (
-              <span class="page-link figure is-current" aria-current="page">
-                {number}
-              </span>
-            ) : (
-              <a class="page-link figure" href={hrefForPage(filters, number)}>
-                {number}
-              </a>
-            )}
-          </li>
-        ))}
-        {last < pageCount - 1 && (
-          <li class="gap" aria-hidden="true">
-            …
-          </li>
-        )}
-        {last < pageCount && (
-          <li>
-            <a class="page-link figure" href={hrefForPage(filters, pageCount)}>
-              {pageCount}
-            </a>
-          </li>
-        )}
-      </ol>
+          )}
+        </li>
+      ))
+    }
+    {
+      model.trailGap && (
+        <li class="gap" aria-hidden="true">
+          …
+        </li>
+      )
+    }
+    {
+      model.showLast && (
+        <li>
+          <a class="page-link figure" href={hrefForPage(filters, pageCount)}>
+            {pageCount}
+          </a>
+        </li>
+      )
+    }
+  </ol>
 
-      {hasNext ? (
-        <a class="btn btn-secondary" href={hrefForPage(filters, page + 1)}>
-          {PAGER_COPY.next}
-          <Icon name="chevron-right" size={18} />
-        </a>
-      ) : (
-        <span class="btn btn-secondary is-dead" aria-disabled="true">
-          {PAGER_COPY.next}
-          <Icon name="chevron-right" size={18} />
-        </span>
-      )}
-    </nav>
-  )
-}
+  <a
+    class="btn btn-secondary"
+    data-pager-next
+    href={model.hasNext ? hrefForPage(filters, page + 1) : undefined}
+    aria-disabled={model.hasNext ? undefined : "true"}
+  >
+    {PAGER_COPY.next}
+    <Icon name="chevron-right" size={18} />
+  </a>
+
+  <template data-template="pager-link">
+    <li><a class="page-link figure"></a></li>
+  </template>
+
+  <template data-template="pager-current">
+    <li>
+      <span class="page-link figure is-current" aria-current="page"></span>
+    </li>
+  </template>
+
+  <template data-template="pager-gap">
+    <li class="gap" aria-hidden="true">…</li>
+  </template>
+</nav>
 
 <style>
   .pager {
@@ -117,11 +137,17 @@ const hasNext = page < pageCount;
     padding-top: var(--space-2);
   }
 
+  .pager[hidden] {
+    display: none;
+  }
+
   .pager .btn {
     text-decoration: none;
   }
 
-  .is-dead {
+  /* An edge with nowhere to go stays in place and reads as unavailable; an
+     anchor with no `href` is also not focusable, which is the intent. */
+  .pager .btn[aria-disabled="true"] {
     opacity: 0.45;
     cursor: default;
   }

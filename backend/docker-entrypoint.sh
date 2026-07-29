@@ -20,7 +20,15 @@ case "${1:-api}" in
             python manage.py seed
         fi
 
-        set -- uvicorn config.asgi:application --host 0.0.0.0 --port 8000
+        # `--timeout-graceful-shutdown` is not tuning, it is what keeps this process
+        # restartable. Uvicorn waits for open connections to close before it exits, and
+        # `GET /api/stream` is a connection that by design never closes: one browser tab
+        # left open is enough to hang a shutdown forever. Under `--reload` that turns
+        # every source edit into a wedged API — the container stays "healthy" from its
+        # last passing probe while answering nothing, which is the worst way to fail.
+        # Five seconds is longer than any real request and shorter than anybody's patience.
+        set -- uvicorn config.asgi:application --host 0.0.0.0 --port 8000 \
+            --timeout-graceful-shutdown 5
         if [ "${UVICORN_RELOAD:-false}" = "true" ]; then
             set -- "$@" --reload
         fi

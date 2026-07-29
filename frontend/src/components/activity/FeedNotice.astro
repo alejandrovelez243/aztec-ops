@@ -1,0 +1,112 @@
+---
+/**
+ * The `empty` and `error` arms of the feed, as real markup with patch hooks.
+ *
+ * Both name what is missing and offer the way out: the empty arm says what would
+ * fill the region — and, when a facet is on, offers to drop the facets rather
+ * than leaving the reader to undo them one by one — while the error arm says
+ * what failed and runs the same read again.
+ *
+ * Every string carries a `data-field` because filtering is live: "todavía no hay
+ * actividad" and "no hay actividad con estos filtros" are different sentences,
+ * and which one is true changes without a navigation.
+ */
+import Icon from "../ui/Icon.astro";
+
+export interface Props {
+  /** Which arm this is; decides the icon and the tone, never the copy. */
+  kind: "empty" | "error";
+  /** One Spanish sentence naming what is empty or what failed. */
+  title: string;
+  /** The second line: the cause, or what would fill it. */
+  detail: string;
+  /** Label of the recovery control; `null` renders none. */
+  actionLabel: string | null;
+  /** What the control does, read by the island's delegated click handler. */
+  action?: "clear-filters" | "retry-feed";
+  /**
+   * Renders the control present but hidden. It exists in the DOM either way
+   * because the island reveals it the moment it becomes the right offer — "quita
+   * los filtros" only makes sense once a facet is on.
+   */
+  actionHidden?: boolean;
+  /** Server-rendered hidden when this arm is not the current one. */
+  hidden?: boolean;
+}
+
+const {
+  kind,
+  title,
+  detail,
+  actionLabel,
+  action = "retry-feed",
+  actionHidden = false,
+  hidden = false,
+} = Astro.props;
+
+const isError = kind === "error";
+---
+
+<div
+  class:list={["notice", isError ? "tone-rojo" : "tone-piedra"]}
+  role={isError ? "alert" : undefined}
+  hidden={hidden}
+>
+  <span class="glyph" aria-hidden="true">
+    <Icon name={isError ? "alert" : "folder"} size={22} />
+  </span>
+  <p class="title" data-field="notice-title">{title}</p>
+  <p class="small" data-field="notice-detail">{detail}</p>
+  <button
+    class="btn btn-secondary"
+    type="button"
+    data-notice-action
+    data-action={action}
+    hidden={actionLabel === null || actionHidden}
+  >
+    <Icon name={action === "clear-filters" ? "close" : "refresh"} size={18} />
+    <span data-field="notice-action">{actionLabel ?? ""}</span>
+  </button>
+</div>
+
+<style>
+  .notice {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-7) var(--space-5);
+    text-align: center;
+    background-color: var(--carta);
+    border: var(--border-width) dashed var(--hairline);
+    border-radius: var(--radius-card);
+  }
+
+  .notice[hidden] {
+    display: none;
+  }
+
+  .glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--space-7);
+    height: var(--space-7);
+    border-radius: var(--radius-full);
+    background-color: var(--tone-wash);
+    color: var(--tone-ink);
+    margin-bottom: var(--space-1);
+  }
+
+  .notice .small {
+    max-width: 46ch;
+  }
+
+  .notice .btn {
+    margin-top: var(--space-3);
+  }
+
+  .notice .btn[hidden] {
+    display: none;
+  }
+</style>

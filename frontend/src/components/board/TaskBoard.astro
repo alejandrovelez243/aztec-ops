@@ -181,7 +181,12 @@ const SKELETON_CARDS = [0, 1];
                   </span>
                 </header>
 
-                <p class="chip tcolumn-lock" data-column-lock hidden role="status">
+                <p
+                  class="chip tcolumn-lock"
+                  data-column-lock
+                  hidden
+                  role="status"
+                >
                   <Icon name="lock" size={14} />
                   <span data-column-lock-text lang="es" />
                 </p>
@@ -193,7 +198,11 @@ const SKELETON_CARDS = [0, 1];
                     role="grid"
                     aria-label={`Tareas en ${column.state.label}`}
                   />
-                  <div class="tcolumn-skeleton" data-tb-skeleton aria-hidden="true">
+                  <div
+                    class="tcolumn-skeleton"
+                    data-tb-skeleton
+                    aria-hidden="true"
+                  >
                     {SKELETON_CARDS.map(() => (
                       <div class="card tb-skel-card">
                         <span class="skeleton sk-line" />
@@ -227,7 +236,6 @@ const SKELETON_CARDS = [0, 1];
       data-card
       data-pending="false"
       role="row"
-      aria-selected="false"
       tabindex="-1"
     >
       <div class="tcard-inner" role="gridcell">

@@ -32,6 +32,12 @@ export const TOPICS = [
   "blocker.raised",
   "blocker.resolved",
   "note.added",
+  // The roster's own topics. `member.activation_changed` is one topic carrying `is_active`
+  // rather than a retire topic and a restore topic: a subscriber's question is a boolean, and
+  // two topics would make every subscription list both and handle them identically.
+  "member.created",
+  "member.updated",
+  "member.activation_changed",
   "stream.reset",
 ] as const;
 

@@ -49,3 +49,7 @@ dist/
 .DS_Store
 .idea/
 .vscode/
+
+# --- Demo deck -------------------------------------------------------------------------
+# Presentation material for the challenge video, not part of the delivered system.
+presentation/

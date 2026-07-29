@@ -898,7 +898,7 @@ one row holding columns from two deliveries while `last_event_id` claims a singl
 | `GET /api/v1/queue` | `ProjectSnapshot` | A list of 22 rows must not pay for a six-table join with per-row aggregates. One index scan: `portfolio_snap_queue` on `(is_archived, -priority_score)` matches the sort, so the plan carries no sort node |
 | `GET /api/v1/projects/{code}` | **the write side** | A single project must not be rendered from a projection a consumer has not rebuilt yet. An operator who has just moved a project and lands on its detail page has to see the move |
 | `GET /api/v1/projects/{code}/tasks` | the write side | Two queries whatever the filters: one `COUNT(*)`, one windowed scan |
-| `GET /api/v1/team/load` | the write side | Aggregated from `work.Task` at read time, never denormalized onto the person (§3.5) |
+| `GET /api/v1/team/load` | the write side | Aggregated from `work.Task` at read time, never denormalized onto the person (§3.5). Its facets split the same way: `q`, `role` and `status` are columns of a person and narrow the queryset; `overloaded` and `order_by` act on the derived rows, because utilization exists nowhere for the database to sort on |
 
 **The snapshot denormalizes facts, never conclusions.** There is no `risk_flags` column and no
 `health` column: both are derived from the row's own counts and dates on every read, so a row nobody
@@ -979,11 +979,16 @@ open.
   resolve blockers, add notes. "My tickets" is a filter (`Task.objects.assigned_to`), never a
   restriction. Ownership scoping would stop a colleague unblocking a project while its owner is on
   holiday, which is the opposite of what an operational board is for.
-- **Three routes require ops lead** (`User.is_ops_lead`, a property over `is_staff`), and all three
-  overrule the engine rather than participate in it:
+- **Two capabilities require ops lead** (`User.is_ops_lead`, a property over `is_staff`).
+  Three routes overrule the engine rather than participate in it:
   `POST /api/v1/projects/{code}/priority-override`, its `DELETE`, and `POST /api/v1/recompute`.
   The per-project `POST /api/v1/projects/{code}/recompute` deliberately does not — recomputing one
   project reproduces what the engine would have concluded anyway.
+  Six more decide who is in the operation and what vocabulary describes them: the four
+  `/api/v1/team/members` writes and the two `/api/v1/catalog/roles` writes. Same rule, same class,
+  a different phrase in `details.action` — the account trusted to overrule the ranking is the
+  account trusted to staff it, but a 403 that said "overriding the ranking" to somebody adding a
+  colleague would send them looking for a bug that is not there.
 
 The rule is a subclass, `OpsLeadAuth`, declared as `auth=ops_lead` on the operation, because ninja
 resolves `auth` per route: the declaration *is* the enforcement, it appears in the OpenAPI document,

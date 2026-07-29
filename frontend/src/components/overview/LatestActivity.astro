@@ -79,14 +79,13 @@ const plan = planFor(state);
                 <span class="chip ov-latest-origin">{row.originLabel}</span>
               </p>
               <p class="small ov-latest-meta">
-                {row.projectCode === null ? (
-                  <span class="figure">{row.entityId}</span>
+                {row.subjectHref === null ? (
+                  <span class="figure">
+                    {row.subjectLabel === "" ? row.entityId : row.subjectLabel}
+                  </span>
                 ) : (
-                  <a
-                    class="ov-latest-project"
-                    href={`/projects/${encodeURIComponent(row.projectCode)}`}
-                  >
-                    {row.projectName}
+                  <a class="ov-latest-project" href={row.subjectHref}>
+                    {row.subjectLabel}
                   </a>
                 )}
                 <span aria-hidden="true">·</span>

@@ -20,8 +20,9 @@
 
 import { avatarHue, initials } from "../../lib/auth/session";
 import { cloneTemplate, setField, setPending } from "./dom";
-import { mountMenus } from "./menu";
-import { readRoster, type RosterState } from "./roster";
+import { failureCopy } from "./messages";
+import { mountMenus } from "../../lib/ui/menu";
+import { readRoster, type RosterState } from "../../lib/team/roster";
 import { assertNever } from "../../lib/view-state";
 import type { ActorRef } from "../../lib/api/domain";
 
@@ -142,9 +143,14 @@ async function fillPanel(
     case "loading":
       note(control, panel, "Cargando el equipo…");
       return;
-    case "error":
-      note(control, panel, `${state.copy.title}. ${state.copy.detail}`);
+    case "error": {
+      // The roster carries the typed failure, not prose: this surface speaks
+      // the projects vocabulary, and the same read feeds the activity filter,
+      // which speaks its own.
+      const copy = failureCopy(state.error);
+      note(control, panel, `${copy.title}. ${copy.detail}`);
       return;
+    }
     case "empty":
       note(
         control,

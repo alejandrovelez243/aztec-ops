@@ -160,8 +160,8 @@ services:
         - python
         - -c
         - import urllib.request; urllib.request.urlopen("http://127.0.0.1:8000/api/v1/health/live", timeout=3)
-      interval: 5s
-      timeout: 5s
+      interval: 10s
+      timeout: 10s
       retries: 10
       # The first start is migrate + seed + recompute on an empty database.
       start_period: 120s

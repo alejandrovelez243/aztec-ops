@@ -11,9 +11,10 @@
  * **Filter state lives in the URL.** `GET /api/v1/activity` sends no next/prev
  * links precisely so that paging and filtering are addressable
  * (`backend/apps/shared/pagination.py`), and a feed narrowed to one decision or
- * one week has to be a link somebody can paste into a thread. That is why the
- * filters are a `GET` form and the pager is a list of `<a>`: both work with no
- * JavaScript, both survive a reload, both restore on the back button.
+ * one week has to be a link somebody can paste into a thread. Filtering is live
+ * — the island refetches and rewrites the query string on every change — while
+ * paging stays a list of real `<a>`s, because a new page is a new reading and a
+ * server render is the honest way to get it.
  *
  * **Correlated records are one decision.** Records written in the same
  * transaction share a `correlation_id`, and the feed frames a run of them as the
@@ -28,11 +29,16 @@
  * The one live region is the feed itself, wrapped in `ActivityLive`: everything
  * above it is static and ships no runtime.
  */
-import FeedList from "../components/activity/FeedList.astro";
+import ActivityTable from "../components/activity/ActivityTable.astro";
+import FeedNotice from "../components/activity/FeedNotice.astro";
 import FilterBar from "../components/activity/FilterBar.astro";
 import Pager from "../components/activity/Pager.astro";
-import { FEED_COPY, PAGE_COPY, ROW_COPY } from "../components/activity/copy";
-import RegionMessage from "../components/projects/RegionMessage.astro";
+import {
+  FEED_COPY,
+  FILTER_COPY,
+  PAGE_COPY,
+  ROW_COPY,
+} from "../components/activity/copy";
 import Icon from "../components/ui/Icon.astro";
 import ActivityLive from "../islands/ActivityLive.astro";
 import Shell from "../layouts/Shell.astro";
@@ -44,13 +50,14 @@ import {
   toQuery,
 } from "../lib/activity/filters";
 import {
-  buildProjectIndex,
+  buildDirectory,
   groupByCorrelation,
   toRows,
   type DecisionGroup,
+  type MemberRef,
   type ProjectRef,
 } from "../lib/activity/model";
-import type { VocabularyOption } from "../lib/activity/vocabulary";
+import { SYSTEM_ACTOR, SYSTEM_ACTOR_LABEL } from "../lib/activity/vocabulary";
 import { getPortfolioActivity, getQueue, getTeamLoad } from "../lib/api/client";
 import { errorCopyByCode } from "../lib/api/error-copy";
 import type { ActivityPage } from "../lib/api/domain";
@@ -69,7 +76,10 @@ const [feedResult, queueResult, teamResult] = await Promise.all([
     toQuery(filters, { page: filters.page, pageSize: ACTIVITY_PAGE_SIZE }),
   ),
   getQueue({ page_size: 200 }),
-  getTeamLoad(),
+  // `status: "all"` and not the default active roster: the trail outlives the
+  // rows it describes, and the one record that most needs a name — "Persona
+  // retirada" — is about somebody the active roster no longer returns.
+  getTeamLoad({ status: "all" }),
 ]);
 
 /**
@@ -83,27 +93,44 @@ const [feedResult, queueResult, teamResult] = await Promise.all([
 const projects: readonly ProjectRef[] = queueResult.ok
   ? queueResult.data.items.map((item) => ({ code: item.code, name: item.name }))
   : [];
-const index = buildProjectIndex(projects);
 
 /**
- * Who the actor filter offers.
+ * People, for the records whose subject is a person.
  *
- * An actor named in the URL but absent from the roster is added back, so a saved
- * link keeps showing what it is filtering by instead of quietly resetting to
- * "Todo" while the feed stays narrowed.
+ * A member record's `entity_id` is an `accounts.User.code`, not a project code —
+ * running it through the project matcher is what used to put a phantom project
+ * name on a row about somebody being retired.
  */
-const roster: VocabularyOption[] = teamResult.ok
+const members: readonly MemberRef[] = teamResult.ok
   ? teamResult.data.items.map((person) => ({
-      value: person.alias,
+      alias: person.alias,
       label: person.label,
     }))
   : [];
-if (
-  filters.actor !== null &&
-  !roster.some((person) => person.value === filters.actor)
-) {
-  roster.push({ value: filters.actor, label: filters.actor });
+
+const directory = buildDirectory(projects, members);
+
+/** One block for the island to hydrate from; the page already read both lists. */
+const directoryJson = JSON.stringify([...projects, ...members]);
+
+/**
+ * How the person picker names the actor the URL is filtering by.
+ *
+ * The picker fills its own options when it opens, from the roster read shared
+ * with the project owner pickers; only the *trigger* has to be right on first
+ * paint, and that is one name. An alias the roster does not know renders as
+ * itself, so a saved link shows what it is filtering by instead of a blank
+ * control — and `system` is named, never dressed as a colleague.
+ */
+function actorLabelFor(alias: string | null): string {
+  if (alias === null) return FILTER_COPY.any;
+  if (alias === SYSTEM_ACTOR) return SYSTEM_ACTOR_LABEL;
+  if (!teamResult.ok) return alias;
+  const person = teamResult.data.items.find((item) => item.alias === alias);
+  return person?.label ?? alias;
 }
+
+const actorLabel = actorLabelFor(filters.actor);
 
 // SSR has no stream, so `"connecting"` is the only honest status: a successful
 // read is `ready` and a failed one is `error`. `disconnected` is the island's
@@ -136,7 +163,7 @@ function planFor(view: ViewState<ActivityPage>): FeedPlan {
     case "disconnected":
       return {
         mode: "rows",
-        groups: groupByCorrelation(toRows(view.data.items, index, now)),
+        groups: groupByCorrelation(toRows(view.data.items, directory, now)),
         count: view.data.count,
       };
     case "empty":
@@ -167,6 +194,9 @@ const emptyTitle =
 const emptyDetail =
   activeCount > 0 ? FEED_COPY.emptyFilteredBody : FEED_COPY.emptyBody;
 
+const errorTitle = plan.mode === "error" ? plan.title : FEED_COPY.errorTitle;
+const errorDetail = plan.mode === "error" ? plan.detail : "";
+
 const CRUMBS = [
   { label: PAGE_COPY.crumbHome, href: "/" },
   { label: PAGE_COPY.title },
@@ -180,79 +210,87 @@ const CRUMBS = [
       <p class="body-text lead">{PAGE_COPY.lead}</p>
     </header>
 
-    <FilterBar filters={filters} actors={roster} activeCount={activeCount} />
-
-    {
-      filters.correlationId !== null && (
-        <div class="card decision-banner tone-cielo" role="status">
-          <span class="dot" aria-hidden="true" />
-          <p class="small">
-            <strong>{ROW_COPY.viewingDecision}.</strong>{" "}
-            {ROW_COPY.viewingDecisionBody}
-          </p>
-          <a class="btn btn-secondary" href="/activity">
-            <Icon name="close" size={18} />
-            {ROW_COPY.clearDecision}
-          </a>
-        </div>
-      )
-    }
-
     <ActivityLive>
-      {
-        plan.mode === "error" && (
-          <RegionMessage
-            kind="error"
-            title={plan.title}
-            detail={plan.detail}
-            actionLabel={FEED_COPY.errorAction}
-          />
-        )
-      }
+      <FilterBar
+        filters={filters}
+        actorLabel={actorLabel}
+        activeCount={activeCount}
+      />
 
       {
-        plan.mode === "loading" && (
-          <p
-            class="skeleton loading-block"
-            aria-label={FEED_COPY.loadingLabel}
-          />
-        )
-      }
-
-      {
-        (plan.mode === "rows" || plan.mode === "empty") && (
-          <div class="region">
-            <div data-activity-empty hidden={hasRows}>
-              <RegionMessage
-                kind="empty"
-                title={emptyTitle}
-                detail={emptyDetail}
-                actionLabel={null}
-              >
-                {activeCount > 0 && (
-                  <a class="btn btn-secondary" href="/activity">
-                    {FEED_COPY.emptyFilteredAction}
-                  </a>
-                )}
-              </RegionMessage>
-            </div>
-
-            <div class="body" data-activity-body hidden={!hasRows}>
-              <FeedList groups={groups} count={total} />
-              <Pager filters={filters} page={filters.page} pageCount={pages} />
-            </div>
-
-            {/* The code→name map the island hydrates from, so a record arriving
-                over the stream can name its project without a second read. */}
-            <script
-              is:inline
-              type="application/json"
-              data-activity-projects
-              set:html={JSON.stringify(projects)}
-            />
+        filters.correlationId !== null && (
+          <div class="card decision-banner tone-cielo" role="status">
+            <span class="dot" aria-hidden="true" />
+            <p class="small">
+              <strong>{ROW_COPY.viewingDecision}.</strong>{" "}
+              {ROW_COPY.viewingDecisionBody}
+            </p>
+            <a class="btn btn-secondary" href="/activity">
+              <Icon name="close" size={18} />
+              {ROW_COPY.clearDecision}
+            </a>
           </div>
         )
       }
+
+      {
+        /*
+        Every arm is rendered and all but the current one hidden. Filtering is
+        live, so which arm is true changes without a navigation — and an arm
+        that only exists in one of the two render paths is an arm the island
+        cannot reach.
+      */
+      }
+      <div class="region" data-activity-region data-state={plan.mode}>
+        <div data-activity-error hidden={plan.mode !== "error"}>
+          <FeedNotice
+            kind="error"
+            title={errorTitle}
+            detail={errorDetail}
+            actionLabel={FEED_COPY.errorAction}
+            action="retry-feed"
+          />
+        </div>
+
+        <div data-activity-empty hidden={plan.mode !== "empty"}>
+          <FeedNotice
+            kind="empty"
+            title={emptyTitle}
+            detail={emptyDetail}
+            actionLabel={FEED_COPY.emptyFilteredAction}
+            action="clear-filters"
+            actionHidden={activeCount === 0}
+          />
+        </div>
+
+        {
+          /* Unreachable on the server — the read has already returned by the
+            time this renders — but the arm exists so the union is complete and
+            the island has something to reveal. */
+        }
+        <p
+          class="skeleton loading-block"
+          aria-label={FEED_COPY.loadingLabel}
+          hidden={plan.mode !== "loading"}
+        >
+        </p>
+
+        <div class="body" data-activity-body hidden={!hasRows}>
+          <ActivityTable groups={groups} count={total} />
+          <Pager filters={filters} page={filters.page} pageCount={pages} />
+        </div>
+
+        {
+          /* The code→name map the island hydrates from, so a record arriving
+            over the stream can name its project without a second read. */
+        }
+        <script
+          is:inline
+          type="application/json"
+          data-activity-projects
+          set:html={directoryJson}
+        />
+      </div>
     </ActivityLive>
   </section>
 </Shell>

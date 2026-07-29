@@ -1,23 +1,27 @@
 ---
 /**
- * One record of the portfolio-wide trail.
+ * One record of the trail as a table row.
  *
  * Purely presentational: it receives the row model built by
  * `lib/activity/model.ts` and renders it. It fetches nothing, knows no filters,
- * and never decides what a verb or an origin is called — those come from the
- * shared trail vocabulary so this row and the project timeline cannot describe
- * the same record differently.
+ * and never decides what a verb, an origin or a subject is called — those come
+ * from the shared trail vocabulary so this row and the project timeline cannot
+ * describe the same record differently.
  *
- * Origin is the distinction the feed exists to make legible, so it is carried
- * three ways: the tone class of the row, a named chip, and — for `MANUAL` — the
- * mandatory `reason` rendered as a quoted line rather than as metadata. A
- * `POLICY` row shows the engine's own note instead: which signal moved, and by
- * how much.
+ * Origin is the distinction the feed exists to make legible, so `MANUAL` — a
+ * person overruling the engine, with a mandatory reason — carries a tone wash
+ * and shows that reason under the change, while `POLICY` shows the engine's own
+ * note instead: which signal moved, and by how much.
  *
- * Every line that can be empty is rendered and hidden, never omitted: the island
- * fills the same nodes when a record arrives over the stream, and a node that
- * exists only on one of the two paths is how the live row starts drifting from
- * its server-rendered siblings.
+ * The subject is rendered from its **declared kind**, never guessed from its id:
+ * a project links to its page, a person is a person, and anything the directory
+ * cannot name shows its bare business code. Running a member's alias through the
+ * project matcher is exactly the defect this replaced.
+ *
+ * Every cell that can be empty is rendered and hidden, never omitted: the island
+ * fills these same nodes when a record arrives over the stream, and a node that
+ * exists on only one of the two paths is how a live row starts drifting from its
+ * server-rendered siblings.
  */
 import type { ActivityRow } from "../../lib/activity/model";
 import { hrefForCorrelation } from "../../lib/activity/filters";
@@ -26,173 +30,164 @@ import { ROW_COPY } from "./copy";
 export interface Props {
   /** The presentation model; the wire shape never reaches this component. */
   row: ActivityRow;
-  /** Hidden on the compact widget, where every row is already one line. */
-  showDecisionLink?: boolean;
+  /** True when the row belongs to a run of correlated records. */
+  inDecision?: boolean;
 }
 
-const { row, showDecisionLink = true } = Astro.props;
+const { row, inDecision = false } = Astro.props;
 
-const projectHref =
-  row.projectCode === null
-    ? ""
-    : `/projects/${encodeURIComponent(row.projectCode)}`;
+const hasLink = row.subjectHref !== null;
 ---
 
-<li
-  class:list={["row", row.originTone]}
+<tr
+  class:list={["activity-row", row.originTone]}
   data-activity-row
   data-id={row.id}
   data-origin={row.origin}
   data-occurred-at={row.occurredAt}
+  data-in-decision={String(inDecision)}
 >
-  <span class="dot" aria-hidden="true"></span>
-
-  <div class="body">
-    <p class="head">
+  <td class="col-what">
+    <span class="what">
       <span class="title" data-field="verb">{row.verbLabel}</span>
       <span class="chip origin" data-field="origin">{row.originLabel}</span>
-    </p>
+    </span>
+  </td>
 
-    <p class="subject">
+  <td class="col-subject">
+    <span class="subject">
       <a
-        class="project"
+        class="subject-name"
         data-link="project"
         data-field="project"
-        href={projectHref}
-        hidden={row.projectCode === null}>{row.projectName}</a
+        href={row.subjectHref ?? "#"}
+        hidden={!hasLink}>{row.subjectLabel}</a
       >
-      <span class="chip chip-code" data-field="entity-id">{row.entityId}</span>
-      <span class="chip" data-field="entity-type">{row.entityTypeLabel}</span>
-    </p>
+      <span
+        class="subject-name plain"
+        data-field="subject-plain"
+        hidden={hasLink || row.subjectLabel === ""}>{row.subjectLabel}</span
+      >
+      <span class="codes">
+        <span class="chip chip-code" data-field="entity-id">{row.entityId}</span
+        >
+        <span class="chip kind" data-field="entity-type"
+          >{row.entityTypeLabel}</span
+        >
+      </span>
+    </span>
+  </td>
 
-    <p class="change" data-field="change" hidden={row.change === ""}>
-      {row.change}
-    </p>
+  <td class="col-delta">
+    <span class="delta">
+      <span class="figure change" data-field="change" hidden={row.change === ""}
+        >{row.change}</span
+      >
+      <span
+        class="small explanation"
+        data-field="explanation"
+        hidden={row.explanation === ""}>{row.explanation}</span
+      >
+      <span class="small reason" data-block="reason" hidden={row.reason === ""}>
+        <span class="label">{ROW_COPY.reasonLabel}</span>
+        <span data-field="reason">{row.reason}</span>
+      </span>
+    </span>
+  </td>
 
-    <p class="reason" data-block="reason" hidden={row.reason === ""}>
-      <span class="label">{ROW_COPY.reasonLabel}</span>
-      <span data-field="reason">{row.reason}</span>
-    </p>
-
-    <p
-      class="small explanation"
-      data-field="explanation"
-      hidden={row.explanation === ""}
-    >
-      {row.explanation}
-    </p>
-
-    <p class="small meta">
-      <span data-field="actor" lang="es">{row.actor}</span>
-      <span aria-hidden="true">·</span>
+  <td class="col-who">
+    <span class="who">
+      <span class="small actor" data-field="actor" lang="es">{row.actor}</span>
       <time
+        class="small when"
         data-field="when"
         data-link="when"
         datetime={row.occurredAt}
         title={row.occurredTitle}>{row.occurredLabel}</time
       >
-      {
-        showDecisionLink && (
-          <Fragment>
-            <span aria-hidden="true">·</span>
-            <a
-              class="decision-link"
-              data-link="decision"
-              href={hrefForCorrelation(row.correlationId)}
-            >
-              {ROW_COPY.seeDecision}
-            </a>
-          </Fragment>
-        )
-      }
-    </p>
-  </div>
-</li>
+    </span>
+  </td>
+
+  <td class="col-decision right">
+    <a
+      class="small decision-link"
+      data-link="decision"
+      href={hrefForCorrelation(row.correlationId)}
+      title={ROW_COPY.seeDecision}
+    >
+      {ROW_COPY.seeDecisionShort}
+    </a>
+  </td>
+</tr>
 
 <style>
-  .row {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: var(--space-3);
-    align-items: start;
-    padding: var(--space-3) var(--space-4);
-    border-radius: var(--radius-control);
-    background-color: var(--carta);
-  }
-
-  /* The origin's tone is the row's own marker: a human decision must not read
-     like the engine's bookkeeping. */
-  .row[data-origin="MANUAL"] {
+  /* A person forced this: the row wears the origin's wash so it cannot be
+     skimmed past as bookkeeping. */
+  .activity-row[data-origin="MANUAL"],
+  .activity-row[data-origin="MANUAL"]:hover {
     background-color: var(--tone-wash);
-    box-shadow: inset var(--rail-width) 0 0 0 var(--tone-solid);
   }
 
-  .dot {
-    width: var(--space-2);
-    height: var(--space-2);
-    border-radius: var(--radius-full);
-    background-color: var(--tone-solid);
-    flex: none;
-    /* Centred on the first line of the title, derived from the type tokens. */
-    margin-top: calc(
-      (var(--text-title-size) * var(--text-title-line) - var(--space-2)) / 2
-    );
+  /* The rail that ties a run of correlated records together, drawn down the
+     first cell so the group reads as one movement inside the table. */
+  .activity-row[data-in-decision="true"] td:first-child {
+    box-shadow: inset var(--rail-width) 0 0 0 var(--cobalto-medio);
   }
 
-  .body {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    min-width: 0;
-  }
-
-  .head,
+  .what,
   .subject,
-  .meta {
+  .who,
+  .delta {
     display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--space-2);
     min-width: 0;
+  }
+
+  .what {
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
   }
 
   .origin {
     background-color: var(--tone-wash);
     color: var(--tone-ink);
+    flex: none;
   }
 
-  .project {
+  .subject,
+  .delta,
+  .who {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .codes {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+  }
+
+  .kind {
+    background-color: transparent;
+    color: var(--tinta-suave);
+    padding-inline: 0;
+  }
+
+  .subject-name {
     font-size: var(--text-small-size);
     font-weight: 600;
     text-decoration: none;
     border-radius: var(--radius-chip);
-    transition: color var(--motion-micro-duration) var(--motion-micro-ease);
   }
 
-  .project:hover {
+  a.subject-name:hover {
     color: var(--cobalto);
   }
 
   .change {
-    font-family: var(--font-mono);
-    font-size: var(--text-figure-size);
-    font-variant-numeric: tabular-nums;
     color: var(--tinta);
     overflow-wrap: anywhere;
-  }
-
-  .reason {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-2);
-    font-size: var(--text-small-size);
-    line-height: var(--text-small-line);
-    color: var(--tinta);
-  }
-
-  .reason .label {
-    flex: none;
-    color: var(--tone-ink);
   }
 
   .explanation {
@@ -200,12 +195,23 @@ const projectHref =
     font-variant-numeric: tabular-nums;
   }
 
-  .meta {
-    color: var(--tinta-media);
+  .reason {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-1);
+    color: var(--tinta);
+    max-width: 34ch;
+  }
+
+  .reason .label {
+    flex: none;
+    color: var(--tone-ink);
   }
 
   .decision-link {
     text-decoration: none;
+    color: var(--tinta-media);
+    white-space: nowrap;
     border-radius: var(--radius-chip);
   }
 
@@ -213,8 +219,20 @@ const projectHref =
     color: var(--cobalto);
   }
 
-  /* `hidden` must beat the flex/grid displays above, or an empty line shows. */
-  .row [hidden] {
+  /* `hidden` must beat the flex displays above, or an empty line takes space. */
+  .activity-row [hidden] {
     display: none;
+  }
+
+  @media (max-width: 1119px) {
+    .col-decision {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1023px) {
+    .col-delta {
+      display: none;
+    }
   }
 </style>

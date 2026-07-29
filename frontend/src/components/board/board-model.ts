@@ -269,10 +269,10 @@ const DAY_MS = 86_400_000;
 /**
  * Spanish names of the aggregate attributes a transition can require.
  *
- * `requires_fields` names attributes of the project, not of the request body, and the board
- * has to say *which* one is missing rather than let the operator discover it through a 422
- * (`docs/standards/FRONTEND.md` §8). An attribute that is not listed renders under its own
- * wire name: an unexplained field is still better than a silent refusal.
+ * `requires_fields` names attributes of the project or of the task, not of the request body,
+ * and the board has to say *which* one is missing rather than let the operator discover it
+ * through a 422 (`docs/standards/FRONTEND.md` §8). An attribute that is not listed renders
+ * under its own wire name: an unexplained field is still better than a silent refusal.
  */
 const FIELD_LABELS: Record<string, string> = {
   name: "nombre",
@@ -285,6 +285,7 @@ const FIELD_LABELS: Record<string, string> = {
   stage: "etapa",
   project_type: "tipo de proyecto",
   title: "título",
+  detail: "detalle",
   assignee: "responsable",
   due_date: "fecha de entrega",
   last_progress: "último avance",
@@ -355,9 +356,7 @@ export function resolveWorkflow(
     const bound = candidates.find(
       (workflow) =>
         workflow.is_active &&
-        (workflow.engagement_types ?? []).some(
-          (type) => type.code === engagementCode,
-        ),
+        workflow.engagement_types.some((type) => type.code === engagementCode),
     );
     if (bound !== undefined) return bound;
   }
@@ -393,7 +392,11 @@ export function buildSurfaces(
 ): BoardSurfaceModel[] {
   const groups = new Map<
     string,
-    { type: TaxonomyRef; byState: Map<string, ProjectCardModel[]>; seen: Map<string, StateRef> }
+    {
+      type: TaxonomyRef;
+      byState: Map<string, ProjectCardModel[]>;
+      seen: Map<string, StateRef>;
+    }
   >();
 
   for (const item of items) {
@@ -409,7 +412,8 @@ export function buildSurfaces(
     }
     group.seen.set(item.state.code, item.state);
     const bucket = group.byState.get(item.state.code);
-    if (bucket === undefined) group.byState.set(item.state.code, [toCardModel(item, now)]);
+    if (bucket === undefined)
+      group.byState.set(item.state.code, [toCardModel(item, now)]);
     else bucket.push(toCardModel(item, now));
   }
 
@@ -460,7 +464,9 @@ function orderedStates(
   occupied: ReadonlyMap<string, StateRef>,
 ): StateRef[] {
   const workflow =
-    catalog === null ? null : resolveWorkflow(catalog, appliesTo, engagementCode);
+    catalog === null
+      ? null
+      : resolveWorkflow(catalog, appliesTo, engagementCode);
   const published = workflow === null ? [] : workflow.states;
   const known = new Set(published.map((state) => state.code));
   const extra = [...occupied.entries()]
@@ -536,7 +542,9 @@ export function toOwnerBadge(
 export function summariseRisks(flags: readonly RiskFlag[]): RiskSummary | null {
   if (flags.length === 0) return null;
   const worst = flags.reduce((current, flag) =>
-    severityRank(flag.severity) < severityRank(current.severity) ? flag : current,
+    severityRank(flag.severity) < severityRank(current.severity)
+      ? flag
+      : current,
   );
   return {
     count: flags.length,
@@ -731,9 +739,19 @@ export function fieldLabel(field: string): string {
 
 /** Joins field names into a readable Spanish enumeration: "próximo paso y fecha objetivo". */
 export function fieldList(fields: readonly string[]): string {
-  const labels = fields.map(fieldLabel);
-  if (labels.length <= 1) return labels[0] ?? "";
-  return `${labels.slice(0, -1).join(", ")} y ${labels[labels.length - 1] ?? ""}`;
+  return spanishList(fields.map(fieldLabel));
+}
+
+/**
+ * Joins already-readable names into a Spanish enumeration: "En progreso, Bloqueada y Hecha".
+ *
+ * Separate from {@link fieldList} because the items are not always attribute names — the state
+ * labels a refusal names as still possible are already the operator's own words and must not be
+ * translated a second time.
+ */
+export function spanishList(items: readonly string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} y ${items[items.length - 1] ?? ""}`;
 }
 
 function formatSigned(value: number): string {

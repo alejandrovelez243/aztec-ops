@@ -355,9 +355,9 @@ advanced past the seeded values.
 
 | Column | Type | Null | Default | Index | Meaning |
 |---|---|---|---|---|---|
-| `entity_type` | `varchar(16)` | no | — | `(entity_type, entity_id, -occurred_at)` | `project` \| `task` \| `blocker`. |
+| `entity_type` | `varchar(16)` | no | — | `(entity_type, entity_id, -occurred_at)` | `project` \| `task` \| `blocker` \| `member` \| `role`. The last two are the roster and the role vocabulary, which are editable from the product and therefore auditable like everything else. |
 | `entity_id` | `varchar(32)` | no | — | same composite | The **business code** (`PRJ-01`), matching `entity.id` in the event envelope, not a numeric primary key. |
-| `verb` | `varchar(24)` | no | — | `(verb, -occurred_at)` | `CREATED`, `STATE_CHANGED`, `PRIORITY_CHANGED`, `BLOCKER_RAISED`, `BLOCKER_RESOLVED`, `OWNER_CHANGED`, `NEXT_STEP_SET`, `TASK_ADDED`, `NOTE_ADDED`, `SEEDED`. |
+| `verb` | `varchar(24)` | no | — | `(verb, -occurred_at)` | `CREATED`, `STATE_CHANGED`, `PRIORITY_CHANGED`, `BLOCKER_RAISED`, `BLOCKER_RESOLVED`, `OWNER_CHANGED`, `NEXT_STEP_SET`, `TASK_ADDED`, `NOTE_ADDED`, `SEEDED`, `RENAMED`, `ROLE_CHANGED`, `CAPACITY_CHANGED`, `DEACTIVATED`, `REACTIVATED`, `PASSWORD_RESET`. There is deliberately no generic `UPDATED`: each verb names *which* fact moved, so filtering on `CAPACITY_CHANGED` returns exactly the decisions that changed what "overloaded" means. |
 | `origin` | `varchar(8)` | no | `'SYSTEM'` | — | `MANUAL` (a human forced it; `reason` mandatory) \| `POLICY` (the engine recomputed; `metadata` names the signal that moved) \| `SYSTEM`. |
 | `actor` | `varchar(32)` | no | — | `(actor, -occurred_at)` | `accounts.User.code`, or `system` when the engine caused the change. |
 | `from_value` | `varchar(255)` | no | `''` | — | Point-in-time copy of the previous value, as text. |

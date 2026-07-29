@@ -5,9 +5,11 @@
  * Legality lives in `WorkflowTransition` rows, in guards and in `requires_fields`
  * (`docs/API.md` §2.2), which is why the project's buttons come from
  * `project.transitions` and from nothing else. A task deserves the same
- * treatment, and a picker listing "every state of the task workflow" would be
- * the exact opposite of it: `GET /workflows` publishes the columns of a graph
- * and says, in as many words, that it publishes no edge.
+ * treatment, and a picker built from `GET /workflows` would be the exact
+ * opposite of it. That document publishes the graph an operator *configured* —
+ * its columns and its arrows — which is a different claim from "this task may
+ * move there now": the record has to be on the arrow's `from_state`, its guard
+ * has to accept, and its `requires_fields` have to be filled in on that row.
  *
  * Today `TaskView` does not carry `transitions`. So this reads the field at
  * runtime instead of asserting it into the generated tree — the same defensive

@@ -18,22 +18,28 @@ export const PAGE_COPY = {
   lead: "Todo lo que se movió en la cartera, de lo más reciente a lo más antiguo. Nada se edita ni se borra: esta bitácora es la prueba de qué pasó y quién lo hizo.",
 } as const;
 
-/** The filter form. */
+/** The filter bar. There is no "apply": every control filters on change. */
 export const FILTER_COPY = {
-  legend: "Filtros",
   entityType: "Tipo",
   entityId: "Código",
   entityIdPlaceholder: "PRJ-22",
   verb: "Qué cambió",
   origin: "Origen",
   actor: "Quién",
+  range: "Rango de fechas",
   since: "Desde",
   until: "Hasta",
   any: "Todo",
-  apply: "Aplicar filtros",
-  clear: "Limpiar",
+  clear: "Limpiar filtros",
   summaryOne: "1 filtro aplicado",
   summaryMany: "filtros aplicados",
+  /** The actor entry that is not a person: the engine writes records too. */
+  systemMeta: "Cambios que escribió la plataforma",
+  anyActorMeta: "Cualquier persona y el sistema",
+  rosterLoading: "Cargando el equipo…",
+  rosterEmpty: "Todavía no hay nadie en el equipo.",
+  loadTasksOne: "1 tarea abierta",
+  loadTasksMany: "tareas abiertas",
 } as const;
 
 /** The four view states of the feed region. */
@@ -55,12 +61,24 @@ export const FEED_COPY = {
   reconnect: "Reconectar",
 } as const;
 
+/** Column headings of the feed table. */
+export const TABLE_COPY = {
+  caption: "Registros de la cartera, del más reciente al más antiguo",
+  colChange: "Qué cambió",
+  colSubject: "Sobre qué",
+  colDelta: "El cambio",
+  colWho: "Quién y cuándo",
+  colDecision: "Decisión",
+} as const;
+
 /** One row and the decision it may belong to. */
 export const ROW_COPY = {
   decision: "Una decisión",
   decisionHint:
     "Estos registros se escribieron juntos: son un solo movimiento.",
   seeDecision: "Ver la decisión completa",
+  /** The same link inside a table cell, where its column is already named. */
+  seeDecisionShort: "Ver decisión",
   reasonLabel: "Motivo",
   viewingDecision: "Estás viendo una sola decisión",
   viewingDecisionBody:
