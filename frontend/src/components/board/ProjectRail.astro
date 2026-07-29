@@ -30,9 +30,19 @@ export interface Props {
   active: string;
   /** The project rendered as selected, when one is. */
   selectedCode?: string | null;
+  /**
+   * Why the ghost slot at the foot of every band is dead — no counterparties to register a
+   * project against, or a failed catalog read. `null` when creation is available.
+   */
+  createBlockedReason?: string | null;
 }
 
-const { surfaces, active, selectedCode = null } = Astro.props;
+const {
+  surfaces,
+  active,
+  selectedCode = null,
+  createBlockedReason = null,
+} = Astro.props;
 ---
 
 <aside class="rail" data-rail data-scroller aria-label="Proyectos por estado">
@@ -47,7 +57,12 @@ const { surfaces, active, selectedCode = null } = Astro.props;
         aria-label={`Proyectos de ${surface.engagementType.label}`}
       >
         {surface.sections.map((section) => (
-          <ProjectRailSection section={section} selectedCode={selectedCode} />
+          <ProjectRailSection
+            section={section}
+            engagementCode={surface.engagementType.code}
+            selectedCode={selectedCode}
+            createBlockedReason={createBlockedReason}
+          />
         ))}
       </section>
     ))
@@ -61,6 +76,14 @@ const { surfaces, active, selectedCode = null } = Astro.props;
     min-height: 0;
     min-width: 0;
     padding: var(--space-4);
+    /*
+     * The one side that is not uniform. The rail is capped at the viewport and
+     * scrolls inside it, so a `--space-4` bottom leaves the last card — or the
+     * ghost slot of a short band — sliced flush against the fold, which reads as
+     * a broken panel rather than as a list that continues. The extra inset is
+     * the scroll *end*: the stack visibly finishes, with paper under it.
+     */
+    padding-bottom: var(--space-7);
     background-color: var(--papel);
     /* One column that scrolls as one: the stack of zones is the unit of reading. */
     overflow-y: auto;
@@ -68,18 +91,25 @@ const { surfaces, active, selectedCode = null } = Astro.props;
     overscroll-behavior-y: contain;
     scroll-snap-type: y proximity;
     /*
-     * Bounded here, and stuck to the top, because nothing above it is bounded:
-     * `.shell` only sets `min-height`, so every ancestor grows to its content
-     * and the rail's `overflow-y` had nothing to overflow — it stretched to all
-     * twenty projects and the page scrolled instead, carrying the task columns
-     * off the screen the rail exists to drive.
+     * No height of its own, deliberately. It used to cap itself at `100dvh` and
+     * stick to the top, because `.shell` grew to its content and nothing above
+     * the rail was bounded. That cap was measured from the wrong origin: the
+     * rail starts below the page header, so a full viewport of height ended a
+     * header's worth *below* the fold, and the last card sat in a region the
+     * window clipped and the rail's own scrollbar could not reach.
      *
-     * `dvh` rather than `vh` so a mobile browser's collapsing chrome does not
-     * hide the last band behind it.
+     * `.shell[data-wide]` is now pinned to the viewport, so this is a grid item
+     * in a bounded row and `min-height: 0` above is the whole story: it takes
+     * the space that is actually left and scrolls inside it.
+     *
+     * `relative` is load-bearing and is the one thing the old `sticky` was also
+     * doing by accident. A scroller does not clip an absolutely positioned
+     * descendant whose containing block lives outside it, and this rail has one
+     * (`ProjectRailSection`). Without a containing block here that box escaped
+     * the clip, and the window grew a second scrollbar for a list that was
+     * already scrolling inside itself.
      */
-    position: sticky;
-    top: 0;
-    max-height: 100dvh;
+    position: relative;
   }
 
   .rail-panel {

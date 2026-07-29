@@ -54,11 +54,47 @@ export interface Tone {
   readonly style: string | null;
 }
 
+/**
+ * Whether a rail band can receive a **brand new** project, and how it would get there.
+ *
+ * A discriminated union rather than `canCreate: boolean` plus a nullable reason, because the
+ * three answers demand three different gestures from the surface: `initial` posts and stops,
+ * `one-hop` posts and then moves (possibly asking for a motive first), and `blocked` renders a
+ * dead affordance carrying the sentence that explains itself (CLAUDE.md rule 13).
+ *
+ * `stateLabel` travels with it so a consumer can quote the destination without holding the
+ * band's `StateRef`; it is the operator's own Spanish, never a word this codebase authored.
+ */
+export type ProjectPlacement =
+  | {
+      readonly kind: "initial";
+      readonly stateCode: string;
+      readonly stateLabel: string;
+    }
+  | {
+      readonly kind: "one-hop";
+      readonly stateCode: string;
+      readonly stateLabel: string;
+      /** The operator's own wording for the single edge that reaches this band. */
+      readonly transitionLabel: string;
+      readonly requiresReason: boolean;
+      readonly requiresFields: readonly string[];
+    }
+  | {
+      readonly kind: "blocked";
+      readonly stateCode: string;
+      readonly stateLabel: string;
+      /** Spanish, rendered as the dead control's `title` and its description. */
+      readonly reason: string;
+    };
+
 /** One PROJECT workflow state as a section of the rail: the state, its tone, its cards. */
 export interface RailSectionModel {
   readonly state: StateRef;
   readonly tone: Tone;
   readonly cards: readonly ProjectCardModel[];
+  /** Whether a new project can be registered straight into this band, and how. */
+  readonly placement: ProjectPlacement;
 }
 
 /** One TASK workflow state as a column of the main board; its cards arrive on selection. */
@@ -370,6 +406,98 @@ export function resolveWorkflow(
 }
 
 /**
+ * Whether a band of the rail can receive a brand new project, and how it would get there.
+ *
+ * Pure, and deliberately conservative: the answer is read off the graph the engagement type
+ * resolves to, in this order.
+ *
+ * 1. The state is not in that graph at all — a band `orderedStates` appended because a project
+ *    is standing in a state this workflow no longer publishes. Blocked: creating there would
+ *    ask the server for a state its own lifecycle does not contain.
+ * 2. The state is retired (`is_active: false`). Blocked: a retired node is still a *place*
+ *    records stand in, which is why it is published, but it is out of the graph for new work.
+ * 3. It is the entry node. The POST alone lands there — `POST /api/v1/projects` places the
+ *    project on the `is_initial` state of its workflow and takes no state field at all.
+ * 4. Exactly one declared edge joins the entry node to it. The POST plus that one transition
+ *    lands there.
+ * 5. Anything else — no edge, or several — is blocked.
+ *
+ * **One hop, on purpose.** Walking a longer path would write an activity record per step for a
+ * single gesture, and could meet a `requires_reason` the form never asked about; several edges
+ * to the same target are two different moves and picking one for the operator would be this
+ * surface deciding which decision they made.
+ *
+ * What this is *not*: permission. `WorkflowEdgeView` is configuration, so a placement that says
+ * `one-hop` is a claim about the graph and never about the record — the created project's own
+ * `transitions` is re-checked before anything is posted (`docs/API.md` §2.2).
+ *
+ * @param workflow - The resolved PROJECT graph, or `null` when the workflow read failed.
+ * @param state - The band, as the rail renders it.
+ */
+export function placementFor(
+  workflow: WorkflowShape | null,
+  state: StateRef,
+): ProjectPlacement {
+  const node =
+    workflow === null
+      ? undefined
+      : workflow.states.find((candidate) => candidate.code === state.code);
+  if (node === undefined) {
+    return blockedPlacement(
+      state,
+      `«${state.label}» no pertenece al flujo de este tipo de encargo, así que no se pueden crear proyectos en él.`,
+    );
+  }
+  if (!node.is_active) {
+    return blockedPlacement(
+      state,
+      `«${state.label}» está retirado del flujo: no se pueden crear proyectos en él.`,
+    );
+  }
+  if (node.is_initial) {
+    return { kind: "initial", stateCode: state.code, stateLabel: state.label };
+  }
+
+  const initial = workflow?.states.find((candidate) => candidate.is_initial);
+  if (initial === undefined) {
+    // A graph with no entry node cannot receive a project anywhere, band included: the
+    // creating service has nowhere to place it, so this is honest rather than defensive.
+    return blockedPlacement(
+      state,
+      `Este flujo no declara un estado inicial, así que no se puede crear un proyecto en «${state.label}».`,
+    );
+  }
+
+  const edges = (workflow?.transitions ?? []).filter(
+    (edge) => edge.from_state === initial.code && edge.to_state === state.code,
+  );
+  const only = edges.length === 1 ? edges[0] : undefined;
+  if (only === undefined) {
+    return blockedPlacement(
+      state,
+      `Desde «${initial.label}» no hay un movimiento directo a «${state.label}»: crea el proyecto y muévelo por el carril.`,
+    );
+  }
+  return {
+    kind: "one-hop",
+    stateCode: state.code,
+    stateLabel: state.label,
+    transitionLabel: only.label,
+    requiresReason: only.requires_reason,
+    requiresFields: only.requires_fields,
+  };
+}
+
+function blockedPlacement(state: StateRef, reason: string): ProjectPlacement {
+  return {
+    kind: "blocked",
+    stateCode: state.code,
+    stateLabel: state.label,
+    reason,
+  };
+}
+
+/**
  * Builds one surface per engagement type present in the queue: rail sections on the left,
  * task columns on the right.
  *
@@ -419,12 +547,17 @@ export function buildSurfaces(
 
   return [...groups.values()]
     .map((group) => {
-      const projectStates = orderedStates(
-        catalog,
-        PROJECT_WORKFLOW,
-        group.type.code,
-        group.seen,
-      );
+      // Resolved once and passed down, because the bands need the graph for two answers now:
+      // which states exist, and which of them a new project may be registered into.
+      const projectWorkflow =
+        catalog === null
+          ? null
+          : resolveWorkflow(catalog, PROJECT_WORKFLOW, group.type.code);
+      const taskWorkflow =
+        catalog === null
+          ? null
+          : resolveWorkflow(catalog, TASK_WORKFLOW, group.type.code);
+      const projectStates = orderedStates(projectWorkflow, group.seen);
       return {
         engagementType: group.type,
         tone: toneForTaxonomy(group.type),
@@ -432,13 +565,12 @@ export function buildSurfaces(
           state,
           tone: toneForState(state),
           cards: group.byState.get(state.code) ?? [],
+          placement: placementFor(projectWorkflow, state),
         })),
-        taskStates: orderedStates(
-          catalog,
-          TASK_WORKFLOW,
-          group.type.code,
-          new Map(),
-        ).map((state) => ({ state, tone: toneForState(state) })),
+        taskStates: orderedStates(taskWorkflow, new Map()).map((state) => ({
+          state,
+          tone: toneForState(state),
+        })),
         count: [...group.byState.values()].reduce(
           (total, cards) => total + cards.length,
           0,
@@ -455,18 +587,12 @@ export function buildSurfaces(
  *
  * The graph's own states come first, exactly as arranged in the admin; any state the data
  * occupies that the graph does not publish is appended, because a card with no zone is a card
- * that vanishes. With no catalog at all the occupied states are the whole answer.
+ * that vanishes. With no graph at all the occupied states are the whole answer.
  */
 function orderedStates(
-  catalog: WorkflowCatalog | null,
-  appliesTo: string,
-  engagementCode: string,
+  workflow: WorkflowShape | null,
   occupied: ReadonlyMap<string, StateRef>,
 ): StateRef[] {
-  const workflow =
-    catalog === null
-      ? null
-      : resolveWorkflow(catalog, appliesTo, engagementCode);
   const published = workflow === null ? [] : workflow.states;
   const known = new Set(published.map((state) => state.code));
   const extra = [...occupied.entries()]

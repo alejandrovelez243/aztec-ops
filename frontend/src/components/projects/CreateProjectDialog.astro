@@ -125,6 +125,16 @@ const targetHintId = "create-project-target-hint";
 const nextStepHintId = "create-project-next-step-hint";
 const valueHintId = "create-project-value-hint";
 const teamNoteId = "create-project-team-note";
+const moveReasonHintId = "create-project-move-reason-hint";
+
+/**
+ * The heading when nothing named a destination.
+ *
+ * Carried as `data-default` rather than re-authored in the island: a band of the board opens
+ * this sheet with its own heading, and the way back has to be the same words the server
+ * rendered — the alternative is a second copy of the title inside a `.ts` file.
+ */
+const DEFAULT_TITLE = "Nuevo proyecto";
 ---
 
 <dialog
@@ -134,7 +144,15 @@ const teamNoteId = "create-project-team-note";
 >
   <form data-create-project-form>
     <div class="head">
-      <h2 class="h2" id="create-project-title">Nuevo proyecto</h2>
+      <h2
+        class="h2"
+        id="create-project-title"
+        data-field="create-project-title"
+        data-default={DEFAULT_TITLE}
+        lang="es"
+      >
+        {DEFAULT_TITLE}
+      </h2>
       <button
         class="btn btn-ghost btn-icon"
         type="button"
@@ -157,6 +175,21 @@ const teamNoteId = "create-project-team-note";
         «Más detalles» below, and nothing that raises a flag hides in there. */
     }
     <div class="body">
+      {
+        /* What the band asked for, written before the fields rather than after the failure:
+          creating into a state is two acts — a POST and a transition — and the second one can
+          be refused on its own. The sentence is composed by `create-project.ts` from the
+          placement, because both halves of it quote the operator's own labels. */
+      }
+      <p
+        class="small note"
+        data-field="create-project-placement"
+        role="status"
+        hidden
+        lang="es"
+      >
+      </p>
+
       <label class="field">
         <span class="label">Nombre</span>
         <input
@@ -227,6 +260,33 @@ const teamNoteId = "create-project-team-note";
         />
         <span class="small note" id={nextStepHintId}>
           {CREATE_PROJECT_NO_NEXT_STEP_HINT}
+        </span>
+      </label>
+
+      {
+        /* Only when the landing move demands it. The motive belongs *here* and not in a second
+          dialog after the POST: the transition is part of the gesture the operator started, and
+          asking for it afterwards means asking about a project that already exists in the wrong
+          band. Hidden — never absent — so `create-project.ts` reveals it without building copy. */
+      }
+      <label
+        class="field reason"
+        data-field="create-project-move-reason"
+        hidden
+      >
+        <span class="label">Motivo del movimiento</span>
+        <input
+          class="input"
+          type="text"
+          name="move_reason"
+          maxlength="255"
+          autocomplete="off"
+          placeholder="Por qué entra directamente en ese estado"
+          aria-describedby={moveReasonHintId}
+        />
+        <span class="small note" id={moveReasonHintId}>
+          Ese paso exige un motivo escrito, y queda en el historial del
+          proyecto.
         </span>
       </label>
 
@@ -462,6 +522,18 @@ const teamNoteId = "create-project-team-note";
 
   .note {
     color: var(--tinta-media);
+  }
+
+  /* `.field` is a flex column, so `hidden` alone would not hide it. */
+  .reason {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .reason[hidden],
+  [data-field="create-project-placement"][hidden] {
+    display: none;
   }
 
   .more summary {

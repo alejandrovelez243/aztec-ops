@@ -2,6 +2,7 @@
 import BoardCanvas from "../islands/BoardCanvas.astro";
 import BoardNotice from "../components/board/BoardNotice.astro";
 import BoardSkeleton from "../components/board/BoardSkeleton.astro";
+import CreateProjectDialog from "../components/projects/CreateProjectDialog.astro";
 import CreateTaskDialog from "../components/projects/CreateTaskDialog.astro";
 import Shell from "../layouts/Shell.astro";
 import {
@@ -18,7 +19,13 @@ import type {
 } from "../components/board/board-model";
 import { BOARD_PROJECT_PARAM } from "../components/board/board-dom";
 import {
+  CREATE_PROJECT_CLIENTS_FAILED,
+  CREATE_PROJECT_ENGAGEMENT_FAILED,
+  CREATE_PROJECT_NO_CLIENTS,
+} from "../components/projects/create-project-copy";
+import {
   getCatalog,
+  getClients,
   getQueue,
   getTeamLoad,
   getWorkflows,
@@ -180,12 +187,14 @@ function planBoard(
 
 const requestedProject = Astro.url.searchParams.get(BOARD_PROJECT_PARAM);
 
-const [result, teamResult, workflowResult, catalogResult] = await Promise.all([
-  getQueue({ page: 1, page_size: BOARD_PAGE_SIZE }),
-  getTeamLoad(),
-  getWorkflows(),
-  getCatalog(),
-]);
+const [result, teamResult, workflowResult, catalogResult, clientsResult] =
+  await Promise.all([
+    getQueue({ page: 1, page_size: BOARD_PAGE_SIZE }),
+    getTeamLoad(),
+    getWorkflows(),
+    getCatalog(),
+    getClients(),
+  ]);
 
 /**
  * `"connecting"` is the honest stream status during a server render: the browser has not
@@ -235,6 +244,29 @@ const priorities: readonly TaxonomyRef[] = catalogResult.ok
 const roster: readonly TeamLoadEntry[] = teamResult.ok
   ? teamResult.data.items
   : [];
+
+/**
+ * What the create-project sheet offers, and why the rail's ghost slots are dead when they are.
+ *
+ * The same three refusals `/projects` names, in the same words: a project needs a counterparty
+ * and an engagement type, and neither is something this screen can invent. The slots render
+ * **dead and visible** in all three (`FRONTEND.md` §10) — one sentence for the whole rail,
+ * because the cause is the portfolio's and not any single band's.
+ */
+const clients: readonly TaxonomyRef[] = clientsResult.ok
+  ? clientsResult.data.items
+  : [];
+const engagementTypes: readonly TaxonomyRef[] = catalogResult.ok
+  ? catalogResult.data.engagement_types
+  : [];
+
+const createBlockedReason: string | null = !clientsResult.ok
+  ? CREATE_PROJECT_CLIENTS_FAILED
+  : clients.length === 0
+    ? CREATE_PROJECT_NO_CLIENTS
+    : engagementTypes.length === 0
+      ? CREATE_PROJECT_ENGAGEMENT_FAILED
+      : null;
 ---
 
 <Shell
@@ -291,6 +323,7 @@ const roster: readonly TeamLoadEntry[] = teamResult.ok
         membersNote={membersNote}
         workflowsNote={workflowsNote}
         selected={plan.selected}
+        createBlockedReason={createBlockedReason}
       />
     )
   }
@@ -310,6 +343,33 @@ const roster: readonly TeamLoadEntry[] = teamResult.ok
       />
     )
   }
+
+  {
+    /* The same sheet `/projects` opens, rendered once by the page for the same reason: its
+      pickers are server-rendered, so it has no loading arm, and a `<dialog>` is drawn in the
+      top layer wherever it sits. Here it is opened by a band's ghost slot, which hands it the
+      destination — the sheet is unchanged otherwise, and the rail did not grow a second form. */
+  }
+  {
+    plan.kind === "board" && (
+      <CreateProjectDialog
+        clients={clients}
+        engagementTypes={engagementTypes}
+        projectTypes={catalogResult.ok ? catalogResult.data.project_types : []}
+        stages={catalogResult.ok ? catalogResult.data.stages : []}
+        currencies={catalogResult.ok ? catalogResult.data.currencies : []}
+        members={roster}
+        isTeamUnavailable={!teamResult.ok}
+      />
+    )
+  }
+
+  <script>
+    import { onPage } from "../components/projects/island";
+    import { mountCreateProject } from "../components/projects/create-project";
+
+    onPage("[data-create-project-dialog]", mountCreateProject);
+  </script>
 </Shell>
 
 <style>

@@ -15,6 +15,7 @@
  *
  * Nothing in this module talks to the network or decides policy; it reads and writes DOM.
  */
+import type { CreateProjectPlacement } from "../projects/create-project";
 
 /**
  * The `MenuSelect` facet the engagement field is mounted under.
@@ -51,6 +52,8 @@ export const SEL = {
   cardScoreSlot: "[data-card-score-slot]",
   cardScoreNote: "[data-card-score-note]",
   cardPending: "[data-card-pending]",
+  /** The empty slot at the foot of a band's well: "create a project *here*". */
+  ghostCard: "[data-ghost-card]",
   moveTrigger: "[data-move-trigger]",
   moveMenu: "[data-move-menu]",
   moveMenuList: "[data-move-menu-list]",
@@ -271,6 +274,37 @@ export function rideAttribution(card: HTMLElement, text: string): void {
     chip.dataset["leaving"] = "true";
     window.setTimeout(() => chip.remove(), 400);
   }, ATTRIBUTION_LINGER_MS);
+}
+
+/**
+ * Reads one ghost slot back as the placement it was rendered from.
+ *
+ * The band decided this server-side (`placementFor`), so this is a *recovery*, not a second
+ * derivation: nothing here re-reads the workflow, and a slot whose `data-placement` is neither
+ * arm — a blocked one, or markup this build does not know — answers `null` and the press is
+ * dropped. That is why the reader is discrete `data-*` strings rather than a JSON blob: the
+ * only `unknown` this codebase parses is the SSE `data:` line.
+ *
+ * @returns The landing band, or `null` when this element cannot offer one.
+ */
+export function readGhostPlacement(
+  element: HTMLElement,
+): CreateProjectPlacement | null {
+  const stateCode = element.dataset["stateCode"] ?? "";
+  const stateLabel = element.dataset["stateLabel"] ?? "";
+  if (stateCode === "") return null;
+  const kind = element.dataset["placement"] ?? "";
+  if (kind === "initial") return { kind, stateCode, stateLabel };
+  if (kind !== "one-hop") return null;
+  const fields = element.dataset["requiresFields"] ?? "";
+  return {
+    kind,
+    stateCode,
+    stateLabel,
+    transitionLabel: element.dataset["transitionLabel"] ?? "",
+    requiresReason: element.dataset["requiresReason"] === "true",
+    requiresFields: fields === "" ? [] : fields.split(","),
+  };
 }
 
 /**

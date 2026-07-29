@@ -79,6 +79,11 @@ export interface Props {
   workflowsNote: string | null;
   /** The project `?project=` named, already located on the rail; `null` when none. */
   selected: { card: ProjectCardModel; tone: Tone } | null;
+  /**
+   * Why the ghost slot at the foot of every band is dead — nothing to register a project
+   * against, or a failed catalog read — or `null` when creation is available.
+   */
+  createBlockedReason?: string | null;
 }
 
 const {
@@ -90,6 +95,7 @@ const {
   membersNote,
   workflowsNote,
   selected,
+  createBlockedReason = null,
 } = Astro.props;
 
 const options: Option[] = surfaces.map((surface) => ({
@@ -158,6 +164,7 @@ const staleSentence =
       surfaces={surfaces}
       active={defaultEngagement}
       selectedCode={selectedCode}
+      createBlockedReason={createBlockedReason}
     />
     <TaskBoard
       surfaces={surfaces}
@@ -327,12 +334,14 @@ const staleSentence =
     markUpdatedAt,
     panelOf,
     patchStateChip,
+    readGhostPlacement,
     refreshColumn,
     rideAttribution,
     setPending,
     surfaceOf,
     visibleCardsOf,
   } from "../components/board/board-dom";
+  import { CREATE_PROJECT_EVENT } from "../components/projects/create-project";
   import { mountCreateTask } from "../components/projects/create-task";
   import type { MultiOption } from "../components/ui/multi-select";
   import { fieldList } from "../components/board/board-model";
@@ -2817,6 +2826,11 @@ const staleSentence =
         );
         return;
       }
+      const ghost = target.closest<HTMLElement>(SEL.ghostCard);
+      if (ghost !== null) {
+        openCreateProject(ghost);
+        return;
+      }
       if (target.closest("[data-tb-close]") !== null) {
         clearSelection({ push: true, focus: true });
         return;
@@ -2832,6 +2846,28 @@ const staleSentence =
         if (menuOwner === trigger) dismissMenu();
         else void openMenu(trigger);
       }
+    }
+
+    /**
+     * Opens the create-project sheet already knowing which band asked for it.
+     *
+     * The island neither renders the form nor posts anything: it says one sentence into the
+     * room — the document event `create-project.ts` listens for — carrying the placement the
+     * band was rendered with. That keeps the sheet a single implementation shared with
+     * `/projects`, and keeps this island out of a second creation path it would have to
+     * maintain in step with it.
+     *
+     * A blocked band cannot reach here: its slot is a `disabled` button, which dispatches no
+     * click at all, and `readGhostPlacement` refuses anything that is not one of the two
+     * landing arms.
+     */
+    function openCreateProject(ghost: HTMLElement): void {
+      if (ghost instanceof HTMLButtonElement && ghost.disabled) return;
+      const placement = readGhostPlacement(ghost);
+      if (placement === null) return;
+      document.dispatchEvent(
+        new CustomEvent(CREATE_PROJECT_EVENT, { detail: placement }),
+      );
     }
 
     /**
