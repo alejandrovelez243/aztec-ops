@@ -43,6 +43,11 @@ const PATHS = {
   check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   menu: '<path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/>',
+  /* The row's own overflow. Vertical, because `menu` already owns the
+     horizontal three-line mark and two marks that differ only in rotation are
+     two names for one gesture. */
+  "more-vertical":
+    '<circle cx="12" cy="5.2" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="12" cy="18.8" r="1.3"/>',
   panel:
     '<rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><path d="M9.5 4.5v15"/>',
   refresh:

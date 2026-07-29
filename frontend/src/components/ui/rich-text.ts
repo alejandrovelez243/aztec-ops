@@ -24,7 +24,7 @@
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
-import { RICH_TEXT_PROMPT, RICH_TEXT_STATUS } from "./rich-text-copy";
+import { RICH_TEXT_STATUS } from "./rich-text-copy";
 import { setField } from "../projects/dom";
 
 /** How long the editor stays quiet before persisting a burst of typing. */
@@ -37,12 +37,22 @@ export type RichTextSubmit = (
   markdown: string,
 ) => Promise<boolean>;
 
-/** One entry of the `/` menu. */
+/**
+ * One entry of the `/` menu.
+ *
+ * A block is Markdown syntax, not an editor command: the operator is writing
+ * the source, so the menu's job is to type the marks they would otherwise have
+ * to remember. That also keeps every entry round-trippable by definition —
+ * whatever it inserts *is* what gets stored.
+ */
 interface SlashCommand {
   readonly key: string;
   readonly title: string;
   readonly hint: string;
-  readonly run: (editor: Editor) => void;
+  /** Written at the start of the line the caret is on. */
+  readonly prefix: string;
+  /** Written after the caret, for the marks that wrap. */
+  readonly suffix?: string;
 }
 
 /**
@@ -53,54 +63,20 @@ interface SlashCommand {
  * live in the editor's own memory has no place here.
  */
 const COMMANDS: readonly SlashCommand[] = [
-  {
-    key: "H1",
-    title: "Título",
-    hint: "Encabezado grande",
-    run: (e) => e.chain().focus().toggleHeading({ level: 1 }).run(),
-  },
-  {
-    key: "H2",
-    title: "Subtítulo",
-    hint: "Encabezado mediano",
-    run: (e) => e.chain().focus().toggleHeading({ level: 2 }).run(),
-  },
-  {
-    key: "H3",
-    title: "Apartado",
-    hint: "Encabezado pequeño",
-    run: (e) => e.chain().focus().toggleHeading({ level: 3 }).run(),
-  },
-  {
-    key: "•",
-    title: "Lista",
-    hint: "Viñetas",
-    run: (e) => e.chain().focus().toggleBulletList().run(),
-  },
-  {
-    key: "1.",
-    title: "Lista numerada",
-    hint: "Pasos en orden",
-    run: (e) => e.chain().focus().toggleOrderedList().run(),
-  },
-  {
-    key: "❝",
-    title: "Cita",
-    hint: "Texto citado",
-    run: (e) => e.chain().focus().toggleBlockquote().run(),
-  },
+  { key: "H1", title: "Título", hint: "Encabezado grande", prefix: "# " },
+  { key: "H2", title: "Subtítulo", hint: "Encabezado mediano", prefix: "## " },
+  { key: "H3", title: "Apartado", hint: "Encabezado pequeño", prefix: "### " },
+  { key: "•", title: "Lista", hint: "Viñetas", prefix: "- " },
+  { key: "1.", title: "Lista numerada", hint: "Pasos en orden", prefix: "1. " },
+  { key: "❝", title: "Cita", hint: "Texto citado", prefix: "> " },
   {
     key: "<>",
     title: "Código",
     hint: "Bloque monoespaciado",
-    run: (e) => e.chain().focus().toggleCodeBlock().run(),
+    prefix: "```\n",
+    suffix: "\n```",
   },
-  {
-    key: "—",
-    title: "Separador",
-    hint: "Línea horizontal",
-    run: (e) => e.chain().focus().setHorizontalRule().run(),
-  },
+  { key: "—", title: "Separador", hint: "Línea horizontal", prefix: "---\n" },
 ];
 
 /**
@@ -114,63 +90,60 @@ export function mountRichText(root: HTMLElement): () => void {
   const surface = root.querySelector<HTMLElement>("[data-rich-surface]");
   const fallback = root.querySelector<HTMLElement>("[data-rich-fallback]");
   const slash = root.querySelector<HTMLElement>("[data-rich-slash]");
+  const source = root.querySelector<HTMLTextAreaElement>("[data-rich-source]");
   if (surface === null || fallback === null || slash === null) return () => {};
+  if (source === null) return () => {};
 
   const scope = root.dataset["scope"] ?? "";
   const code = root.dataset["code"] ?? "";
   const resolved = submitFor(scope);
   if (resolved === null) return () => {};
-  // Bound to a non-nullable const: narrowing an outer `let`/union does not
-  // survive into the async closure below, and the alternative is the `!` the
-  // house rules forbid.
   const submit: RichTextSubmit = resolved;
+  // Bound to non-nullable consts: the guard above narrows these, but that
+  // narrowing does not survive into the closures below, and the alternative is
+  // the `!` the house rules forbid.
+  const fallbackNode: HTMLElement = fallback;
+  const sourceNode: HTMLTextAreaElement = source;
+  const surfaceNode: HTMLElement = surface;
 
   // The stored Markdown is read as *text*, never as markup — see the module note.
-  const initial = fallback.textContent ?? "";
+  const initial = fallbackNode.textContent ?? "";
+  sourceNode.value = initial;
 
   let timer = 0;
   let lastSaved = initial;
   let destroyed = false;
+  /**
+   * Whether the operator has typed into this field during this mount.
+   *
+   * Load-bearing, and the reason is a real loss: the teardown flushes the
+   * debounce, and a teardown can run when the textarea is already detached from
+   * a swapped-out document — where its `value` reads `""`. Saving that emptied a
+   * description nobody had touched. A write now requires evidence that somebody
+   * wrote, so clearing a description stays possible (they typed the deletion)
+   * while inventing one does not.
+   */
+  let dirty = false;
 
-  // Late-bound: the menu must exist before the editor so its `handleKeyDown`
-  // can be handed to ProseMirror at construction, and it needs the editor back
-  // to read the selection. A getter closes that loop without a mutable `any`.
-  let editorRef: Editor | null = null;
-  const slashMenu = mountSlash(() => editorRef, slash);
-
+  // Read mode only. The editor never becomes editable: it is the renderer, and
+  // `html: false` plus ProseMirror's schema is what keeps somebody's text from
+  // ever being parsed as markup.
   const editor = new Editor({
     element: surface,
+    editable: false,
     extensions: [
       StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
-      // `html: false` is the security boundary; see the module note.
       Markdown.configure({ html: false, transformPastedText: true }),
     ],
     content: initial,
-    editorProps: {
-      attributes: { "data-placeholder": RICH_TEXT_PROMPT },
-      // Before any editor command: this is what lets the menu own `Enter` and
-      // the arrows instead of receiving them after the caret already moved.
-      handleKeyDown: (_view, event) => slashMenu.handleKeyDown(event),
-    },
-    onUpdate: () => {
-      // The query is read from the document, after it changed — never from the
-      // key that changed it, which on `keydown` has not been inserted yet.
-      slashMenu.sync();
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        void save();
-      }, SAVE_DEBOUNCE_MS);
-    },
   });
 
+  const slashMenu = mountSlash(sourceNode, slash);
+
   async function save(): Promise<void> {
-    if (destroyed) return;
-    const markdown = markdownOf(editor);
-    // `null` means the serializer was not where it was expected. Saving `""`
-    // here would quietly empty a description the operator can still see on
-    // screen, so the write is skipped instead — the worst case becomes an
-    // unsaved edit, never a destroyed one.
-    if (markdown === null || markdown === lastSaved) return;
+    if (destroyed || !dirty) return;
+    const markdown = sourceNode.value;
+    if (markdown === lastSaved) return;
 
     status(root, "saving");
     const ok = await submit(scope, code, markdown);
@@ -180,56 +153,106 @@ export function mountRichText(root: HTMLElement): () => void {
       return;
     }
     lastSaved = markdown;
+    // The pre-hydration node is the only record a re-mount reads back; left at
+    // the first paint's text, any reload would revert the field to what the
+    // server sent when the page was built.
+    fallbackNode.textContent = markdown;
     status(root, "saved");
-    const empty = root.querySelector<HTMLElement>("[data-rich-empty]");
-    if (empty !== null) empty.hidden = true;
+    renderEmpty(root, markdown);
   }
 
-  editorRef = editor;
-  editor.on("blur", slashMenu.close);
+  /**
+   * Reading or editing.
+   *
+   * Read renders the Markdown; edit shows the Markdown itself. Editing the
+   * rendering would hide the syntax being written — somebody typing `##` needs
+   * to see `##`, not watch it turn into a size — which is the whole reason
+   * these are two surfaces over one value rather than one editable rendering.
+   */
+  function setMode(mode: "read" | "edit"): void {
+    root.dataset["mode"] = mode;
+    setField(root, "edit-label", mode === "edit" ? "Listo" : "Editar");
+    surfaceNode.hidden = mode === "edit";
+    sourceNode.hidden = mode === "read";
+    if (mode === "edit") {
+      sourceNode.focus();
+      return;
+    }
+    slashMenu.close();
+    // Re-render from whatever the source now holds, so leaving the editor is
+    // also what proves the Markdown was understood.
+    editor.commands.setContent(sourceNode.value);
+    renderEmpty(root, sourceNode.value);
+  }
 
-  // Only now is the editor real: swapping before it mounts would blank the
-  // description for the width of one frame.
-  fallback.hidden = true;
-  surface.hidden = false;
-  const empty = root.querySelector<HTMLElement>("[data-rich-empty]");
-  if (empty !== null) empty.hidden = initial !== "";
+  sourceNode.addEventListener("input", () => {
+    dirty = true;
+    slashMenu.sync();
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      void save();
+    }, SAVE_DEBOUNCE_MS);
+  });
+
+  sourceNode.addEventListener("keydown", (event) => {
+    if (slashMenu.handleKeyDown(event)) {
+      event.preventDefault();
+      return;
+    }
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    window.clearTimeout(timer);
+    void save();
+    setMode("read");
+  });
+
+  sourceNode.addEventListener("blur", () => {
+    // Saves, but does not leave: blur fires for reasons that are not "I am
+    // finished", and being thrown back to read mode mid-thought is worse than a
+    // border left on a moment too long. Leaving is the button, or Escape.
+    window.clearTimeout(timer);
+    void save();
+  });
+
+  const toggle = root.querySelector<HTMLButtonElement>(
+    "[data-action='toggle-edit']",
+  );
+  const onToggle = (): void => {
+    if (root.dataset["mode"] === "edit") {
+      window.clearTimeout(timer);
+      void save();
+      setMode("read");
+      return;
+    }
+    setMode("edit");
+  };
+  if (toggle !== null) {
+    toggle.hidden = false;
+    toggle.addEventListener("click", onToggle);
+  }
+
+  // The prose is its own affordance: clicking the text is how most people will
+  // try to correct it, and a field that answered only its button would be a
+  // field most people call broken.
+  surfaceNode.addEventListener("mousedown", () => {
+    if (root.dataset["mode"] !== "edit") setMode("edit");
+  });
+
+  fallbackNode.hidden = true;
+  setMode("read");
 
   return () => {
-    destroyed = true;
-    editorRef = null;
     window.clearTimeout(timer);
+    void save();
+    destroyed = true;
     editor.destroy();
   };
 }
 
-/** What `tiptap-markdown` parks on the editor's storage. */
-interface MarkdownStorage {
-  readonly getMarkdown: () => string;
-}
-
-function isMarkdownStorage(value: unknown): value is MarkdownStorage {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "getMarkdown" in value &&
-    typeof Reflect.get(value, "getMarkdown") === "function"
-  );
-}
-
-/**
- * The document as Markdown, or `null` when the serializer is not there.
- *
- * `editor.storage` is an untyped bag that extensions write into, so the shape
- * is checked rather than asserted: the alternative is a cast that would turn a
- * dependency upgrade into a silently empty description instead of a skipped
- * save (see {@link mountRichText}'s `save`).
- */
-function markdownOf(editor: Editor): string | null {
-  const storage: unknown = Reflect.get(editor.storage, "markdown");
-  if (!isMarkdownStorage(storage)) return null;
-  const markdown: unknown = storage.getMarkdown();
-  return typeof markdown === "string" ? markdown : null;
+/** Shows or hides the named absence, from the value that decides it. */
+function renderEmpty(root: HTMLElement, markdown: string): void {
+  const empty = root.querySelector<HTMLElement>("[data-rich-empty]");
+  if (empty !== null) empty.hidden = markdown.trim() !== "";
 }
 
 /** Writes the save state, and its tone, into the status line. */
@@ -241,41 +264,38 @@ function status(root: HTMLElement, state: keyof typeof RICH_TEXT_STATUS): void {
   else delete line.dataset["tone"];
 }
 
-/** The `/` menu, as the editor's own key handling sees it. */
+/** The `/` menu, as the source textarea's key handling sees it. */
 interface SlashMenu {
-  /** Consumes a key while the menu is open; `false` lets the editor have it. */
+  /** Consumes a key while the menu is open; `false` lets the textarea have it. */
   readonly handleKeyDown: (event: KeyboardEvent) => boolean;
-  /** Recomputes the query after the document changed. */
+  /** Recomputes the query after the text changed. */
   readonly sync: () => void;
   readonly close: () => void;
 }
 
 /**
- * The `/` menu: a filtered list anchored at the caret.
+ * The `/` menu over the Markdown source.
  *
- * **Keys are handled through ProseMirror, not through a DOM listener.** A
- * `keydown` listener added to `view.dom` runs *after* the editor's own handler,
- * so by the time it saw `Enter` the paragraph had already been split and the
- * range it then deleted was computed against a selection that no longer
- * existed — which is how choosing a block used to wipe what was written.
- * `editorProps.handleKeyDown` runs before any editor command and returns `true`
- * to consume the event, which is the only way to own `Enter` and the arrows.
+ * It types what the operator would otherwise have to remember: choosing "Lista"
+ * writes `- ` at the start of the line. Because the menu only ever inserts
+ * syntax, every entry round-trips by construction — there is no editor state it
+ * could produce that the stored text cannot express.
  *
- * The panel is plain DOM cloned from a `<template>` rather than
- * `@tiptap/suggestion`'s renderer, for the reason every menu in this app clones:
- * an element built in TypeScript carries no scope id and renders unstyled.
+ * The panel is plain DOM cloned from a `<template>`, for the reason every menu
+ * in this app clones: an element built in TypeScript carries no scope id and
+ * renders unstyled.
  */
 function mountSlash(
-  getEditor: () => Editor | null,
+  source: HTMLTextAreaElement,
   panel: HTMLElement,
 ): SlashMenu {
   let open = false;
   let index = 0;
   let matches: readonly SlashCommand[] = COMMANDS;
 
-  // Held before the first render, because `replaceChildren` below would other-
-  // wise delete the very `<template>` the rows are cloned from — the panel
-  // renders once, empties itself, and every later open is a blank box.
+  // Held before the first render: `replaceChildren` below would otherwise
+  // delete the very `<template>` the rows are cloned from, and every later open
+  // would be a blank box.
   const template = panel.querySelector<HTMLTemplateElement>(
     "[data-template='slash-item']",
   );
@@ -285,15 +305,31 @@ function mountSlash(
     panel.hidden = true;
   };
 
+  /** The `/word` immediately before the caret, or `null` when there is none. */
+  const query = (): string | null => {
+    const before = source.value.slice(0, source.selectionStart);
+    const match = /(?:^|\s)\/(\S*)$/.exec(before);
+    return match?.[1] ?? null;
+  };
+
   const choose = (command: SlashCommand): void => {
-    const editor = getEditor();
-    if (editor === null) return;
-    // The query is removed and the block applied in one chain, so the two are a
-    // single undo step — an operator pressing Ctrl+Z once must not be left with
-    // a heading and a stray "/lista" they have to delete by hand.
+    const typed = query();
+    if (typed === null) return;
+    const caret = source.selectionStart;
+    // The `/query` itself is replaced, so the marks land where the operator was
+    // already writing rather than beside the trigger they typed.
+    const cut = caret - typed.length - 1;
+    const lineStart = source.value.lastIndexOf("\n", cut - 1) + 1;
+    const head = source.value.slice(0, lineStart);
+    const middle = source.value.slice(lineStart, cut);
+    const tail = source.value.slice(caret);
+    const suffix = command.suffix ?? "";
+    source.value = `${head}${command.prefix}${middle}${tail}${suffix}`;
+    const at = head.length + command.prefix.length + middle.length;
+    source.setSelectionRange(at, at);
     close();
-    removeSlashQuery(editor);
-    command.run(editor);
+    source.focus();
+    source.dispatchEvent(new Event("input", { bubbles: true }));
   };
 
   const render = (): void => {
@@ -307,8 +343,8 @@ function mountSlash(
       setField(node, "slash-hint", command.hint);
       node.setAttribute("aria-selected", String(position === index));
       node.addEventListener("mousedown", (event) => {
-        // `mousedown`, not `click`: the editor would lose the selection the
-        // command is about to act on before a click ever landed.
+        // `mousedown`, not `click`: the textarea would lose its caret — the very
+        // position the command writes at — before a click ever landed.
         event.preventDefault();
         choose(command);
       });
@@ -317,24 +353,19 @@ function mountSlash(
   };
 
   const place = (): void => {
-    const editor = getEditor();
-    if (editor === null) return;
-    const { from } = editor.state.selection;
-    const caret = editor.view.coordsAtPos(from);
-    panel.style.left = `${Math.round(caret.left)}px`;
-    panel.style.top = `${Math.round(caret.bottom + 6)}px`;
+    const box = source.getBoundingClientRect();
+    panel.style.left = `${Math.round(box.left + 12)}px`;
+    panel.style.top = `${Math.round(box.top + 32)}px`;
   };
 
   const sync = (): void => {
-    const editor = getEditor();
-    if (editor === null) return;
-    const query = slashQuery(editor);
-    if (query === null) {
+    const typed = query();
+    if (typed === null) {
       if (open) close();
       return;
     }
     matches = COMMANDS.filter((command) =>
-      command.title.toLowerCase().startsWith(query.toLowerCase()),
+      command.title.toLowerCase().startsWith(typed.toLowerCase()),
     );
     if (matches.length === 0) {
       close();
@@ -354,8 +385,9 @@ function mountSlash(
       return true;
     }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      const step = event.key === "ArrowDown" ? 1 : -1;
-      index = (index + step + matches.length) % matches.length;
+      index =
+        (index + (event.key === "ArrowDown" ? 1 : -1) + matches.length) %
+        matches.length;
       render();
       return true;
     }
@@ -369,37 +401,6 @@ function mountSlash(
   };
 
   return { handleKeyDown, sync, close };
-}
-
-/**
- * The text typed after a `/` that starts a word, or `null` when the caret is
- * not in one.
- *
- * Anchored to a word boundary so a URL's slashes never open the menu.
- */
-function slashQuery(editor: Editor): string | null {
-  const { from, empty } = editor.state.selection;
-  if (!empty) return null;
-  const before = editor.state.doc.textBetween(
-    Math.max(0, from - 30),
-    from,
-    "\n",
-    "\0",
-  );
-  const match = /(?:^|\s)\/(\S*)$/.exec(before);
-  return match?.[1] ?? null;
-}
-
-/** Deletes the `/query` the operator typed, before running the command. */
-function removeSlashQuery(editor: Editor): void {
-  const query = slashQuery(editor);
-  if (query === null) return;
-  const { from } = editor.state.selection;
-  editor
-    .chain()
-    .focus()
-    .deleteRange({ from: from - query.length - 1, to: from })
-    .run();
 }
 
 /** One `/` menu row, cloned so it keeps the component's scoped styles. */

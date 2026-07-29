@@ -17,6 +17,25 @@ import { prefersReducedMotion, sampleSpring } from "./motion/spring";
 /** Semantic kind of one toast; maps onto the tone classes of base.css. */
 export type ToastKind = "success" | "error" | "info";
 
+/**
+ * A single recovery offered beside the notice — "Deshacer" after a removal.
+ *
+ * One, never a row of them: a toast is an aside that dismisses itself, so a
+ * second choice inside it is a decision the operator can lose by waiting. Any
+ * act that deserves more than one option deserves a surface that stays.
+ */
+export interface ToastAction {
+  /** The button's words, in the operator's language. */
+  readonly label: string;
+  /**
+   * What the press does. Fired at most once — the toast leaves on the press —
+   * so an implementation need not guard against a double invocation. It must
+   * report its own outcome (a second toast, a repaint); this module only
+   * dismisses.
+   */
+  readonly onSelect: () => void;
+}
+
 /** One toast request. */
 export interface ToastOptions {
   readonly kind: ToastKind;
@@ -24,6 +43,14 @@ export interface ToastOptions {
   readonly title: string;
   /** Optional second line: the reason or the recovery. */
   readonly detail?: string;
+  /**
+   * Optional recovery, rendered as a button inside the toast.
+   *
+   * Note the deadline this inherits: on a `success` or `info` toast the offer
+   * disappears with the toast after {@link DISMISS_AFTER_MS}. Attach it only
+   * where letting it lapse is an acceptable answer.
+   */
+  readonly action?: ToastAction;
 }
 
 /** Auto-dismiss delay per kind; `null` means it stays until closed. */
@@ -64,6 +91,9 @@ export function toast(options: ToastOptions): void {
   el.appendChild(dot);
 
   const textWrap = document.createElement("div");
+  // Claims the free space, so the optional action and the close button sit
+  // together at the trailing edge instead of drifting apart.
+  textWrap.className = "toast-text";
   const title = document.createElement("p");
   title.className = "toast-title";
   title.textContent = options.title;
@@ -75,6 +105,25 @@ export function toast(options: ToastOptions): void {
     textWrap.appendChild(detail);
   }
   el.appendChild(textWrap);
+
+  const action = options.action;
+  if (action !== undefined) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "toast-action";
+    button.textContent = action.label;
+    button.addEventListener(
+      "click",
+      () => {
+        // Dismissed first: the recovery paints its own answer, and leaving the
+        // notice of the act that was just undone on screen contradicts it.
+        dismiss(el);
+        action.onSelect();
+      },
+      { once: true },
+    );
+    el.appendChild(button);
+  }
 
   const close = document.createElement("button");
   close.type = "button";

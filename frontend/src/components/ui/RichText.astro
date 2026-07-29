@@ -19,6 +19,7 @@
  * no button that means "commit" — but a document that saves invisibly is a
  * document nobody trusts, hence the explicit status line.
  */
+import Icon from "./Icon.astro";
 import { RICH_TEXT_PLACEHOLDER } from "./rich-text-copy";
 
 export interface Props {
@@ -45,6 +46,21 @@ const { scope, code, value, label } = Astro.props;
   <div class="head">
     <h2 class="label" id={`rich-${scope}-${code}`}>{label}</h2>
     <p class="small status" data-field="rich-status" role="status"></p>
+    {
+      /* Reading is the default and editing is the deliberate act. Rendered as a
+        permanently open editor, this field wore a form control's border on a
+        page nobody came to fill in, and gave no answer to "is what I typed
+        kept?" — the box looked the same either way. */
+    }
+    <button
+      class="btn btn-ghost edit"
+      type="button"
+      data-action="toggle-edit"
+      hidden
+    >
+      <Icon name="pencil" size={16} />
+      <span data-field="edit-label">Editar</span>
+    </button>
   </div>
 
   {
@@ -57,6 +73,12 @@ const { scope, code, value, label } = Astro.props;
     {RICH_TEXT_PLACEHOLDER}
   </p>
 
+  {
+    /* Read mode renders; edit mode shows the Markdown that produced it.
+      Editing the rendering would hide the very syntax being written — an
+      operator typing `##` needs to see `##`, not watch it vanish into a size
+      change. So the two are different surfaces over one value. */
+  }
   <div
     class="surface"
     data-rich-surface
@@ -64,6 +86,14 @@ const { scope, code, value, label } = Astro.props;
     hidden
   >
   </div>
+
+  <textarea
+    class="input source"
+    data-rich-source
+    aria-labelledby={`rich-${scope}-${code}`}
+    spellcheck="false"
+    hidden>{value}</textarea
+  >
 
   {
     /* The `/` menu. Items are built at runtime from the command list, so a
@@ -130,26 +160,66 @@ const { scope, code, value, label } = Astro.props;
 
   .fallback[hidden],
   .surface[hidden],
+  .source[hidden],
   .empty[hidden] {
     display: none;
+  }
+
+  .source {
+    min-height: 180px;
+    height: auto;
+    padding: var(--space-3);
+    font-family: var(--font-mono);
+    font-size: var(--text-small-size);
+    line-height: 1.6;
+    resize: vertical;
+    white-space: pre-wrap;
   }
 
   .empty {
     color: var(--tinta-suave);
   }
 
+  .edit {
+    margin-left: auto;
+    gap: var(--space-2);
+  }
+
+  .edit[hidden] {
+    display: none;
+  }
+
+  /*
+   * Read mode is the page's own prose: no border, no box, nothing that invites
+   * a click it will not answer. Edit mode puts the control chrome back, which is
+   * what tells the operator the field is now theirs.
+   */
   .surface :global(.ProseMirror) {
-    min-height: 120px;
-    padding: var(--space-3);
-    border: var(--border-width) solid var(--hairline);
+    min-height: 0;
+    padding: 0;
+    border: var(--border-width) solid transparent;
     border-radius: var(--radius-control);
     outline: none;
     transition: border-color var(--motion-micro-duration)
       var(--motion-micro-ease);
   }
 
-  .surface :global(.ProseMirror:focus) {
-    border-color: var(--cobalto);
+  /* The shorthand, not `border-color`: the read-mode rule above sets `border`
+     whole, and a longhand can only win if it also wins the cascade order — which
+     it did not, leaving edit mode with a transparent edge and no visible box. */
+  .rich[data-mode="edit"] .surface :global(.ProseMirror) {
+    min-height: 120px;
+    padding: var(--space-3);
+    border: var(--border-width) solid var(--hairline);
+  }
+
+  .rich[data-mode="edit"] .surface :global(.ProseMirror:focus) {
+    border: var(--border-width) solid var(--cobalto);
+  }
+
+  /* In read mode the prose itself is the affordance, so it says so on hover. */
+  .rich[data-mode="read"] .surface {
+    cursor: text;
   }
 
   .surface :global(.ProseMirror > * + *) {
@@ -163,16 +233,19 @@ const { scope, code, value, label } = Astro.props;
     line-height: 1.25;
   }
 
+  /* A scale that actually descends. `h3` was set to the body size, so `### x`
+     converted correctly and then rendered indistinguishable from a paragraph —
+     which reads as "markdown did nothing", or worse, as text being eaten. */
   .surface :global(h1) {
-    font-size: var(--text-h2-size);
+    font-size: var(--text-h1-size);
   }
 
   .surface :global(h2) {
-    font-size: var(--text-h3-size);
+    font-size: var(--text-h2-size);
   }
 
   .surface :global(h3) {
-    font-size: var(--text-body-size);
+    font-size: var(--text-title-size);
   }
 
   .surface :global(ul),
