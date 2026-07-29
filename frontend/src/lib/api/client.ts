@@ -23,6 +23,7 @@ import {
   type StoredSession,
 } from "../auth/tokens";
 import { errorFromNetwork, errorFromResponse, type ApiError } from "./errors";
+import type { components } from "./types";
 import type {
   AccessGrant,
   ActivityPage,
@@ -34,6 +35,7 @@ import type {
   RefreshIn,
   NoteView,
   OverrideResult,
+  PortfolioActivityQuery,
   PriorityOverrideIn,
   ProjectDetail,
   ProjectTransitionIn,
@@ -46,6 +48,7 @@ import type {
   TaskTransitionIn,
   TeamLoad,
   TeamLoadQuery,
+  WorkflowCatalog,
   TimelineQuery,
   TokenPair,
 } from "./domain";
@@ -56,6 +59,15 @@ import type {
  * Callers narrow with `if (!result.ok)`; there is no third "threw" path to handle.
  */
 export type Result<T> = { ok: true; data: T } | { ok: false; error: ApiError };
+
+/**
+ * Body of `PATCH /api/v1/projects/{code}`, read straight off the generated tree.
+ *
+ * Absent and `null` are different instructions: an omitted key leaves the column alone, an
+ * explicit `null` clears a nullable one. That is why a caller builds this object key by key
+ * and never spreads a form over it — spreading turns "no lo toques" into "bórralo".
+ */
+export type ProjectUpdateIn = components["schemas"]["ProjectUpdateIn"];
 
 /** Query-string values the API accepts; repeatable filters arrive as lists and OR. */
 type QueryValue =
@@ -188,7 +200,8 @@ async function request<T>(
 
   for (let attempt = 0; ; attempt += 1) {
     const headers: Record<string, string> = { Accept: "application/json" };
-    if (options.body !== undefined) headers["Content-Type"] = "application/json";
+    if (options.body !== undefined)
+      headers["Content-Type"] = "application/json";
     if (options.skipAuth !== true) {
       const access = await ensureFreshAccess();
       if (access !== null) headers["Authorization"] = `Bearer ${access}`;
@@ -215,11 +228,7 @@ async function request<T>(
     // One retry behind a forced refresh: the freshness check and the server's
     // clock can disagree by the width of a request, so a 401 on a token we
     // believed fresh means "refresh and present again", exactly once.
-    if (
-      response.status === 401 &&
-      options.skipAuth !== true &&
-      attempt === 0
-    ) {
+    if (response.status === 401 && options.skipAuth !== true && attempt === 0) {
       const session = loadSession();
       if (session !== null) {
         saveSession({ ...session, expiresAt: 0 });
@@ -275,7 +284,9 @@ function segment(value: string): string {
  * here is `invalid_credentials` — one answer for unknown user, wrong password
  * and inactive account, so the login form cannot enumerate accounts.
  */
-export async function postToken(body: CredentialsIn): Promise<Result<TokenPair>> {
+export async function postToken(
+  body: CredentialsIn,
+): Promise<Result<TokenPair>> {
   return request<TokenPair>("/api/v1/auth/token", {
     method: "POST",
     body,
@@ -366,6 +377,28 @@ export async function getProjectActivity(
 }
 
 /**
+ * Reads one page of the whole portfolio's trail (`GET /api/v1/activity`).
+ *
+ * Same item type as a project timeline and the same order — newest first, with no
+ * `order_by` — so one component renders both. `count` is the total matching the
+ * facets, which is what the caller derives its page numbers from: the response
+ * carries no next/prev links because paging belongs in the URL beside the filters
+ * (`backend/apps/shared/pagination.py`).
+ *
+ * No facet is validated against its vocabulary: a `verb`, `origin`, `entity_type`
+ * or `actor` this deployment does not know returns an empty page, never a 422, so
+ * a bookmarked filter cannot break a read-only screen.
+ */
+export async function getPortfolioActivity(
+  query?: PortfolioActivityQuery,
+): Promise<Result<ActivityPage>> {
+  return request<ActivityPage>("/api/v1/activity", {
+    method: "GET",
+    query: { ...query },
+  });
+}
+
+/**
  * Reads the whole roster's load (`GET /api/v1/team/load`).
  *
  * Not paginated: the roster is five people. `is_overloaded` raises a risk flag on the
@@ -377,6 +410,43 @@ export async function getTeamLoad(
   return request<TeamLoad>("/api/v1/team/load", {
     method: "GET",
     query: { ...query },
+  });
+}
+
+/**
+ * Reads the shape of every configured workflow (`GET /api/v1/workflows`).
+ *
+ * This is what lets a board draw a column for a state nobody currently occupies:
+ * without it, columns can only be derived from the states projects happen to sit
+ * in, so an empty "Bloqueado" has no column — which means the board cannot say
+ * nothing is blocked, and a card has nowhere to be dropped.
+ *
+ * It carries no transitions, deliberately. Legality still comes from a project's
+ * own `transitions`; this answers "which states exist, in which order", never
+ * "which move is allowed" (`docs/API.md` §2.18).
+ */
+export async function getWorkflows(): Promise<Result<WorkflowCatalog>> {
+  return request<WorkflowCatalog>("/api/v1/workflows", { method: "GET" });
+}
+
+/**
+ * Applies a partial edit to a project (`PATCH /api/v1/projects/{code}`).
+ *
+ * `workflow_state` is not a field of this payload under any name — a state moves through
+ * {@link postProjectTransition} so it is validated against `WorkflowTransition` — and an
+ * edit that changes nothing is accepted without writing an event.
+ *
+ * The response is the project **re-read after the write**, so the risk flags computed on
+ * read (`docs/adr/0011`) already reflect the edit: filling `next_step` returns the project
+ * without its `NO_NEXT_STEP` flag, and no second GET is needed to see that.
+ */
+export async function patchProject(
+  code: string,
+  body: ProjectUpdateIn,
+): Promise<Result<ProjectDetail>> {
+  return request<ProjectDetail>(`/api/v1/projects/${segment(code)}`, {
+    method: "PATCH",
+    body,
   });
 }
 

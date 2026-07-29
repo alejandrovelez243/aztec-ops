@@ -1,0 +1,247 @@
+---
+/**
+ * The feed's facets, as a plain `GET` form.
+ *
+ * A form and not a JavaScript filter bar on purpose: the state it edits *is* the
+ * URL, so submitting it navigates and the resulting feed is a link somebody can
+ * paste into a thread and reopen next week. That also makes every filter work
+ * with no client runtime at all, which is why this component ships none.
+ *
+ * `page` is deliberately absent from the form: changing a facet starts a new
+ * reading, and carrying page 7 into it would show an empty page and call it an
+ * empty result. `correlation_id` is carried as a hidden field instead, so a
+ * reader who narrowed to one decision does not lose it by touching another
+ * control — dropping it is an explicit action, offered beside the feed.
+ */
+import {
+  entityTypeOptions,
+  originOptions,
+  verbOptions,
+  type VocabularyOption,
+} from "../../lib/activity/vocabulary";
+import type { ActivityFilters } from "../../lib/activity/filters";
+import Icon from "../ui/Icon.astro";
+import { FILTER_COPY, filterSummaryText } from "./copy";
+
+export interface Props {
+  /** The reading currently on screen; every control renders its own value. */
+  filters: ActivityFilters;
+  /**
+   * Who can be filtered on, from the roster the app already fetched. An actor
+   * present in the URL but absent from the roster is added by the page, so a
+   * saved link keeps showing what it is filtering by.
+   */
+  actors: readonly VocabularyOption[];
+  /** Facets currently narrowing the feed; drives the summary and "Limpiar". */
+  activeCount: number;
+}
+
+const { filters, actors, activeCount } = Astro.props;
+
+const summary = filterSummaryText(activeCount);
+const entityTypes = entityTypeOptions();
+const origins = originOptions();
+const verbs = verbOptions();
+---
+
+<form class="card filters" method="get" action="/activity">
+  <div class="row">
+    <label class="field">
+      <span class="label">{FILTER_COPY.entityType}</span>
+      <select class="input" name="entity_type">
+        <option value="" selected={filters.entityType === null}>
+          {FILTER_COPY.any}
+        </option>
+        {
+          entityTypes.map((option) => (
+            <option
+              value={option.value}
+              selected={filters.entityType === option.value}
+            >
+              {option.label}
+            </option>
+          ))
+        }
+      </select>
+    </label>
+
+    <label class="field">
+      <span class="label">{FILTER_COPY.entityId}</span>
+      <input
+        class="input"
+        type="text"
+        name="entity_id"
+        value={filters.entityId ?? ""}
+        placeholder={FILTER_COPY.entityIdPlaceholder}
+        autocomplete="off"
+      />
+    </label>
+
+    <label class="field">
+      <span class="label">{FILTER_COPY.origin}</span>
+      <select class="input" name="origin">
+        <option value="" selected={filters.origin === null}>
+          {FILTER_COPY.any}
+        </option>
+        {
+          origins.map((option) => (
+            <option
+              value={option.value}
+              selected={filters.origin === option.value}
+            >
+              {option.label}
+            </option>
+          ))
+        }
+      </select>
+    </label>
+
+    <label class="field">
+      <span class="label">{FILTER_COPY.actor}</span>
+      <select class="input" name="actor">
+        <option value="" selected={filters.actor === null}>
+          {FILTER_COPY.any}
+        </option>
+        {
+          actors.map((option) => (
+            <option
+              value={option.value}
+              selected={filters.actor === option.value}
+            >
+              {option.label}
+            </option>
+          ))
+        }
+      </select>
+    </label>
+
+    <label class="field">
+      <span class="label">{FILTER_COPY.since}</span>
+      <input
+        class="input"
+        type="date"
+        name="since"
+        value={filters.since ?? ""}
+      />
+    </label>
+
+    <label class="field">
+      <span class="label">{FILTER_COPY.until}</span>
+      <input
+        class="input"
+        type="date"
+        name="until"
+        value={filters.until ?? ""}
+      />
+    </label>
+  </div>
+
+  <fieldset class="verbs">
+    <legend class="label">{FILTER_COPY.verb}</legend>
+    {
+      verbs.map((option) => (
+        <label class="verb">
+          <input
+            type="checkbox"
+            name="verb"
+            value={option.value}
+            checked={filters.verbs.includes(option.value)}
+          />
+          <span class="small">{option.label}</span>
+        </label>
+      ))
+    }
+  </fieldset>
+
+  {
+    filters.correlationId !== null && (
+      <input
+        type="hidden"
+        name="correlation_id"
+        value={filters.correlationId}
+      />
+    )
+  }
+
+  <div class="actions">
+    <button class="btn btn-primary" type="submit">
+      <Icon name="search" size={18} />
+      {FILTER_COPY.apply}
+    </button>
+    {
+      activeCount > 0 && (
+        <a class="btn btn-ghost" href="/activity">
+          <Icon name="close" size={18} />
+          {FILTER_COPY.clear}
+        </a>
+      )
+    }
+    {summary !== "" && <span class="small summary">{summary}</span>}
+  </div>
+</form>
+
+<style>
+  .filters {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    padding: var(--space-4);
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: var(--space-3);
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .verbs {
+    border: 0;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .verbs legend {
+    padding: 0;
+    margin-bottom: var(--space-2);
+  }
+
+  .verb {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: var(--space-1) var(--space-2);
+    border-radius: var(--radius-chip);
+    background-color: var(--pozo);
+    cursor: pointer;
+  }
+
+  .verb:hover {
+    background-color: var(--cobalto-papel);
+  }
+
+  .verb input {
+    accent-color: var(--cobalto);
+  }
+
+  .actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  .summary {
+    margin-left: auto;
+  }
+</style>

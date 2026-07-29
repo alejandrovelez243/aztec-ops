@@ -26,8 +26,10 @@ const { flags } = Astro.props;
 <div class="risks" data-risk-list>
   <h2 class="label">Riesgos</h2>
 
-  {/* Both arms always render, so the island can flip between them when a
-      transition raises or clears a flag. */}
+  {
+    /* Both arms always render, so the island can flip between them when a
+      transition raises or clears a flag. */
+  }
   <p class="chip tone-verde none" data-risk-none hidden={flags.length > 0}>
     Sin riesgos detectados
   </p>
@@ -39,7 +41,7 @@ const { flags } = Astro.props;
           <span class="dot" aria-hidden="true" />
           <div class="body">
             <p class="title" data-field="risk-name">
-              {riskLabel(flag.code)}
+              {riskLabel(flag)}
             </p>
             <p class="small reason" lang="en" data-field="risk-reason">
               {flag.reason}
@@ -50,8 +52,10 @@ const { flags } = Astro.props;
     }
   </ul>
 
-  {/* Cloned by the island when a re-read brings a flag that was not raised at
-      first paint; the markup therefore has one home. */}
+  {
+    /* Cloned by the island when a re-read brings a flag that was not raised at
+      first paint; the markup therefore has one home. */
+  }
   <template data-template="risk">
     <li class="risk tone-piedra">
       <span class="dot" aria-hidden="true"></span>

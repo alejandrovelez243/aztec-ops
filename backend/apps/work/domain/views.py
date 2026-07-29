@@ -8,6 +8,13 @@ is ``due_date < today`` evaluated against server time, not the source spreadshee
 column, which was already stale the day it was exported. ``Blocker.age_days`` is measured from
 ``raised_at`` against the same instant, so two blockers rendered in one response cannot be aged
 against two different clocks.
+
+:class:`TaskDetailView` composes :class:`~apps.workflow.domain.views.TransitionOption`, owned by
+the workflow context. That is an import between pure, Django-free ``domain/`` modules and nothing
+more — a published-language dependency, exactly the one
+:class:`~apps.portfolio.domain.views.ProjectDetailView` already takes (ARCHITECTURE §7). Restating
+the option's three fields here would be a second spelling of the same contract, and the two would
+drift the first time an edge grew a field.
 """
 
 from datetime import date, datetime
@@ -15,6 +22,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.shared.refs import ActorRef, StateRef, TaxonomyRef
+from apps.workflow.domain.views import TransitionOption
 
 
 class DependencyRef(BaseModel):
@@ -98,3 +106,65 @@ class NoteView(BaseModel):
     author: str
     created_at: datetime
     task_code: str | None = None
+
+
+class TaskProjectRef(BaseModel):
+    """The project a task belongs to, as the task detail names it.
+
+    Two fields and no more: ``code`` is what every other route is addressed by and ``name`` is what
+    a header renders. Not a :class:`~apps.shared.refs.TaxonomyRef` — a project is an aggregate, not
+    an operator-editable catalog row, and giving it a ``color`` would invite a client to paint a
+    swatch for something the taxonomy does not own.
+
+    Deliberately not the whole :class:`~apps.portfolio.domain.views.ProjectDetailView`: a task
+    detail that embedded its project would carry that project's tasks, and therefore itself.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+    name: str
+
+
+class TaskDetailView(BaseModel):
+    """One task in full, as ``GET /api/v1/tasks/{code}`` returns it.
+
+    The screen-shaped read: everything the task detail draws itself from arrives in one response.
+    ``notes`` is inside rather than behind a second route for the reason the catalog read already
+    states — a surface that needs two requests to render is two chances to render half a page, and
+    the second request is the one that fails while the first has already painted. It is also the
+    only shape in which the notes are guaranteed to describe *this* version of the task: two reads
+    can straddle a write, and a comment rendered beside a state it does not refer to is worse than
+    a slow page. A task carries a handful of comments, so the join costs nothing that would justify
+    splitting it. Should a task ever carry hundreds, the fix is a paginated
+    ``/tasks/{code}/notes`` *beside* this field, not instead of it — the first screenful must not
+    become a second round trip.
+
+    ``transitions`` is the **only** source of state buttons on this screen, and it comes from the
+    same place the project detail's does: ``WorkflowTransition``, filtered to the active edges
+    leaving the task's current state. The frontend holds no list of task state codes and never
+    guesses legality, so adding a task state is a fixture row and zero frontend changes. An empty
+    tuple is a legitimate answer — the task sits in a terminal state — and the UI renders no
+    buttons rather than inventing one.
+
+    ``is_overdue`` is derived from ``due_date`` against the instant the request was served, never
+    read from a column, for the same reason it is on :class:`TaskView`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+    title: str
+    detail: str = ""
+    project: TaskProjectRef
+    assignee: ActorRef | None = None
+    priority: TaxonomyRef
+    state: StateRef
+    due_date: date | None = None
+    is_overdue: bool = False
+    last_progress: str = ""
+    dependencies: tuple[DependencyRef, ...] = ()
+    transitions: tuple[TransitionOption, ...] = ()
+    notes: tuple[NoteView, ...] = ()
+    created_at: datetime
+    updated_at: datetime

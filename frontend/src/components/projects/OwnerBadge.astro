@@ -26,7 +26,11 @@ const isOwned = alias !== null && label !== null;
 {
   isOwned ? (
     <span class="owner" title={label ?? undefined}>
-      <span class="avatar" style={`--avatar-h: ${avatarHue(alias ?? "")}`} aria-hidden="true">
+      <span
+        class="avatar"
+        style={`--avatar-h: ${avatarHue(alias ?? "")}`}
+        aria-hidden="true"
+      >
         {initials(label ?? "")}
       </span>
       {!compact && <span class="owner-name small">{label}</span>}

@@ -248,6 +248,69 @@ class SnapshotQueueFilters(BaseModel):
     offset: int = Field(default=0, ge=0)
 
 
+#: Which half of the roster a read is about. A three-valued enumeration rather than the boolean
+#: ``include_inactive`` it replaces, because that flag could not express "show me only the people
+#: we have retired" — the question an operator asks before restoring somebody — and a second
+#: boolean beside it would make ``include_inactive=False, only_inactive=True`` representable and
+#: meaningless (CLAUDE.md rule 13).
+RosterStatus = Literal["active", "inactive", "all"]
+
+#: The default: retired people are history, not a staffing constraint, so they are out unless asked
+#: for by name.
+DEFAULT_ROSTER_STATUS: RosterStatus = "active"
+
+#: The signed field names ``GET /api/v1/team/load`` accepts, mapped to the
+#: :class:`~apps.portfolio.domain.views.TeamLoadView` attribute each one sorts.
+#:
+#: An allowlist for the same reason the queue has one, minus the injection half: this ordering is
+#: applied in Python, because half these fields — every count, and ``utilization`` itself — are
+#: derived after the query rather than stored in a column the database could sort. Sorting a roster
+#: of a few dozen rows in memory costs nothing; storing the counts so the database could sort them
+#: would reintroduce the stale projection the source ``Team`` sheet already is.
+ROSTER_ORDERING: dict[str, str] = {
+    "label": "label",
+    "role": "role",
+    "utilization": "utilization",
+    "load_points": "load_points",
+    "capacity": "weekly_capacity_points",
+    "open_tasks": "open_tasks",
+    "overdue_tasks": "overdue_tasks",
+    "blocked_tasks": "blocked_tasks",
+    "projects_owned": "projects_owned",
+}
+
+#: The order applied when the caller names none. The roster is read to find who is drowning, so it
+#: opens on the most loaded person rather than on the alphabet.
+DEFAULT_ROSTER_ORDERING = "-utilization"
+
+
+class RosterFilters(BaseModel):
+    """The facets and ordering of one roster read.
+
+    Bundled rather than passed as six keyword arguments, for the same reason
+    :class:`SnapshotQueueFilters` is: the read gains facets as the screen does, and a value object
+    absorbs that without every caller's signature changing.
+
+    Unset means "do not filter". ``overloaded`` is tri-state on purpose — ``None`` is everybody,
+    ``True`` is the people over capacity, ``False`` is the people with room — because a plain
+    boolean could not express the third question, and "who has room to take this?" is the reason
+    somebody opens the roster while assigning work.
+
+    Not paginated, deliberately. A pager over a roster costs the client a second request to learn
+    there is no second page, and this is one of the few reads in the product whose result set is
+    bounded by how many people the company employs.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    owner_codes: tuple[str, ...] = ()
+    role_codes: tuple[str, ...] = ()
+    status: RosterStatus = DEFAULT_ROSTER_STATUS
+    overloaded: bool | None = None
+    search: str = ""
+    order_by: str = DEFAULT_ROSTER_ORDERING
+
+
 class ProjectSnapshotValues(BaseModel):
     """The full projection written into one ``ProjectSnapshot`` row.
 

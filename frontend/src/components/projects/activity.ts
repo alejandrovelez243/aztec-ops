@@ -53,7 +53,9 @@ export function mountActivity(root: HTMLElement): () => void {
     (event) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
-      const button = target.closest<HTMLButtonElement>("[data-action='load-more']");
+      const button = target.closest<HTMLButtonElement>(
+        "[data-action='load-more']",
+      );
       if (button === null) return;
       void loadMore(root, code, button);
     },
@@ -124,7 +126,10 @@ async function loadMore(
  */
 async function catchUp(root: HTMLElement, code: string): Promise<void> {
   const pageSize = Number(root.dataset.pageSize) || 20;
-  const result = await getProjectActivity(code, { page: 1, page_size: pageSize });
+  const result = await getProjectActivity(code, {
+    page: 1,
+    page_size: pageSize,
+  });
   if (!result.ok) return;
 
   const list = root.querySelector<HTMLElement>("[data-activity-list]");
@@ -139,7 +144,9 @@ async function catchUp(root: HTMLElement, code: string): Promise<void> {
   }
 
   root.dataset.count = String(result.data.count);
-  const button = root.querySelector<HTMLButtonElement>("[data-action='load-more']");
+  const button = root.querySelector<HTMLButtonElement>(
+    "[data-action='load-more']",
+  );
   updateFooter(root, button);
 
   const empty = root.querySelector<HTMLElement>("[data-activity-empty]");
@@ -157,7 +164,10 @@ function newestRenderedId(list: HTMLElement): number {
 }
 
 /** Clones one timeline row from the component's template. */
-function buildEntry(root: HTMLElement, entry: ActivityEntry): HTMLElement | null {
+function buildEntry(
+  root: HTMLElement,
+  entry: ActivityEntry,
+): HTMLElement | null {
   const item = cloneTemplate(root, "activity");
   if (item === null) return null;
 
@@ -166,13 +176,17 @@ function buildEntry(root: HTMLElement, entry: ActivityEntry): HTMLElement | null
   setField(item, "activity-actor", entry.actor);
 
   const change = activityChange(entry);
-  const changeLine = item.querySelector<HTMLElement>("[data-field='activity-change']");
+  const changeLine = item.querySelector<HTMLElement>(
+    "[data-field='activity-change']",
+  );
   if (changeLine !== null) {
     changeLine.hidden = change === "";
     changeLine.textContent = change;
   }
 
-  const reasonLine = item.querySelector<HTMLElement>("[data-field='activity-reason']");
+  const reasonLine = item.querySelector<HTMLElement>(
+    "[data-field='activity-reason']",
+  );
   if (reasonLine !== null) {
     reasonLine.hidden = entry.reason === "";
     reasonLine.textContent = entry.reason;
@@ -189,7 +203,10 @@ function buildEntry(root: HTMLElement, entry: ActivityEntry): HTMLElement | null
 }
 
 /** Keeps the counter and the "Cargar más" control honest about what is left. */
-function updateFooter(root: HTMLElement, button: HTMLButtonElement | null): void {
+function updateFooter(
+  root: HTMLElement,
+  button: HTMLButtonElement | null,
+): void {
   const list = root.querySelector<HTMLElement>("[data-activity-list]");
   const shown = list?.querySelectorAll("[data-activity]").length ?? 0;
   const total = Number(root.dataset.count) || shown;
@@ -197,4 +214,8 @@ function updateFooter(root: HTMLElement, button: HTMLButtonElement | null): void
   setField(root, "activity-shown", String(shown));
   setField(root, "activity-total", String(total));
   if (button !== null) button.hidden = shown >= total;
+
+  // The tab badge counts the whole trail, not the rows currently rendered.
+  const tabs = document.querySelector<HTMLElement>("[data-tabs]");
+  if (tabs !== null) setField(tabs, "activity-count", String(total));
 }

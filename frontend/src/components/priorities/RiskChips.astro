@@ -35,7 +35,7 @@ const ordered = [...flags].sort(
       {ordered.map((flag) => (
         <li class:list={["risk", toneForSeverity(flag.severity)]}>
           <span class="chip chip-code" lang="en">
-            {flag.code}
+            {flag.label}
           </span>
           <span class="small reason" lang="en">
             {flag.reason}

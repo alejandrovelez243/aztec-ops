@@ -143,6 +143,10 @@ class SignalResult(BaseModel):
     strategy's arithmetic can saturate without every author remembering to bound it. ``reason``
     is mandatory and non-empty: it is what the UI shows to defend a rank, so a score without a
     reason is a bug, and validation is where that is cheapest to catch.
+
+    Every ``reason`` a strategy produces is **Spanish on purpose** (PRODUCT.md): it is copy the
+    operation reads, the same exception CLAUDE.md §Language grants the user-facing labels stored in
+    the database. Identifiers, class names, docstrings, comments and tests stay English.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -156,7 +160,7 @@ class SignalResult(BaseModel):
 
         Args:
             score: Raw normalized value; values outside ``[0, 1]`` are clamped, not rejected.
-            reason: Human-readable English sentence naming the fact that produced the score.
+            reason: Human-readable Spanish sentence naming the fact that produced the score.
 
         Returns:
             A frozen result whose score is inside the signal range.
@@ -171,12 +175,17 @@ class RiskFlag(BaseModel):
     resolved, so there is no row that can be wrong about it. ``severity`` comes from the registry
     entry, so re-classifying a risk is a code change reviewed once rather than a data edit that
     leaves old rows disagreeing with new ones.
+
+    ``label`` is mandatory and non-empty, and it is Spanish (PRODUCT.md): a flag with no label is a
+    chip the interface can only render as a raw code, so the invariant is enforced where it is
+    cheapest to catch rather than discovered in the browser.
     """
 
     model_config = ConfigDict(frozen=True)
 
     code: str
     severity: Severity
+    label: str = Field(min_length=1)
     detail: str = ""
 
     def to_view(self) -> RiskFlagView:
@@ -187,7 +196,12 @@ class RiskFlag(BaseModel):
         flag. Defined once, here, so the queue row, the project detail and the recompute report
         cannot each rename it slightly differently.
         """
-        return RiskFlagView(code=self.code, severity=self.severity.value, reason=self.detail)
+        return RiskFlagView(
+            code=self.code,
+            severity=self.severity.value,
+            label=self.label,
+            reason=self.detail,
+        )
 
 
 class SignalContribution(BaseModel):
@@ -195,11 +209,20 @@ class SignalContribution(BaseModel):
 
     Holds the invariant ``contribution == round(raw * weight * 100, 2)``: the number and its
     justification are built together, so they cannot drift apart on the way to the database.
+
+    ``label`` is copied from the strategy and **stored** with the line rather than resolved from the
+    registry when the document is read. That deliberately freezes the wording of the day into
+    history, which is what an audit artifact wants: ``reason`` beside it already states facts that
+    were only true at ``computed_at``, so a caption re-resolved today would head those sentences
+    with whatever the signal is called now — or with nothing at all, once a signal is retired and
+    its code no longer resolves. Rows written before the field existed are the one exception, healed
+    on read by :class:`apps.prioritization.domain.views.ScoreSignalView`.
     """
 
     model_config = ConfigDict(frozen=True)
 
     code: str
+    label: str = Field(min_length=1)
     raw: float = Field(ge=0.0, le=1.0)
     weight: Decimal
     contribution: Decimal
@@ -257,6 +280,7 @@ class ScoreBreakdown(BaseModel):
             "signals": [
                 {
                     "code": signal.code,
+                    "label": signal.label,
                     "raw": signal.raw,
                     "weight": float(signal.weight),
                     "contribution": float(signal.contribution),

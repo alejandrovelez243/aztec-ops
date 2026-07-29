@@ -12,9 +12,17 @@
  * which renders as the 11th anywhere west of Greenwich — a deadline off by one
  * day. Calendar dates are therefore parsed field by field into local midnight,
  * and only instants (`...Z`) go through the native parser.
+ *
+ * Instant formatting itself now lives in `lib/format/time.ts`, shared with the
+ * portfolio-wide activity feed, and is re-exported here so every existing call
+ * site keeps its import. Two copies of "hace 3 días" would eventually disagree
+ * about the same record.
  */
 
+import { formatInstant, relativeTime } from "../../lib/format/time";
 import type { ToneClass } from "./tone";
+
+export { formatInstant, relativeTime };
 
 const DAY_MS = 86_400_000;
 
@@ -27,23 +35,13 @@ const dayFormat = new Intl.DateTimeFormat("es", {
   year: "numeric",
 });
 
-const instantFormat = new Intl.DateTimeFormat("es", {
-  day: "numeric",
-  month: "short",
-  year: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-});
-
-const relativeFormat = new Intl.RelativeTimeFormat("es", { numeric: "auto" });
-
 /**
  * Parses a calendar date (or the date part of an instant) into local midnight.
  *
  * @returns `null` for absent or unparseable input — absence is a signal the
  *   caller must render, never a silent "today".
  */
-export function parseDay(value: string | null | undefined): Date | null {
+function parseDay(value: string | null | undefined): Date | null {
   if (value === null || value === undefined || value === "") return null;
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
   if (match === null) return null;
@@ -54,63 +52,14 @@ export function parseDay(value: string | null | undefined): Date | null {
   return new Date(Number(year), Number(month) - 1, Number(day));
 }
 
-/** Parses an ISO instant; `null` when absent or unparseable. */
-export function parseInstant(value: string | null | undefined): Date | null {
-  if (value === null || value === undefined || value === "") return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-/** A calendar date as "12 ago 2026", or `null` when there is no date. */
-export function formatDay(value: string | null | undefined): string | null {
-  const parsed = parseDay(value);
-  return parsed === null ? null : dayFormat.format(parsed);
-}
-
-/** An instant as "28 jul 2026, 09:05" — the `title` behind every relative time. */
-export function formatInstant(value: string | null | undefined): string | null {
-  const parsed = parseInstant(value);
-  return parsed === null ? null : instantFormat.format(parsed);
-}
-
 /**
  * Whole days between two instants, counted on local calendar midnights so
  * "vence mañana" does not become "vence en 0 días" at 23:00.
  */
-export function daysBetween(from: Date, to: Date): number {
+function daysBetween(from: Date, to: Date): number {
   const a = new Date(from.getFullYear(), from.getMonth(), from.getDate());
   const b = new Date(to.getFullYear(), to.getMonth(), to.getDate());
   return Math.round((b.getTime() - a.getTime()) / DAY_MS);
-}
-
-/**
- * A past instant as "hace 5 minutos" / "hace 3 días".
- *
- * Future instants read "en 2 días" — the same formatter, because an activity
- * record with a clock skew must not silently render as the past.
- */
-export function relativeTime(
-  value: string | null | undefined,
-  now: Date = new Date(),
-): string | null {
-  const parsed = parseInstant(value);
-  if (parsed === null) return null;
-  const seconds = (parsed.getTime() - now.getTime()) / 1000;
-  const magnitude = Math.abs(seconds);
-  if (magnitude < 60) return relativeFormat.format(Math.round(seconds), "second");
-  if (magnitude < 3600) {
-    return relativeFormat.format(Math.round(seconds / 60), "minute");
-  }
-  if (magnitude < 86_400) {
-    return relativeFormat.format(Math.round(seconds / 3600), "hour");
-  }
-  if (magnitude < 2_592_000) {
-    return relativeFormat.format(Math.round(seconds / 86_400), "day");
-  }
-  if (magnitude < 31_536_000) {
-    return relativeFormat.format(Math.round(seconds / 2_592_000), "month");
-  }
-  return relativeFormat.format(Math.round(seconds / 31_536_000), "year");
 }
 
 /**
@@ -123,7 +72,11 @@ export function relativeTime(
  * (Present-Absence Rule), not a blank cell.
  */
 export type DueState =
-  | { readonly kind: "absent"; readonly label: string; readonly tone: ToneClass }
+  | {
+      readonly kind: "absent";
+      readonly label: string;
+      readonly tone: ToneClass;
+    }
   | {
       readonly kind: "overdue";
       readonly label: string;

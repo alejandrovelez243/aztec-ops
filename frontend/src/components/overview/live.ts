@@ -152,7 +152,10 @@ export function unmount(): void {
 /** Runs reshuffles one after another; a thrown handler never stalls the queue. */
 function enqueue(work: () => Promise<void>): void {
   pending = pending.then(work).catch((error: unknown) => {
-    console.error("aztec resumen: a live update failed and was isolated", error);
+    console.error(
+      "aztec resumen: a live update failed and was isolated",
+      error,
+    );
   });
 }
 
@@ -214,8 +217,7 @@ async function runRetry(
   await shake(button);
   toast({
     kind: "error",
-    title:
-      region === "queue" ? QUEUE_COPY.errorTitle : TEAM_COPY.errorTitle,
+    title: region === "queue" ? QUEUE_COPY.errorTitle : TEAM_COPY.errorTitle,
     detail: failureText(error.code),
   });
 }
@@ -237,15 +239,11 @@ async function refresh(
   region: RegionKey,
   options: RefreshOptions,
 ): Promise<ApiError | null> {
-  const host = root.querySelector<HTMLElement>(
-    `[data-ov-region="${region}"]`,
-  );
+  const host = root.querySelector<HTMLElement>(`[data-ov-region="${region}"]`);
   if (host === null) return null;
 
   const error =
-    region === "queue"
-      ? await refreshQueue(host)
-      : await refreshTeam(host);
+    region === "queue" ? await refreshQueue(host) : await refreshTeam(host);
   if (error !== null && !options.silent) {
     toast({
       kind: "error",
@@ -390,7 +388,8 @@ function reorder(root: HTMLElement): void {
   const cards = [...root.querySelectorAll<HTMLElement>(SELECTOR.card)];
   cards.sort(
     (left, right) =>
-      scoreOf(right) - scoreOf(left) || codeOf(left).localeCompare(codeOf(right)),
+      scoreOf(right) - scoreOf(left) ||
+      codeOf(left).localeCompare(codeOf(right)),
   );
   for (const [index, card] of cards.entries()) {
     const rank = index + 1;

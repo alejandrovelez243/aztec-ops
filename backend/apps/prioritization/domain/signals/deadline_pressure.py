@@ -25,6 +25,9 @@ class DeadlinePressure:
     the horizon returns 0.0.
     """
 
+    # Spanish on purpose: ``label`` and every ``reason`` below are user-facing (CLAUDE.md §Language).
+    label = "Presión de fecha"
+
     def evaluate(self, data: SignalInput) -> SignalResult:
         """Read the deadline pressure of one project.
 
@@ -37,23 +40,23 @@ class DeadlinePressure:
         if data.target_date is None:
             return SignalResult(
                 score=NO_TARGET_DATE_SCORE,
-                reason="No target date is committed, so the deadline cannot be evaluated.",
+                reason="Sin fecha comprometida, la presión de fecha no se puede evaluar.",
             )
 
         days_remaining = (data.target_date - data.now.date()).days
         if days_remaining < 0:
             return SignalResult(
                 score=1.0,
-                reason=f"Target date {data.target_date.isoformat()} is {-days_remaining} day(s) in the past.",
+                reason=f"La fecha objetivo {data.target_date.isoformat()} pasó hace {-days_remaining} día(s).",
             )
         if days_remaining == 0:
             return SignalResult(
                 score=1.0,
-                reason=f"Target date {data.target_date.isoformat()} is today.",
+                reason=f"La fecha objetivo {data.target_date.isoformat()} es hoy.",
             )
 
         score = 1.0 - days_remaining / PRESSURE_HORIZON_DAYS
         return SignalResult.clamped(
             round(score, 4),
-            f"Target date {data.target_date.isoformat()} is {days_remaining} day(s) away.",
+            f"Faltan {days_remaining} día(s) para la fecha objetivo {data.target_date.isoformat()}.",
         )

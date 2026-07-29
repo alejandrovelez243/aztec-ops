@@ -20,7 +20,8 @@
  * ordering, never a list of workflow states — a state added from the admin
  * changes nothing here (CLAUDE.md rule 1).
  */
-import ActivityPending from "../components/overview/ActivityPending.astro";
+import { TEASER_COPY } from "../components/activity/copy";
+import LatestActivity from "../components/overview/LatestActivity.astro";
 import OwnerLoadTeaser from "../components/overview/OwnerLoadTeaser.astro";
 import { PAGE_COPY, QUEUE_COPY, TEAM_COPY } from "../components/overview/copy";
 import {
@@ -30,18 +31,21 @@ import {
 import { QUEUE_PAGE_SIZE } from "../components/overview/model";
 import OverviewLive from "../islands/OverviewLive.astro";
 import Shell from "../layouts/Shell.astro";
-import { getQueue, getTeamLoad } from "../lib/api/client";
+import { ACTIVITY_TEASER_SIZE } from "../lib/activity/filters";
+import { buildProjectIndex, toRows } from "../lib/activity/model";
+import { getPortfolioActivity, getQueue, getTeamLoad } from "../lib/api/client";
 import { toViewState } from "../lib/view-state";
 import "../components/overview/overview.css";
 
 /** One reference instant for the whole render, so two cards cannot straddle midnight. */
 const now = new Date();
 
-// Both reads are independent; serialising them would add a round trip to the
-// first paint for nothing.
-const [queueResult, teamResult] = await Promise.all([
+// The three reads are independent; serialising them would add round trips to
+// the first paint for nothing.
+const [queueResult, teamResult, activityResult] = await Promise.all([
   getQueue({ page_size: QUEUE_PAGE_SIZE }),
   getTeamLoad(),
+  getPortfolioActivity({ page: 1, page_size: ACTIVITY_TEASER_SIZE }),
 ]);
 
 // `"connecting"` is the only honest stream status during a server render: no
@@ -59,6 +63,37 @@ const teamState = toViewState(teamResult, "connecting", {
   emptyMessage: TEAM_COPY.emptyBody,
   lastEventAt: null,
 });
+
+/**
+ * The trail's last movements, already mapped onto rows.
+ *
+ * Project codes resolve to names through the queue this page already read: the
+ * record stores a business code because it outlives the row it describes, and a
+ * denormalized name on the wire would be a second source of truth for it.
+ */
+const activityIndex = buildProjectIndex(
+  queueResult.ok
+    ? queueResult.data.items.map((item) => ({
+        code: item.code,
+        name: item.name,
+      }))
+    : [],
+);
+
+const activityState = toViewState(
+  activityResult.ok
+    ? {
+        ok: true as const,
+        data: toRows(activityResult.data.items, activityIndex, now),
+      }
+    : activityResult,
+  "connecting",
+  {
+    isEmpty: (rows) => rows.length === 0,
+    emptyMessage: TEASER_COPY.emptyBody,
+    lastEventAt: null,
+  },
+);
 
 /**
  * Regions the island must read again from the browser.
@@ -94,7 +129,7 @@ if (teamState.kind === "error") hydrate.push("team");
         />
         <aside class="ov-aside">
           <OwnerLoadTeaser state={teamState} />
-          <ActivityPending />
+          <LatestActivity state={activityState} />
         </aside>
       </div>
     </OverviewLive>

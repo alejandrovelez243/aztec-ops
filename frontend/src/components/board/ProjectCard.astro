@@ -3,37 +3,53 @@ import type { ProjectCardModel } from "./board-model";
 import Icon from "../ui/Icon.astro";
 
 /**
- * One project as a card on the wall: the object a hand picks up.
+ * One project as a card on the rail: the object a hand picks up and drags up or down between
+ * workflow states, and the control that fills the task board beside it.
  *
  * Presentational only — it renders what {@link ProjectCardModel} decided and emits nothing.
- * Every behaviour (grab, "Mover a…", live patching) belongs to `islands/BoardCanvas.astro`,
- * which finds this card through the `data-*` attributes below; they are the component's real
- * contract with the runtime, so renaming one is renaming an API.
+ * Every behaviour (grab, select, "Mover a…", live patching) belongs to
+ * `islands/BoardCanvas.astro`, which finds this card through the `data-*` attributes below;
+ * they are the component's real contract with the runtime, so renaming one is renaming an API.
+ *
+ * **Why a grid row.** The card is selectable, and `aria-selected` is only meaningful on a
+ * handful of roles. `option` would be the obvious one and is wrong here: an option may not
+ * own an interactive descendant, and the "Mover a…" trigger is the mandatory keyboard twin of
+ * the drag (DESIGN.md, Do's) — dropping it to satisfy a role is trading a real capability for
+ * a label. A `grid` explicitly *does* admit widgets inside its cells, and two-dimensional
+ * arrow navigation across columns is exactly what the board offers, so the column's card list
+ * is the grid, this card is a `row`, and its content is the single `gridcell`.
  *
  * Two details carry meaning rather than decoration:
  *
- * - The **state chip** repeats the column it sits in, which looks redundant until a move is
- *   in flight: while pending, the card already sits in the target column and the chip still
+ * - The **state chip** repeats the band it sits in, which looks redundant until a move is
+ *   in flight: while pending, the card already sits in the target band and the chip still
  *   names where the *server* believes it is. The disagreement is the honest picture of an
  *   unconfirmed transition, and the chip snapping is the confirmation.
  * - The **score** carries its breakdown in `title`/`aria-label`. A number with no argument
  *   behind it is forbidden (CLAUDE.md rule 7), so a project the engine has not scored yet
  *   renders an ámbar absence chip instead of a figure.
+ * - The **risk mark** is a count, not a strip of chips: the rail is one column wide and six
+ *   flags would bury the project's name. Every label travels in the accessible description,
+ *   so the fact is folded, never dropped.
+ *
+ * The title is not a link: navigation to the detail is the board header's "Ver proyecto", so
+ * the whole card can be one selection target instead of a card with a hole in it. It keeps its
+ * `transition:name`, which is what morphs it into the detail header on the way there.
  */
 export interface Props {
   /** The card's own view model — never the queue entity (FRONTEND.md §3). */
   card: ProjectCardModel;
-  /** Tone class of the column's state, so the chip matches the wall it hangs on. */
+  /** Tone class of the band's state, so the chip matches the zone it hangs in. */
   stateToneClass: string;
   /** Inline `--tone-solid` when the taxonomy carries its own colour, else `null`. */
   stateToneStyle: string | null;
+  /** Rendered as the selected card, and as the rail's keyboard entry point. */
+  selected?: boolean;
 }
 
-const { card, stateToneClass, stateToneStyle } = Astro.props;
+const { card, stateToneClass, stateToneStyle, selected = false } = Astro.props;
 
 const titleId = `card-title-${card.code}`;
-const blockerLabel =
-  card.openBlockers === 1 ? "1 bloqueo" : `${card.openBlockers} bloqueos`;
 ---
 
 <article
@@ -41,132 +57,173 @@ const blockerLabel =
   data-card
   data-code={card.code}
   data-state-code={card.stateCode}
+  data-owner-alias={card.owner === null ? "" : card.owner.alias}
   data-updated-at={card.updatedAt}
   data-pending="false"
+  role="row"
+  aria-selected={selected ? "true" : "false"}
+  tabindex={selected ? 0 : -1}
   aria-labelledby={titleId}
 >
-  <div class="pcard-top">
-    <span class="chip chip-code">{card.code}</span>
-    <span
-      class:list={["chip", "card-state", stateToneClass]}
-      style={stateToneStyle}
-      data-card-state
-      lang="es"><span data-card-state-text>{card.stateLabel}</span></span
-    >
-    <span class="chip card-pending" data-card-pending hidden lang="es">
-      <span class="pending-spinner" aria-hidden="true"></span>
-      Moviendo…
-    </span>
-  </div>
-
-  <a
-    class="title pcard-title"
-    id={titleId}
-    href={`/projects/${card.code}`}
-    transition:name={`proj-${card.code}`}
-    lang="es">{card.name}</a
-  >
-
-  <p class="small pcard-client" lang="es">{card.clientAlias}</p>
-
-  <div class="pcard-foot">
-    {
-      card.owner === null ? (
-        <span class="chip tone-ambar" lang="es">
-          sin responsable
-        </span>
-      ) : (
-        <span
-          class="avatar pcard-avatar"
-          style={`--avatar-h: ${card.owner.hue}`}
-          title={card.owner.label}
-          aria-label={`Responsable: ${card.owner.label}`}
-          role="img"
-        >
-          {card.owner.initials}
-        </span>
-      )
-    }
-
-    <span
-      class:list={["chip", "card-due", card.due.toneClass]}
-      title={card.due.description}
-      lang="es"
-    >
-      <Icon name="calendar" size={13} />
-      <span class:list={[card.due.isAbsence ? null : "figure"]} aria-hidden="true"
-        >{card.due.text}</span
-      >
-      <span class="visually-hidden">{card.due.description}</span>
-    </span>
-
-    {
-      card.openBlockers > 0 && (
-        <span class="chip tone-rojo" lang="es">
-          {blockerLabel}
-        </span>
-      )
-    }
-
-    {
-      card.manualOverride !== null && (
-        <span
-          class="chip tone-cielo"
-          title={card.manualOverride.description}
-          lang="es"
-        >
-          {card.manualOverride.label}
-          <span class="visually-hidden">{card.manualOverride.description}</span>
-        </span>
-      )
-    }
-
-    <span
-      class="card-score-slot"
-      title={card.score.description}
-      data-card-score-slot
-      lang="es"
-    >
+  <div class="pcard-inner" role="gridcell">
+    <div class="pcard-top">
+      <span class="chip chip-code">{card.code}</span>
       <span
-        class:list={[
-          "card-score",
-          card.score.kind === "computed" ? "figure" : "chip tone-ambar",
-        ]}
-        data-card-score
-        data-score-state={card.score.kind}
-        aria-hidden="true">{card.score.text}</span
+        class:list={["chip", "card-state", stateToneClass]}
+        style={stateToneStyle}
+        data-card-state
+        lang="es"><span data-card-state-text>{card.stateLabel}</span></span
       >
-      <span class="visually-hidden" data-card-score-note
-        >{card.score.description}</span
-      >
-    </span>
+      <span class="chip card-pending" data-card-pending hidden lang="es">
+        <span class="pending-spinner" aria-hidden="true"></span>
+        Moviendo…
+      </span>
+    </div>
 
-    <button
-      type="button"
-      class="btn btn-ghost btn-icon"
-      data-move-trigger
-      aria-haspopup="menu"
-      aria-expanded="false"
-      aria-controls="board-move-menu"
-      aria-label={`Mover ${card.code} a otro estado`}
-      title="Mover a…"
+    <span
+      class="title pcard-title"
+      id={titleId}
+      data-card-title
+      transition:name={`proj-${card.code}`}
+      lang="es">{card.name}</span
     >
-      <Icon name="chevron-down" size={18} />
-    </button>
+
+    <p class="small pcard-client" data-card-client lang="es">
+      {card.clientAlias}
+    </p>
+
+    <div class="pcard-foot">
+      {
+        card.owner === null ? (
+          <span class="chip tone-ambar" data-card-owner lang="es">
+            sin responsable
+          </span>
+        ) : (
+          <span
+            class="avatar pcard-avatar"
+            data-card-owner
+            style={`--avatar-h: ${card.owner.hue}`}
+            title={card.owner.label}
+            aria-label={`Responsable: ${card.owner.label}`}
+            role="img"
+          >
+            {card.owner.initials}
+          </span>
+        )
+      }
+
+      <span
+        class:list={["chip", "card-due", card.due.toneClass]}
+        title={card.due.description}
+        lang="es"
+      >
+        <Icon name="calendar" size={13} />
+        <span
+          class:list={[card.due.isAbsence ? null : "figure"]}
+          aria-hidden="true">{card.due.text}</span
+        >
+        <span class="visually-hidden">{card.due.description}</span>
+      </span>
+
+      {
+        card.risks !== null && (
+          <span
+            class:list={["chip", card.risks.toneClass]}
+            title={card.risks.description}
+            lang="es"
+          >
+            <Icon name="alert" size={13} />
+            <span class="figure" aria-hidden="true">
+              {card.risks.count}
+            </span>
+            <span class="visually-hidden">
+              {card.risks.text}. {card.risks.description}
+            </span>
+          </span>
+        )
+      }
+
+      {
+        card.manualOverride !== null && (
+          <span
+            class="chip tone-cielo"
+            title={card.manualOverride.description}
+            lang="es"
+          >
+            {card.manualOverride.label}
+            <span class="visually-hidden">
+              {card.manualOverride.description}
+            </span>
+          </span>
+        )
+      }
+
+      <span
+        class="card-score-slot"
+        title={card.score.description}
+        data-card-score-slot
+        lang="es"
+      >
+        <span
+          class:list={[
+            "card-score",
+            card.score.kind === "computed" ? "figure" : "chip tone-ambar",
+          ]}
+          data-card-score
+          data-score-state={card.score.kind}
+          aria-hidden="true">{card.score.text}</span
+        >
+        <span class="visually-hidden" data-card-score-note
+          >{card.score.description}</span
+        >
+      </span>
+
+      <button
+        type="button"
+        class="btn btn-ghost btn-icon"
+        data-move-trigger
+        aria-haspopup="menu"
+        aria-expanded="false"
+        aria-controls="board-move-menu"
+        aria-label={`Mover ${card.code} a otro estado`}
+        title="Mover a…"
+      >
+        <Icon name="chevron-down" size={18} />
+      </button>
+    </div>
   </div>
 </article>
 
 <style>
   .pcard {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
     padding: var(--space-3);
     /* The grab affordance; vertical panning stays the browser's so a touch
        scroll over the board still scrolls. */
     touch-action: pan-y;
     cursor: grab;
     position: relative;
+  }
+
+  .pcard-inner {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .pcard[hidden] {
+    display: none;
+  }
+
+  /* Selection is the interface saying "this one" — Cobalto, never a semantic
+     colour (DESIGN.md, One-Voice Rule). A wash plus the 3px marker stripe on the
+     leading edge: the same grammar the bands use, at card scale. */
+  .pcard[aria-selected="true"] {
+    border-color: var(--cobalto);
+    background-color: var(--cobalto-papel);
+    box-shadow:
+      var(--shadow-raised),
+      inset var(--rail-width) 0 0 0 var(--cobalto);
+    padding-left: calc(var(--space-3) + var(--rail-width));
   }
 
   .pcard-top {
@@ -204,12 +261,7 @@ const blockerLabel =
   }
 
   .pcard-title {
-    text-decoration: none;
     color: var(--tinta);
-  }
-
-  .pcard-title:hover {
-    color: var(--cobalto);
   }
 
   .pcard-client {
@@ -279,6 +331,14 @@ const blockerLabel =
       box-shadow:
         var(--shadow-resting),
         0 0 0 0 transparent;
+    }
+  }
+
+  /* Touch: the whole card is already far past 40px, but the move trigger is not. */
+  @media (pointer: coarse) {
+    .pcard-foot :global(.btn-icon) {
+      width: 44px;
+      height: 44px;
     }
   }
 </style>

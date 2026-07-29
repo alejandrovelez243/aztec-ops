@@ -16,11 +16,7 @@
 
 /** The five semantic tone classes declared in `styles/base.css`. */
 export type ToneClass =
-  | "tone-rojo"
-  | "tone-ambar"
-  | "tone-verde"
-  | "tone-cielo"
-  | "tone-piedra";
+  "tone-rojo" | "tone-ambar" | "tone-verde" | "tone-cielo" | "tone-piedra";
 
 /**
  * What a chip needs to paint itself: the tone class, plus the solid colour when
@@ -90,7 +86,7 @@ const HEALTH_TONE: Readonly<Record<string, ToneClass>> = {
 };
 
 /** Tone for a workflow-state category; an unknown category stays neutral. */
-export function categoryTone(category: string): ToneClass {
+function categoryTone(category: string): ToneClass {
   return CATEGORY_TONE[category] ?? NEUTRAL;
 }
 

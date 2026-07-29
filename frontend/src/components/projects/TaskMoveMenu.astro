@@ -1,0 +1,203 @@
+---
+/**
+ * A task's state, and the legal moves out of it.
+ *
+ * The trigger *is* the state chip — the same `data-state-chip` hook the live
+ * patch already writes into, so a state changed by a colleague repaints here
+ * without this component knowing about the stream at all.
+ *
+ * Options come from {@link taskMoves} and from nothing else. There is no state
+ * picker: choosing a destination the workflow does not connect is not a thing
+ * this UI can express, which is what keeps the client out of the legality
+ * business. With no published moves the trigger is a `<button disabled>` with
+ * the reason named through `aria-describedby` — visibly dead, per
+ * `docs/standards/FRONTEND.md` §8 — because a control that disappears teaches
+ * the operator nothing.
+ *
+ * A move whose edge sets `requires_reason` opens `ReasonDialog`, the same one
+ * the project's transition bar uses.
+ */
+import Icon from "../ui/Icon.astro";
+import StateChip from "./StateChip.astro";
+import { TASK_MOVES_UNAVAILABLE } from "./messages";
+import type { TaskMove } from "./task-moves";
+import type { StateRef } from "../../lib/api/domain";
+
+export interface Props {
+  /** The task this control moves; `PRJ-01-T02`. */
+  code: string;
+  /** Where it stands now. */
+  state: StateRef;
+  /** The legal moves the API published; empty renders the dead arm. */
+  moves: readonly TaskMove[];
+}
+
+const { code, state, moves } = Astro.props;
+const hasMoves = moves.length > 0;
+
+/**
+ * Id of the sentence that explains a dead trigger. Always rendered and re-keyed
+ * by the island when a row is cloned, because a row that gains or loses its
+ * legal moves after the first paint has to gain or lose the explanation with
+ * them.
+ */
+const reasonId = `moves-off-${code}`;
+---
+
+<div class="move-control" data-move-control data-code={code}>
+  <button
+    class="trigger"
+    type="button"
+    data-menu-trigger
+    aria-haspopup="menu"
+    aria-expanded="false"
+    aria-label={`Cambiar estado. Ahora: ${state.label}`}
+    aria-describedby={hasMoves ? undefined : reasonId}
+    disabled={!hasMoves}
+    title={hasMoves ? undefined : TASK_MOVES_UNAVAILABLE}
+  >
+    <StateChip
+      label={state.label}
+      category={state.category}
+      color={state.color ?? null}
+    />
+    {hasMoves && <Icon name="chevron-down" size={14} />}
+    {
+      /* The in-flight mark: the pressed control hosts it, and the state chip
+        beside it does not move until the server or the stream answers. */
+    }
+    <span class="pending" data-move-pending hidden aria-hidden="true"></span>
+  </button>
+
+  <span class="visually-hidden" id={reasonId} data-move-reason>
+    {TASK_MOVES_UNAVAILABLE}
+  </span>
+
+  <div
+    class="panel card"
+    role="menu"
+    data-menu-panel
+    aria-label="Mover la tarea a"
+    hidden
+  >
+    {
+      moves.map((move) => (
+        <button
+          class="item"
+          type="button"
+          role="menuitem"
+          data-menu-item
+          data-to-state={move.toStateCode}
+          data-requires-reason={String(move.requiresReason)}
+        >
+          <span class="title" data-field="move-label">
+            {move.label}
+          </span>
+          {move.requiresReason && <span class="small meta">Pide motivo</span>}
+        </button>
+      ))
+    }
+  </div>
+
+  {
+    /* One home for an option's markup; the island rebuilds the panel whenever a
+      re-read brings a different set of legal moves. */
+  }
+  <template data-template="move-option">
+    <button class="item" type="button" role="menuitem" data-menu-item>
+      <span class="title" data-field="move-label"></span>
+      <span class="small meta" data-field="move-meta" hidden>Pide motivo</span>
+    </button>
+  </template>
+</div>
+
+<style>
+  .move-control {
+    position: relative;
+    display: inline-flex;
+    min-width: 0;
+  }
+
+  .trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-height: 40px;
+    padding: 0 var(--space-1);
+    border-radius: var(--radius-chip);
+    color: var(--tinta-media);
+    transition:
+      background-color var(--motion-micro-duration) var(--motion-micro-ease),
+      transform var(--motion-firme-duration) var(--motion-firme-ease);
+  }
+
+  .trigger:hover:not(:disabled) {
+    background-color: var(--pozo);
+  }
+
+  .trigger:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+
+  .trigger:disabled {
+    cursor: default;
+  }
+
+  .pending {
+    width: var(--space-4);
+    height: var(--space-4);
+    border-radius: var(--radius-full);
+    border: 2px solid var(--pozo);
+    border-top-color: var(--cobalto);
+    animation: spin 700ms linear infinite;
+  }
+
+  .pending[hidden] {
+    display: none;
+  }
+
+  /* Anchored in viewport coordinates by `menu.ts`; see OwnerMenu for why. */
+  .panel {
+    position: fixed;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    width: max-content;
+    min-width: 200px;
+    max-width: min(300px, calc(100vw - var(--space-6)));
+    padding: var(--space-2);
+    box-shadow: var(--shadow-lifted);
+  }
+
+  .panel[hidden] {
+    display: none;
+  }
+
+  .item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    width: 100%;
+    min-height: 40px;
+    padding: var(--space-2);
+    border-radius: var(--radius-chip);
+    text-align: left;
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .item:hover,
+  .item:focus-visible {
+    background-color: var(--pozo);
+  }
+
+  .item .meta {
+    color: var(--tinta-media);
+  }
+
+  .item .meta[hidden] {
+    display: none;
+  }
+</style>

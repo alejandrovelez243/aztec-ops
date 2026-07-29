@@ -106,7 +106,8 @@ const crumbs = [{ label: "Inicio", href: "/" }, { label: "Proyectos" }];
     <div>
       <h1 class="h1">Proyectos</h1>
       <p class="body-text lead">
-        Toda la cartera con su estado, su responsable y la prioridad que calculó el motor.
+        Toda la cartera con su estado, su responsable y la prioridad que calculó
+        el motor.
       </p>
     </div>
     <a class="btn btn-secondary" href="/priorities">
@@ -119,7 +120,12 @@ const crumbs = [{ label: "Inicio", href: "/" }, { label: "Proyectos" }];
 
   {
     plan.mode === "ready" && (
-      <section class="projects" data-projects data-view="grid" aria-label="Cartera de proyectos">
+      <section
+        class="projects"
+        data-projects
+        data-view="grid"
+        aria-label="Cartera de proyectos"
+      >
         <ProjectsToolbar facets={plan.facets} total={plan.projects.length} />
 
         <div class="projects-grid" data-projects-grid>
@@ -137,7 +143,11 @@ const crumbs = [{ label: "Inicio", href: "/" }, { label: "Proyectos" }];
             detail="Prueba con otro texto, o quita alguno de los filtros activos."
             actionLabel={null}
           >
-            <button class="btn btn-secondary" type="button" data-action="clear-filters">
+            <button
+              class="btn btn-secondary"
+              type="button"
+              data-action="clear-filters"
+            >
               Limpiar filtros
             </button>
           </RegionMessage>

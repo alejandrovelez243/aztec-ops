@@ -61,7 +61,11 @@ activity is surfaced as a risk rather than sitting quietly at the bottom of a li
 ## Capabilities and Constraints
 
 - Create and update projects and tasks; store owner, state, priority, due date, next step,
-  blockers and notes.
+  blockers and notes. Everything the system asks for, it lets you answer in place: the next
+  step is written where its absence is reported, and owner and state change from the row that
+  shows them.
+- One screen per task, reachable from anywhere the task is named, carrying its comments,
+  dependencies and legal moves — the place a conversation about one piece of work lives.
 - Detect projects at risk, blocked, or without a clear next step, through composable rules.
 - Prioritized queue with an explainable score, plus manual override with a reason.
 - Configurable taxonomies and workflows, editable from the Django admin without a deploy.
@@ -82,8 +86,10 @@ activity is surfaced as a risk rather than sitting quietly at the bottom of a li
 - Direct manipulation on the board: work moves between states by dragging its card — always
   through the workflow's legal transitions; illegal targets are visibly locked, and every drag
   has a keyboard/menu equivalent.
-- A portfolio-wide activity feed alongside the per-project timeline (requires a small backend
-  addition: a global activity endpoint).
+- A portfolio-wide activity feed alongside the per-project timeline: the same trail read across
+  every project, task and blocker, filterable by entity, verb, actor, origin and time window
+  (`GET /api/v1/activity`). `origin` is what separates a person's decision from the engine's
+  recomputation in a feed where both appear side by side.
 - Deliberately out of scope for this version: self-registration and password reset (accounts are
   seeded or admin-created), multi-tenancy, external notifications, historical burndown metrics.
   Board drag & drop and credential authentication are in scope as described above.

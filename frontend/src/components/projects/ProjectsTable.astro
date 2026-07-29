@@ -53,8 +53,11 @@ const { projects } = Astro.props;
   }
 
   thead th {
+    /* Sticky against `.table-wrap`, not the page: `overflow-x: auto` makes this
+       wrapper the scroll container, so any `top` other than 0 parks the header
+       that far *down* inside the card, on top of the first row. */
     position: sticky;
-    top: var(--size-topbar);
+    top: 0;
     background-color: var(--carta);
     text-align: left;
     padding: var(--space-3);

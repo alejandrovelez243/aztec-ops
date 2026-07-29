@@ -270,6 +270,14 @@ const countdown = formatCountdown(targetDate);
         if (!isRecord(entry)) continue;
         const signal: ScoreBreakdownEntry = {
           code: typeof entry["code"] === "string" ? entry["code"] : "",
+          // The label is the signal's Spanish name; falling back to the code
+          // keeps the row readable rather than blank when it is missing.
+          label:
+            typeof entry["label"] === "string"
+              ? entry["label"]
+              : typeof entry["code"] === "string"
+                ? entry["code"]
+                : "",
           raw: typeof entry["raw"] === "number" ? entry["raw"] : 0,
           weight: typeof entry["weight"] === "number" ? entry["weight"] : 0,
           contribution:
@@ -324,6 +332,8 @@ const countdown = formatCountdown(targetDate);
         if (typeof flag["code"] !== "string") continue;
         parsed.push({
           code: flag["code"],
+          label:
+            typeof flag["label"] === "string" ? flag["label"] : flag["code"],
           severity:
             typeof flag["severity"] === "string" ? flag["severity"] : "",
           reason: typeof flag["reason"] === "string" ? flag["reason"] : "",

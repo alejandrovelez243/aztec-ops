@@ -45,7 +45,9 @@ export function mountBlockers(root: HTMLElement): () => void {
   const { signal } = controller;
 
   const dialog = root.querySelector<HTMLDialogElement>("[data-resolve-dialog]");
-  const resolveForm = root.querySelector<HTMLFormElement>("[data-resolve-form]");
+  const resolveForm = root.querySelector<HTMLFormElement>(
+    "[data-resolve-form]",
+  );
   const raiseForm = root.querySelector<HTMLFormElement>("[data-raise-form]");
 
   /** Which blocker the open dialog is about; the numeric key the API wants. */
@@ -77,12 +79,17 @@ export function mountBlockers(root: HTMLElement): () => void {
     "submit",
     (event) => {
       event.preventDefault();
-      const resolution = String(new FormData(resolveForm).get("resolution") ?? "").trim();
-      const errorLine = root.querySelector<HTMLElement>("[data-field='resolve-error']");
+      const resolution = String(
+        new FormData(resolveForm).get("resolution") ?? "",
+      ).trim();
+      const errorLine = root.querySelector<HTMLElement>(
+        "[data-field='resolve-error']",
+      );
       if (resolution === "" || target === null) {
         if (errorLine !== null) {
           errorLine.hidden = false;
-          errorLine.textContent = "Describe cómo se destrabó antes de cerrarlo.";
+          errorLine.textContent =
+            "Describe cómo se destrabó antes de cerrarlo.";
         }
         return;
       }
@@ -126,7 +133,9 @@ async function resolve(
   form: HTMLFormElement,
   dialog: HTMLDialogElement | null,
 ): Promise<void> {
-  const button = form.querySelector<HTMLButtonElement>("[data-action='submit-resolve']");
+  const button = form.querySelector<HTMLButtonElement>(
+    "[data-action='submit-resolve']",
+  );
   if (button !== null) setPending(button, true);
 
   const result = await postBlockerResolve(id, { resolution });
@@ -144,7 +153,8 @@ async function resolve(
   toast({
     kind: "success",
     title: "Bloqueo resuelto",
-    detail: "El motor recalcula la prioridad del proyecto en cuanto lo procesa.",
+    detail:
+      "El motor recalcula la prioridad del proyecto en cuanto lo procesa.",
   });
 }
 
@@ -157,7 +167,9 @@ async function raise(
   const data = new FormData(form);
   const kind = String(data.get("kind") ?? "");
   const description = String(data.get("description") ?? "").trim();
-  const errorLine = root.querySelector<HTMLElement>("[data-field='raise-error']");
+  const errorLine = root.querySelector<HTMLElement>(
+    "[data-field='raise-error']",
+  );
 
   if (description === "" || kind === "") {
     if (errorLine !== null) {
@@ -218,8 +230,12 @@ async function refresh(root: HTMLElement, code: string): Promise<void> {
 
 /** Writes the two lists, their counts and the "nothing is blocked" chip. */
 function render(root: HTMLElement, blockers: readonly Blocker[]): void {
-  const open = blockers.filter((blocker) => (blocker.resolved_at ?? null) === null);
-  const resolved = blockers.filter((blocker) => (blocker.resolved_at ?? null) !== null);
+  const open = blockers.filter(
+    (blocker) => (blocker.resolved_at ?? null) === null,
+  );
+  const resolved = blockers.filter(
+    (blocker) => (blocker.resolved_at ?? null) !== null,
+  );
 
   fill(root, "[data-open-blockers]", "open-blocker", open, false);
   fill(root, "[data-resolved-blockers]", "resolved-blocker", resolved, true);
@@ -260,14 +276,18 @@ function fill(
       setField(item, "blocker-resolution", blocker.resolution_reason);
     }
 
-    const taskChip = item.querySelector<HTMLElement>("[data-field='blocker-task']");
+    const taskChip = item.querySelector<HTMLElement>(
+      "[data-field='blocker-task']",
+    );
     const taskCode = blocker.task_code ?? null;
     if (taskChip !== null) {
       taskChip.hidden = taskCode === null;
       taskChip.textContent = taskCode ?? "";
     }
 
-    const stamp = isResolved ? (blocker.resolved_at ?? null) : blocker.raised_at;
+    const stamp = isResolved
+      ? (blocker.resolved_at ?? null)
+      : blocker.raised_at;
     const absolute = formatInstant(stamp);
     const meta = item.querySelector<HTMLElement>("[data-field='blocker-meta']");
     if (meta !== null && absolute !== null) meta.title = absolute;

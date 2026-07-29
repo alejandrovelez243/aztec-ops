@@ -37,12 +37,7 @@ export interface Crumb {
  * are English, the labels beside them Spanish (CLAUDE.md §Language).
  */
 export type NavKey =
-  | "overview"
-  | "priorities"
-  | "projects"
-  | "board"
-  | "team"
-  | "activity";
+  "overview" | "priorities" | "projects" | "board" | "team" | "activity";
 
 export interface Props {
   /** Document title, rendered as `<title>{title} — Aztec Ops</title>`. */
@@ -51,13 +46,37 @@ export interface Props {
   active?: NavKey;
   /** Wayfinding trail; omit on the root page. */
   crumbs?: Crumb[];
+  /**
+   * Full-bleed content: drops the centred `--content-max` measure and the side
+   * gutters, and lets the content region grow to the remaining viewport height.
+   *
+   * The documented escape hatch for surfaces whose own geometry *is* the page —
+   * `/board`, where the wall must start at the sidebar edge and end at the
+   * viewport edge, and where the columns need a bounded height to scroll inside.
+   * A page that opts in owns its own padding: the layout stops supplying any.
+   *
+   * Reaching for negative margins instead is the failure this exists to prevent —
+   * they lie about the measure, break at every breakpoint the shell changes, and
+   * leave the topbar and the content disagreeing about where the page begins.
+   */
+  wide?: boolean;
 }
 
-const { title, active, crumbs = [] } = Astro.props;
+const { title, active, crumbs = [], wide = false } = Astro.props;
 
-const NAV: ReadonlyArray<{ key: NavKey; label: string; href: string; icon: IconName }> = [
+const NAV: ReadonlyArray<{
+  key: NavKey;
+  label: string;
+  href: string;
+  icon: IconName;
+}> = [
   { key: "overview", label: "Resumen", href: "/", icon: "home" },
-  { key: "priorities", label: "Prioridades", href: "/priorities", icon: "flag" },
+  {
+    key: "priorities",
+    label: "Prioridades",
+    href: "/priorities",
+    icon: "flag",
+  },
   { key: "projects", label: "Proyectos", href: "/projects", icon: "folder" },
   { key: "board", label: "Tablero", href: "/board", icon: "board" },
   { key: "team", label: "Equipo", href: "/team", icon: "users" },
@@ -87,12 +106,14 @@ const appGuard = appGuardScript(
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script is:inline set:html={appGuard}></script>
+    <script is:inline set:html={appGuard} />
     <script is:inline>
       // Sidebar state, before paint, so the rail never flashes open.
       try {
         document.documentElement.dataset.sidebar =
-          window.localStorage.getItem("aztec.ui.sidebar") === "rail" ? "rail" : "open";
+          window.localStorage.getItem("aztec.ui.sidebar") === "rail"
+            ? "rail"
+            : "open";
       } catch {
         document.documentElement.dataset.sidebar = "open";
       }
@@ -112,7 +133,9 @@ const appGuard = appGuardScript(
     <ClientRouter />
   </head>
   <body>
-    <a class="visually-hidden skip-link" href="#contenido">Saltar al contenido</a>
+    <a class="visually-hidden skip-link" href="#contenido"
+      >Saltar al contenido</a
+    >
     <div class="shell">
       <aside class="sidebar" id="sidebar" transition:persist="sidebar">
         <div class="sidebar-top">
@@ -211,7 +234,7 @@ const appGuard = appGuardScript(
             <ConnectionBadge />
           </div>
         </header>
-        <main id="contenido" class="content">
+        <main id="contenido" class="content" data-wide={wide ? "" : undefined}>
           <slot />
         </main>
       </div>
@@ -286,7 +309,9 @@ const appGuard = appGuardScript(
         )) {
           const href = link.getAttribute("href") ?? "";
           const isActive =
-            href === "/" ? path === "/" : path === href || path.startsWith(`${href}/`);
+            href === "/"
+              ? path === "/"
+              : path === href || path.startsWith(`${href}/`);
           if (isActive) link.setAttribute("aria-current", "page");
           else link.removeAttribute("aria-current");
         }
@@ -297,10 +322,15 @@ const appGuard = appGuardScript(
         const card = document.querySelector<HTMLElement>("[data-operator]");
         if (card === null || operator === null) return;
         card.hidden = false;
-        const avatar = card.querySelector<HTMLElement>("[data-operator-avatar]");
+        const avatar = card.querySelector<HTMLElement>(
+          "[data-operator-avatar]",
+        );
         if (avatar !== null) {
           avatar.textContent = initials(operator.label);
-          avatar.style.setProperty("--avatar-h", String(avatarHue(operator.alias)));
+          avatar.style.setProperty(
+            "--avatar-h",
+            String(avatarHue(operator.alias)),
+          );
         }
         const name = card.querySelector<HTMLElement>("[data-operator-name]");
         if (name !== null) name.textContent = operator.label;
@@ -588,6 +618,23 @@ const appGuard = appGuardScript(
         padding: var(--space-5) var(--space-6) var(--space-8);
       }
 
+      /*
+       * The `wide` escape hatch (see Props). The measure and the gutters go, and
+       * the region becomes a flex column that claims the height the topbar left
+       * over — a board whose columns scroll inside themselves needs a bounded
+       * height, and `min-height: 0` is what keeps a flex child from refusing to
+       * shrink below its content.
+       */
+      .content[data-wide] {
+        max-width: none;
+        margin-inline: 0;
+        padding: 0;
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
       /* --- Drawer (< 1024px) --- */
 
       .scrim {
@@ -609,7 +656,8 @@ const appGuard = appGuardScript(
           left: 0;
           width: var(--size-sidebar);
           transform: translateX(-100%);
-          transition: transform var(--motion-panel-duration) var(--motion-panel-ease);
+          transition: transform var(--motion-panel-duration)
+            var(--motion-panel-ease);
           box-shadow: none;
           z-index: var(--z-drawer);
         }

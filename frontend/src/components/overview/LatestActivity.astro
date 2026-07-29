@@ -1,0 +1,130 @@
+---
+/**
+ * "Última actividad": the last handful of movements in the whole portfolio.
+ *
+ * A glance, not a feed. Each entry says what changed, on which project, when,
+ * and — because that is the distinction worth a chip even at this size — whether
+ * a person forced it or the engine recomputed it. Anything more (the reason, the
+ * before/after, the decision a record belongs to) is one link away on
+ * `/activity`, which is where the trail is meant to be read.
+ *
+ * Presentational and server-rendered: it receives the read already resolved into
+ * the view-state union and renders it. The Resumen island owns this surface's
+ * `disconnected` arm — one banner for the whole page rather than one per region,
+ * because the stream drops for all of them at once.
+ */
+import type { ActivityRow } from "../../lib/activity/model";
+import { assertNever, type ViewState } from "../../lib/view-state";
+import { TEASER_COPY } from "../activity/copy";
+import Icon from "../ui/Icon.astro";
+
+export interface Props {
+  /**
+   * The feed read, already resolved into loading / ready / empty / error /
+   * disconnected by the page. Passing the union rather than the rows keeps the
+   * four mandatory states out of the caller's `if` chain.
+   */
+  state: ViewState<readonly ActivityRow[]>;
+}
+
+const { state } = Astro.props;
+
+/** What this panel renders; `disconnected` keeps its rows, marked by the shell. */
+type Plan =
+  | { mode: "loading" }
+  | { mode: "rows"; rows: readonly ActivityRow[] }
+  | { mode: "empty" }
+  | { mode: "error" };
+
+function planFor(view: ViewState<readonly ActivityRow[]>): Plan {
+  switch (view.kind) {
+    case "ready":
+    case "disconnected":
+      return { mode: "rows", rows: view.data };
+    case "empty":
+      return { mode: "empty" };
+    case "error":
+      return { mode: "error" };
+    case "loading":
+      return { mode: "loading" };
+    default:
+      return assertNever(view);
+  }
+}
+
+const plan = planFor(state);
+---
+
+<section class="card ov-panel" aria-labelledby="ov-activity-title">
+  <header class="ov-panel-head">
+    <h2 class="h2" id="ov-activity-title">{TEASER_COPY.title}</h2>
+    <a class="ov-panel-link small" href="/activity">
+      {TEASER_COPY.link}
+      <Icon name="chevron-right" size={16} />
+    </a>
+  </header>
+
+  {
+    plan.mode === "rows" && (
+      <ol class="ov-latest">
+        {plan.rows.map((row) => (
+          <li
+            class:list={["ov-latest-row", row.originTone]}
+            data-origin={row.origin}
+          >
+            <span class="dot" aria-hidden="true" />
+            <div class="ov-latest-body">
+              <p class="ov-latest-head">
+                <span class="title">{row.verbLabel}</span>
+                <span class="chip ov-latest-origin">{row.originLabel}</span>
+              </p>
+              <p class="small ov-latest-meta">
+                {row.projectCode === null ? (
+                  <span class="figure">{row.entityId}</span>
+                ) : (
+                  <a
+                    class="ov-latest-project"
+                    href={`/projects/${encodeURIComponent(row.projectCode)}`}
+                  >
+                    {row.projectName}
+                  </a>
+                )}
+                <span aria-hidden="true">·</span>
+                <time datetime={row.occurredAt} title={row.occurredTitle}>
+                  {row.occurredLabel}
+                </time>
+              </p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    )
+  }
+
+  {
+    plan.mode === "empty" && (
+      <div class="ov-latest-note">
+        <p class="title">{TEASER_COPY.emptyTitle}</p>
+        <p class="small">{TEASER_COPY.emptyBody}</p>
+      </div>
+    )
+  }
+
+  {
+    plan.mode === "error" && (
+      <div class="ov-latest-note tone-rojo">
+        <p class="title">{TEASER_COPY.errorTitle}</p>
+        <p class="small">{TEASER_COPY.errorBody}</p>
+      </div>
+    )
+  }
+
+  {
+    plan.mode === "loading" && (
+      <p
+        class="skeleton ov-latest-skeleton"
+        aria-label={TEASER_COPY.loadingLabel}
+      />
+    )
+  }
+</section>

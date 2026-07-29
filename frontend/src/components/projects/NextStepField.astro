@@ -1,0 +1,208 @@
+---
+/**
+ * "Próximo paso" — the one field on this screen that a risk flag is actively
+ * asking for, so it is the one field you can write without leaving the screen.
+ *
+ * `NO_NEXT_STEP` states an absence and the header used to stop there: an ámbar
+ * chip naming what is missing and no way to supply it. The Present-Absence Rule
+ * says an absence is a first-class signal; it does not say the signal is the
+ * end of the conversation. So the empty arm is not a chip, it is an invitation
+ * that says what the field is for — the single concrete action that moves this
+ * project — and clicking it starts writing.
+ *
+ * Two arms, one flag. `data-filled` is the field's whole mode: an invitation and
+ * a written sentence are two renderings of one value and can never both be true,
+ * so there is no pair of booleans here to fall out of step.
+ *
+ * The write itself, its pending state and the re-read that clears the risk live
+ * in `header-controls.ts`; this component is markup and copy.
+ */
+import Icon from "../ui/Icon.astro";
+
+export interface Props {
+  projectCode: string;
+  /** What happens next; `null` or empty is the `NO_NEXT_STEP` signal itself. */
+  nextStep: string | null;
+}
+
+const { projectCode, nextStep } = Astro.props;
+const value = nextStep ?? "";
+const isFilled = value !== "";
+
+/** `ProjectUpdateIn.next_step` accepts at most this much; the input says so too. */
+const MAX_LENGTH = 255;
+---
+
+<div
+  class="field"
+  data-next-step-field
+  data-project-code={projectCode}
+  data-filled={String(isFilled)}
+  data-mode="view"
+>
+  <div class="view" data-next-step-view>
+    <p class="written">
+      <span class="body-text" data-field="next-step-value">{value}</span>
+      <button
+        class="btn btn-ghost edit"
+        type="button"
+        data-action="edit-next-step"
+      >
+        <Icon name="panel" size={16} />
+        Editar
+      </button>
+    </p>
+
+    <button class="invite" type="button" data-action="edit-next-step">
+      <span class="chip tone-ambar">Sin próximo paso</span>
+      <span class="pitch">
+        <span class="title">Escribe el próximo paso</span>
+        <span class="small hint">
+          La única acción concreta que mueve este proyecto. Es lo que pide el
+          riesgo, y escribirla lo apaga.
+        </span>
+      </span>
+      <Icon name="plus" size={18} />
+    </button>
+  </div>
+
+  <form class="edit-form" data-next-step-form>
+    <label class="line">
+      <span class="visually-hidden">Próximo paso</span>
+      <input
+        class="input"
+        type="text"
+        name="next_step"
+        maxlength={MAX_LENGTH}
+        autocomplete="off"
+        placeholder="Ej.: Confirmar con Legal la fecha de la revisión"
+        value={value}
+        data-next-step-input
+      />
+    </label>
+    <p class="small error" data-field="next-step-error" hidden></p>
+    <div class="actions">
+      <button
+        class="btn btn-primary"
+        type="submit"
+        data-action="save-next-step"
+      >
+        Guardar
+      </button>
+      <button
+        class="btn btn-ghost"
+        type="button"
+        data-action="cancel-next-step"
+      >
+        Cancelar
+      </button>
+      <span class="small keys">Enter guarda · Esc cancela</span>
+    </div>
+  </form>
+</div>
+
+<style>
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  /* One flag decides which arm exists; neither can be shown beside the other. */
+  .field[data-mode="edit"] .view,
+  .field[data-mode="view"] .edit-form,
+  .field[data-filled="true"] .invite,
+  .field[data-filled="false"] .written {
+    display: none;
+  }
+
+  .written {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .written .body-text {
+    overflow-wrap: anywhere;
+  }
+
+  .edit {
+    height: var(--space-6);
+    padding: 0 var(--space-2);
+    font-size: var(--text-small-size);
+  }
+
+  /* The inviting empty control: a dashed well the operator is meant to fill. */
+  .invite {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: var(--space-8);
+    padding: var(--space-3) var(--space-4);
+    border: var(--border-width) dashed var(--ambar);
+    border-radius: var(--radius-card);
+    background-color: var(--ambar-wash);
+    color: var(--ambar-ink);
+    text-align: left;
+    transition:
+      border-color var(--motion-micro-duration) var(--motion-micro-ease),
+      background-color var(--motion-micro-duration) var(--motion-micro-ease),
+      transform var(--motion-firme-duration) var(--motion-firme-ease);
+  }
+
+  .invite:hover {
+    border-color: var(--cobalto);
+    background-color: var(--cobalto-papel);
+    color: var(--cobalto);
+  }
+
+  .invite:active {
+    transform: scale(0.99);
+  }
+
+  .invite .pitch {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .invite .hint {
+    color: inherit;
+    opacity: 0.85;
+    max-width: 52ch;
+  }
+
+  .edit-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .line {
+    display: block;
+  }
+
+  .actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .keys {
+    color: var(--tinta-suave);
+  }
+
+  .error {
+    color: var(--rojo-ink);
+  }
+
+  .error[hidden] {
+    display: none;
+  }
+</style>

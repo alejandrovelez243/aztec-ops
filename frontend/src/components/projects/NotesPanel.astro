@@ -32,10 +32,12 @@ const { projectCode } = Astro.props;
         name="body"
         rows="3"
         required
-        placeholder="Contexto, acuerdos, lo que el próximo lector necesita saber"></textarea>
+        placeholder="Contexto, acuerdos, lo que el próximo lector necesita saber"
+      ></textarea>
     </label>
     <p class="small hint">
-      Para lo que está detenido, usa <strong>Bloqueos</strong>: eso sí pesa en la prioridad.
+      Para lo que está detenido, usa <strong>Bloqueos</strong>: eso sí pesa en
+      la prioridad.
     </p>
     <p class="small error" data-field="note-error" hidden></p>
     <div class="actions">
@@ -47,14 +49,16 @@ const { projectCode } = Astro.props;
   </form>
 
   <p class="empty small" data-notes-empty>
-    Todavía no hay notas nuevas. Las que publiques aparecerán aquí, y también las de tus colegas
-    mientras esta página esté abierta.
+    Todavía no hay notas nuevas. Las que publiques aparecerán aquí, y también
+    las de tus colegas mientras esta página esté abierta.
   </p>
 
   <ul class="list" data-note-list></ul>
 
-  {/* One home for the row markup: every note on this panel arrives after the
-      first paint, from a write or from the stream. */}
+  {
+    /* One home for the row markup: every note on this panel arrives after the
+      first paint, from a write or from the stream. */
+  }
   <template data-template="note">
     <li class="note card" data-note>
       <p class="title">

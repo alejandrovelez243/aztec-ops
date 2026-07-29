@@ -20,8 +20,13 @@ const { value } = Astro.props;
 const rendered = formatScore(value);
 ---
 
-<p class="arc" data-arc style={`--pct: ${value}`} role="img"
-   aria-label={`Puntaje calculado ${rendered} sobre 100`}>
+<p
+  class="arc"
+  data-arc
+  style={`--pct: ${value}`}
+  role="img"
+  aria-label={`Puntaje calculado ${rendered} sobre 100`}
+>
   <span class="hole">
     <span class="display" data-slot="score" aria-hidden="true">{rendered}</span>
   </span>

@@ -144,7 +144,10 @@
   --size-topbar: 64px;
   --size-sidebar: 264px;
   --size-rail: 72px;
-  --content-max: 1360px;
+  /* The surface uses the whole window: on a 2000px display a 1360px measure
+     left ~300px of paper on each side, and these are dashboards read as grids
+     — the cards carry their own measure, the page does not need one. */
+  --content-max: none;
 
   /*
    * --- Motion: "la mano invisible" (DESIGN.md §Motion) ---
@@ -155,19 +158,42 @@
   /** firme — chips, buttons, small elements. */
   --motion-firme-duration: 300ms;
   --motion-firme-ease: linear(
-    0, 0.35 19%, 0.57 28%, 0.75 37%, 0.87 47%, 0.94 56%, 0.985 68%, 1.005 80%, 1
+    0,
+    0.35 19%,
+    0.57 28%,
+    0.75 37%,
+    0.87 47%,
+    0.94 56%,
+    0.985 68%,
+    1.005 80%,
+    1
   );
 
   /** carta — card lift, travel, drop; visible overshoot. */
   --motion-carta-duration: 450ms;
   --motion-carta-ease: linear(
-    0, 0.3 12%, 0.62 24%, 0.86 36%, 1.01 48%, 1.045 58%, 1.02 72%, 0.995 84%, 1
+    0,
+    0.3 12%,
+    0.62 24%,
+    0.86 36%,
+    1.01 48%,
+    1.045 58%,
+    1.02 72%,
+    0.995 84%,
+    1
   );
 
   /** panel — drawers, accordions, page-level shifts. */
   --motion-panel-duration: 500ms;
   --motion-panel-ease: linear(
-    0, 0.28 14%, 0.58 28%, 0.8 42%, 0.93 56%, 0.99 72%, 1.003 84%, 1
+    0,
+    0.28 14%,
+    0.58 28%,
+    0.8 42%,
+    0.93 56%,
+    0.99 72%,
+    1.003 84%,
+    1
   );
 
   /** micro — hover acknowledgements only; answers within 120ms. */

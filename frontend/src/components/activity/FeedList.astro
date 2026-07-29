@@ -1,0 +1,191 @@
+---
+/**
+ * The feed itself: records newest first, with correlated records framed as the
+ * single decision they were.
+ *
+ * A `correlation_id` is not metadata, it is the sentence "A bajó para que B
+ * subiera" written across two rows. Runs sharing one are wrapped in a group that
+ * says so and links to the whole movement via `?correlation_id=`; a lone record
+ * renders as a plain row, because framing every change as a decision would make
+ * the frame mean nothing where it matters.
+ *
+ * Presentational: props in, DOM out. The two `<template>`s at the end are the
+ * one home of the row and group markup — the island clones them when the stream
+ * says something moved, so a live row and a server-rendered row cannot drift
+ * apart (`docs/standards/PATTERNS_FRONTEND.md` §6).
+ */
+import { hrefForCorrelation } from "../../lib/activity/filters";
+import type {
+  ActivityRow as RowModel,
+  DecisionGroup,
+} from "../../lib/activity/model";
+import ActivityRow from "./ActivityRow.astro";
+import { recordsText, ROW_COPY } from "./copy";
+
+export interface Props {
+  /** Runs of records, in the server's order; never re-sorted here. */
+  groups: readonly DecisionGroup[];
+  /** Total records matching the current facets, across every page. */
+  count: number;
+}
+
+const { groups, count } = Astro.props;
+
+/**
+ * The blank the island fills. Every field is empty on purpose: the template is
+ * markup, not data, and a placeholder value could survive a missing patch and
+ * reach a reader as if it were a fact.
+ */
+const TEMPLATE_ROW: RowModel = {
+  id: 0,
+  verb: "",
+  verbLabel: "",
+  actor: "",
+  origin: "",
+  originLabel: "",
+  originTone: "tone-piedra",
+  isManual: false,
+  change: "",
+  reason: "",
+  explanation: "",
+  entityType: "",
+  entityTypeLabel: "",
+  entityId: "",
+  projectCode: null,
+  projectName: null,
+  occurredAt: "",
+  occurredLabel: "",
+  occurredTitle: "",
+  correlationId: "",
+};
+---
+
+<div class="feed">
+  <p class="small feed-count">
+    <span class="figure" data-field="feed-count">{recordsText(count)}</span>
+  </p>
+
+  <ol class="groups" data-activity-list aria-live="polite">
+    {
+      groups.map((group) => (
+        <li
+          class="group"
+          data-activity-group
+          data-correlation={group.correlationId}
+          data-decision={group.isDecision ? "true" : "false"}
+        >
+          <div
+            class="group-head"
+            data-block="group-head"
+            hidden={!group.isDecision}
+          >
+            <span class="label">{ROW_COPY.decision}</span>
+            <span class="small" data-field="group-count">
+              {recordsText(group.rows.length)}
+            </span>
+            <a
+              class="small group-link"
+              data-link="group"
+              href={hrefForCorrelation(group.correlationId)}
+            >
+              {ROW_COPY.seeDecision}
+            </a>
+          </div>
+          <ol class="rows" data-activity-rows>
+            {group.rows.map((row) => (
+              <ActivityRow row={row} />
+            ))}
+          </ol>
+        </li>
+      ))
+    }
+  </ol>
+
+  <template data-template="activity-group">
+    <li class="group" data-activity-group data-decision="false">
+      <div class="group-head" data-block="group-head" hidden>
+        <span class="label">{ROW_COPY.decision}</span>
+        <span class="small" data-field="group-count"></span>
+        <a class="small group-link" data-link="group" href="/activity"></a>
+      </div>
+      <ol class="rows" data-activity-rows></ol>
+    </li>
+  </template>
+
+  <template data-template="activity-row">
+    <ActivityRow row={TEMPLATE_ROW} />
+  </template>
+</div>
+
+<style>
+  .feed {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .feed-count {
+    color: var(--tinta-media);
+  }
+
+  .groups {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .rows {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  /* A decision is one object on the wall: the group gets the card, its records
+     sit inside it, and the frame is what says "these happened together". */
+  .group[data-decision="true"] {
+    background-color: var(--pozo);
+    border-radius: var(--radius-card);
+    padding: var(--space-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .group-head {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .group-head[hidden] {
+    display: none;
+  }
+
+  .group-link {
+    margin-left: auto;
+    text-decoration: none;
+    border-radius: var(--radius-chip);
+  }
+
+  .group-link:hover {
+    color: var(--cobalto);
+  }
+
+  /* Rows the stream added while the page was open acknowledge themselves once,
+     then settle (DESIGN.md §Motion, "the remote move"). */
+  .rows :global(.row.is-new) {
+    animation: land var(--motion-carta-duration) var(--motion-carta-ease);
+  }
+
+  @keyframes land {
+    from {
+      opacity: 0;
+      transform: translateY(-6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+</style>

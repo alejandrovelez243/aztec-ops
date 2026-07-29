@@ -27,7 +27,18 @@ class SignalStrategy(Protocol):
     Implementations are pure: same ``SignalInput``, same ``SignalResult``, no clock, no database.
     Normalization belongs to the strategy; weighting never does — the weight lives in the active
     ``PriorityPolicy`` so the operation can rebalance the ranking without a deploy.
+
+    A strategy also names itself: ``label`` travels into the breakdown and onto the wire, so adding
+    a signal stays one class plus one registry line (CLAUDE.md rule 8) and needs no frontend
+    change. Declared here rather than in a table keyed by code, because a mapping would be a second
+    place to edit and a missing entry there would surface as an unnamed row in the queue instead of
+    as a type error at registration.
     """
+
+    #: Spanish name of what the signal measures, published with every breakdown line. A required
+    #: member: a signal that cannot name itself reaches the UI as a bare code, which is the defect
+    #: the field exists to prevent.
+    label: str
 
     def evaluate(self, data: SignalInput) -> SignalResult:
         """Read the fact this signal measures and justify the reading."""
@@ -41,12 +52,17 @@ class RiskSpecification(Protocol):
     ``IsBlocked() & ~HasNoTargetDate()`` safe to write and what keeps the tests database-free.
     """
 
+    #: Spanish name of the raised risk, published with every flag so the client renders a chip it
+    #: has never heard of. A required member: a specification that cannot name itself would reach
+    #: the UI as a bare code, which is the defect the field exists to prevent.
+    label: str
+
     def is_satisfied_by(self, data: ProjectRiskInput) -> bool:
         """Whether the condition holds for these facts."""
         ...
 
     def detail(self, data: ProjectRiskInput) -> str:
-        """The fact that satisfied the condition, e.g. "6 day(s) past the target date"."""
+        """The fact that satisfied the condition, e.g. "6 días de retraso sobre la fecha…"."""
         ...
 
 
@@ -150,6 +166,23 @@ def get_signal(code: str) -> SignalStrategy:
     if strategy is None:
         raise SignalNotRegistered(code)
     return strategy
+
+
+def signal_label(code: str) -> str | None:
+    """The label of the strategy registered under ``code``, if one still claims it.
+
+    ``None`` rather than a raise, unlike :func:`get_signal`: the caller is reading a persisted
+    ``breakdown``, where a code whose strategy has since been retired is a fact about the past and
+    not a misconfiguration of the present. Scoring keeps the strict lookup.
+
+    Args:
+        code: A signal code read out of a stored document, possibly an obsolete one.
+
+    Returns:
+        The registered strategy's label, or ``None`` when nothing is registered under ``code``.
+    """
+    strategy = _SIGNALS.get(code)
+    return strategy.label if strategy is not None else None
 
 
 def registered_risk_specifications() -> tuple[RiskSpecificationEntry, ...]:

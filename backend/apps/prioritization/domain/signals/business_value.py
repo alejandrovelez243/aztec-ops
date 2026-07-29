@@ -17,6 +17,23 @@ FALLBACK_REFERENCE_VALUE: Final[Decimal] = Decimal("50000")
 #: real contract.
 UNKNOWN_VALUE_SCORE: Final[float] = 0.0
 
+#: Spanish notation swaps both separators against Python's default: thousands with ``.``, decimals
+#: with ``,``. Applied as one translation table rather than two chained ``replace`` calls, which
+#: would rewrite the separator the first call had just produced.
+_SPANISH_SEPARATORS: Final = str.maketrans({",": ".", ".": ","})
+
+
+def _amount(value: Decimal) -> str:
+    """Write a money amount the way the rest of the interface writes it.
+
+    Args:
+        value: The amount, as stored.
+
+    Returns:
+        The amount to two decimals in Spanish notation, e.g. ``"28.000,00"`` for ``28000``.
+    """
+    return f"{value:,.2f}".translate(_SPANISH_SEPARATORS)
+
 
 @register("business_value")
 class BusinessValue:
@@ -33,6 +50,9 @@ class BusinessValue:
     returns 1.0.
     """
 
+    # Spanish on purpose: ``label`` and every ``reason`` below are user-facing (CLAUDE.md §Language).
+    label = "Valor de negocio"
+
     def evaluate(self, data: SignalInput) -> SignalResult:
         """Read the normalized contract value.
 
@@ -46,12 +66,12 @@ class BusinessValue:
         if data.business_value is None:
             return SignalResult(
                 score=UNKNOWN_VALUE_SCORE,
-                reason="No contract value is recorded, so value cannot raise this project.",
+                reason="Sin valor de contrato registrado, el valor no puede elevar este proyecto.",
             )
         if data.business_value <= 0:
             return SignalResult(
                 score=UNKNOWN_VALUE_SCORE,
-                reason=f"Contract value is {data.business_value} {data.currency}.",
+                reason=f"El valor de contrato es {_amount(data.business_value)} {data.currency}.",
             )
 
         reference = data.portfolio_max_business_value or FALLBACK_REFERENCE_VALUE
@@ -61,6 +81,6 @@ class BusinessValue:
         score = log1p(float(data.business_value)) / log1p(float(reference))
         return SignalResult.clamped(
             round(score, 4),
-            f"Contract value {data.business_value} {data.currency}, log-normalized against the "
-            f"portfolio maximum of {reference}.",
+            f"Valor de contrato {_amount(data.business_value)} {data.currency}, normalizado "
+            f"logarítmicamente contra el máximo del portafolio ({_amount(reference)}).",
         )

@@ -9,6 +9,7 @@ read the clock itself could not be replayed, and a request that minted a fresh c
 record would break the one link that lets a chained decision be reconstructed.
 """
 
+from datetime import datetime
 from uuid import uuid4
 
 from django.http import HttpRequest
@@ -24,6 +25,7 @@ from apps.work.api.schemas import (
     TaskCreateIn,
     TaskQuery,
     TaskTransitionIn,
+    TaskUpdateIn,
 )
 from apps.work.domain.commands import (
     AddNoteCommand,
@@ -32,17 +34,25 @@ from apps.work.domain.commands import (
     RaiseBlockerCommand,
     ResolveBlockerCommand,
     TransitionTaskCommand,
+    UpdateTaskCommand,
 )
-from apps.work.domain.views import BlockerView, NoteView, TaskView
+from apps.work.domain.views import BlockerView, NoteView, TaskDetailView, TaskView
 from apps.work.services.add_note import add_note
 from apps.work.services.create_task import create_task
 from apps.work.services.raise_blocker import raise_blocker
+from apps.work.services.read_task_detail import read_task_detail
 from apps.work.services.read_tasks import TaskFilters, read_project_tasks
 from apps.work.services.resolve_blocker import resolve_blocker
 from apps.work.services.transition_task import transition_task
+from apps.work.services.update_task import update_task
 from config.auth import actor_code_of
 
 router = Router(tags=["work"])
+
+#: Payload field names that differ from the command's, because the wire names a taxonomy value by
+#: what it *is* and the command names it by what it *carries*. A mapping rather than a chain of
+#: renames, so adding a field is one entry.
+_TASK_FIELD_NAMES = {"priority": "priority_code", "assignee": "assignee_code"}
 
 
 @router.get(
@@ -108,6 +118,53 @@ def post_project_task(
         )
     )
     return Status(201, task.to_view(today=now.date()))
+
+
+@router.get(
+    "/tasks/{task_code}",
+    response=TaskDetailView,
+    url_name="task_detail",
+)
+def get_task(request: HttpRequest, task_code: str) -> TaskDetailView:
+    """One task with its project, state, owner, dependencies, **legal transitions** and comments.
+
+    Everything the task screen draws itself from is here, in one response. ``notes`` travels inside
+    rather than behind a second route because a detail that needs two requests to render is two
+    chances to render half a page — and because two reads can straddle a write, so a comment
+    fetched separately can end up beside a state it does not refer to.
+
+    ``transitions`` is the only source of the state buttons, and it is read from
+    ``WorkflowTransition`` — the same table ``POST /tasks/{code}/transition`` validates against, so
+    the two can never disagree. The frontend holds no list of task state codes.
+    """
+    del request
+    return read_task_detail(task_code=task_code, now=timezone.now())
+
+
+@router.patch(
+    "/tasks/{task_code}",
+    response=TaskDetailView,
+    url_name="task_update",
+)
+def patch_task(request: HttpRequest, task_code: str, payload: TaskUpdateIn) -> TaskDetailView:
+    """Edit a task's mutable fields. Absent means untouched; explicit ``null`` clears.
+
+    This is the write behind "change the responsable": ``assignee`` names an
+    ``accounts.User.code``, and an explicit ``null`` unassigns the task. A code that resolves to
+    nobody is ``404 not_found`` rather than a silently dropped field.
+
+    ``workflow_state`` is not a field of this payload at all — a state moves through the transition
+    route (CLAUDE.md rule 2) — and neither is ``is_overdue``, which is derived.
+
+    The whole detail is returned rather than the changed fields, for the same reason
+    ``PATCH /projects/{code}`` returns it: the screen that issued the edit is the screen that has
+    to redraw, and a partial response would send it straight back for the rest.
+    """
+    now = timezone.now()
+    update_task(
+        _update_task_command(task_code=task_code, payload=payload, request=request, now=now)
+    )
+    return read_task_detail(task_code=task_code, now=now)
 
 
 @router.post(
@@ -217,3 +274,26 @@ def post_project_note(request: HttpRequest, project_code: str, payload: NoteIn) 
         )
     )
     return Status(201, note.to_view())
+
+
+def _update_task_command(
+    *, task_code: str, payload: TaskUpdateIn, request: HttpRequest, now: datetime
+) -> UpdateTaskCommand:
+    """Carry the caller's absent-versus-null distinction from the payload into the command.
+
+    Only the fields the client actually sent are copied. Building the command from every attribute
+    would turn "do not touch the assignee" into "unassign", because both arrive as ``None`` — which
+    is precisely the bug ``model_fields_set`` exists to prevent, and why this is a translation
+    rather than a ``model_dump()``.
+    """
+    fields = {
+        _TASK_FIELD_NAMES.get(name, name): value
+        for name, value in payload.model_dump(exclude_unset=True).items()
+    }
+    return UpdateTaskCommand(
+        task_code=task_code,
+        actor=actor_code_of(request),
+        correlation_id=uuid4(),
+        now=now,
+        **fields,
+    )

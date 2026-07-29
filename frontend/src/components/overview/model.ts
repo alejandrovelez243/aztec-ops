@@ -144,11 +144,7 @@ export function toRows(
 }
 
 /** Resolves one queue row. See {@link toRows}. */
-export function toRow(
-  item: QueueItem,
-  rank: number,
-  now: Date,
-): OverviewRow {
+export function toRow(item: QueueItem, rank: number, now: Date): OverviewRow {
   const owner = item.owner ?? null;
   return {
     rank,
@@ -202,7 +198,7 @@ export function toBars(
     if (entry.contribution > peak) peak = entry.contribution;
   }
   return leading.map((entry) => ({
-    label: signalLabel(entry.code),
+    label: signalLabel(entry),
     contribution: entry.contribution,
     share: peak <= 0 ? 0 : clamp01(entry.contribution / peak),
   }));
@@ -230,35 +226,20 @@ export function toDueState(targetDate: string | null, now: Date): DueState {
 }
 
 /**
- * Spanish label for one priority signal.
+ * The label the API shipped for one signal, with the code as the last resort.
  *
- * A translation table, never a whitelist: a signal registered on the backend
- * tomorrow (CLAUDE.md rule 8) still renders — humanized from its own code —
- * instead of vanishing from the card. A dropped signal is an argument nobody
- * can read.
+ * The translation used to live here as a table keyed by signal code, which
+ * quietly broke the rule that a signal is one class plus one registry entry
+ * (CLAUDE.md rule 8): registering a seventh signal server-side would have left
+ * it unnamed on screen until somebody edited this file. The label is now part
+ * of the breakdown the engine persists, so the argument arrives already
+ * written. The fallback exists for a historical row computed before labels,
+ * and shows the bare code rather than dropping the line — a contribution
+ * silently removed is an argument nobody can audit.
  */
-export function signalLabel(code: string): string {
-  return SIGNAL_LABELS[code] ?? humanize(code);
-}
-
-/**
- * The six signals the current policy registers. Extending this file is how a
- * new signal *gets translated*, not how it gets permission to render.
- */
-const SIGNAL_LABELS: Readonly<Record<string, string>> = {
-  deadline_pressure: "Presión de fecha",
-  overdue_work: "Trabajo vencido",
-  criticality: "Criticidad",
-  business_value: "Valor de negocio",
-  blockage: "Bloqueos",
-  staleness: "Sin movimiento",
-};
-
-/** `deadline_pressure` → `Deadline pressure`; the last-resort readable form. */
-function humanize(code: string): string {
-  const words = code.replace(/[_-]+/g, " ").trim();
-  if (words === "") return code;
-  return words.charAt(0).toUpperCase() + words.slice(1);
+export function signalLabel(entry: { label?: string; code: string }): string {
+  const label = entry.label ?? "";
+  return label === "" ? entry.code : label;
 }
 
 function clamp01(value: number): number {

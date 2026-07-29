@@ -14,6 +14,9 @@ class OverdueWork:
     overdue returns 1.0.
     """
 
+    # Spanish on purpose: ``label`` and every ``reason`` below are user-facing (CLAUDE.md §Language).
+    label = "Trabajo vencido"
+
     def evaluate(self, data: SignalInput) -> SignalResult:
         """Read the overdue proportion of one project's open work.
 
@@ -25,10 +28,12 @@ class OverdueWork:
             The normalized ratio and a sentence naming both counts.
         """
         if data.open_task_count == 0:
-            return SignalResult(score=0.0, reason="No open tasks, so nothing can be overdue.")
+            return SignalResult(
+                score=0.0, reason="Sin tareas abiertas, no hay nada que pueda estar vencido."
+            )
 
         ratio = data.overdue_task_count / data.open_task_count
         return SignalResult.clamped(
             round(ratio, 4),
-            f"{data.overdue_task_count} of {data.open_task_count} open tasks are past their due date.",
+            f"{data.overdue_task_count} de {data.open_task_count} tareas abiertas pasaron su fecha.",
         )

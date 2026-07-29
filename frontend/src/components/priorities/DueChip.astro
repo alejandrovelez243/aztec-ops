@@ -21,7 +21,13 @@ const tone = toneForDue(due.kind);
 <span class:list={["chip", "due", tone]} title={due.detail}>
   <span class="visually-hidden">{due.detail}</span>
   <span aria-hidden="true">{due.lead}</span>
-  {due.figure !== null && <span class="figure" aria-hidden="true">{due.figure}</span>}
+  {
+    due.figure !== null && (
+      <span class="figure" aria-hidden="true">
+        {due.figure}
+      </span>
+    )
+  }
 </span>
 
 <style>

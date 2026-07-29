@@ -183,10 +183,9 @@ export const PAGE_COPY = {
   lead: "Tu muro de hoy: lo que pide atención primero, con el argumento que lo puso ahí.",
 } as const;
 
-/** Copy of the pending "Última actividad" region; see `ActivityPending.astro`. */
-export const ACTIVITY_COPY = {
-  title: "Última actividad",
-  pendingChip: "Falta endpoint",
-  body: "Esta región necesita una actividad de toda la cartera. Hoy la API solo publica la de un proyecto, en GET /api/v1/projects/{code}/activity, y no existe un GET /api/v1/activity que devuelva el registro global.",
-  aside: "Preferimos dejar el hueco a la vista antes que rellenarlo con datos de un solo proyecto disfrazados de portafolio.",
-} as const;
+/*
+ * The "Última actividad" region used to be a stated absence here, because the
+ * API published no portfolio-wide feed. `GET /api/v1/activity` landed; the copy
+ * now lives with the surface that owns the trail, in
+ * `src/components/activity/copy.ts` (`TEASER_COPY`).
+ */

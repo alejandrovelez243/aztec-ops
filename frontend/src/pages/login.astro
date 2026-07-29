@@ -23,7 +23,7 @@ const loginGuard = loginGuardScript(SESSION_COOKIE_NAME, SESSION_STORAGE_KEY);
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script is:inline set:html={loginGuard}></script>
+    <script is:inline set:html={loginGuard} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -96,7 +96,8 @@ const loginGuard = loginGuardScript(SESSION_COOKIE_NAME, SESSION_STORAGE_KEY);
         </form>
 
         <p class="small hint">
-          Entorno local: las credenciales del equipo sembrado están en el README.
+          Entorno local: las credenciales del equipo sembrado están en el
+          README.
         </p>
       </section>
     </main>

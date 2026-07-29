@@ -80,11 +80,15 @@ function parseSignal(entry: unknown): ScoreBreakdownEntry | null {
   const weight = entry["weight"];
   const contribution = entry["contribution"];
   const reason = entry["reason"];
+  const label = entry["label"];
   if (typeof code !== "string") return null;
   if (typeof raw !== "number" || typeof weight !== "number") return null;
   if (typeof contribution !== "number") return null;
   return {
     code,
+    // The code is a readable fallback; an entry with no name at all would
+    // render a blank row where the signal's name belongs.
+    label: typeof label === "string" ? label : code,
     raw,
     weight,
     contribution,

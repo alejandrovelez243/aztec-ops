@@ -73,7 +73,9 @@ async function publish(
   form: HTMLFormElement,
 ): Promise<void> {
   const body = String(new FormData(form).get("body") ?? "").trim();
-  const errorLine = root.querySelector<HTMLElement>("[data-field='note-error']");
+  const errorLine = root.querySelector<HTMLElement>(
+    "[data-field='note-error']",
+  );
 
   if (body === "") {
     if (errorLine !== null) {
@@ -84,7 +86,9 @@ async function publish(
   }
   if (errorLine !== null) errorLine.hidden = true;
 
-  const button = form.querySelector<HTMLButtonElement>("[data-action='add-note']");
+  const button = form.querySelector<HTMLButtonElement>(
+    "[data-action='add-note']",
+  );
   if (button !== null) setPending(button, true);
 
   const result = await postProjectNote(code, { body });
@@ -103,14 +107,21 @@ async function publish(
     body: result.data.body,
     occurredAt: result.data.created_at,
   });
-  toast({ kind: "success", title: "Nota publicada", detail: "Queda en la bitácora del proyecto." });
+  toast({
+    kind: "success",
+    title: "Nota publicada",
+    detail: "Queda en la bitácora del proyecto.",
+  });
 }
 
 /** Adds one note to the top of the list, unless it is already there. */
 function prepend(root: HTMLElement, note: NoteRow): void {
   const list = root.querySelector<HTMLElement>("[data-note-list]");
   if (list === null) return;
-  if (list.querySelector(`[data-note][data-code="${CSS.escape(note.code)}"]`) !== null) {
+  if (
+    list.querySelector(`[data-note][data-code="${CSS.escape(note.code)}"]`) !==
+    null
+  ) {
     return;
   }
 

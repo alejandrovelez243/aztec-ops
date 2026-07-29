@@ -243,12 +243,14 @@ recompute, so the timeline shows the state change and the reranking as one decis
 | `previous_value` | number 0–100 \| null | yes (null on first computation) |
 | `policy_version` | string (`PriorityPolicy.version`) | yes — a label such as `v1`, not a number; it is copied verbatim from the row so a score stays readable after its policy is retired |
 | `origin` | string (`POLICY \| MANUAL`) | yes |
-| `breakdown` | array of `{code, raw, weight, contribution, reason}` | yes |
+| `breakdown` | array of `{code, label, raw, weight, contribution, reason}` | yes |
 | `modifiers` | object mapping modifier code → number | no |
 | `flags` | array of string flag codes | no |
 
 `code` values in `breakdown` are the registered signal codes: `deadline_pressure`,
-`overdue_work`, `criticality`, `business_value`, `blockage`, `staleness`.
+`overdue_work`, `criticality`, `business_value`, `blockage`, `staleness`. `label` and `reason` come
+written in the interface's language, so a consumer renders a line it has never seen without mapping
+its `code` to text of its own — which is what keeps a seventh signal a backend-only change.
 
 **Consumed by** `snapshot-builder`. **Not** consumed by `priority-recalculator` — a handler
 never consumes what it emits, which is what keeps the bus acyclic.
@@ -268,18 +270,18 @@ never consumes what it emits, which is what keeps the bus acyclic.
     "policy_version": "v2",
     "origin": "POLICY",
     "breakdown": [
-      {"code": "deadline_pressure", "raw": 0.5, "weight": 0.25, "contribution": 12.5,
-       "reason": "No target date; treated as medium pressure and flagged"},
-      {"code": "overdue_work", "raw": 0.5, "weight": 0.20, "contribution": 10.0,
-       "reason": "2 of 4 open tasks are past due"},
-      {"code": "criticality", "raw": 0.75, "weight": 0.15, "contribution": 11.25,
-       "reason": "1 critical and 2 high open tasks"},
-      {"code": "business_value", "raw": 0.82, "weight": 0.15, "contribution": 12.3,
-       "reason": "28000 USD, log-normalized against the portfolio"},
-      {"code": "blockage", "raw": 1.0, "weight": 0.15, "contribution": 15.0,
-       "reason": "1 blocker open, raised 0 days ago, plus 1 blocked task"},
-      {"code": "staleness", "raw": 0.6, "weight": 0.10, "contribution": 6.0,
-       "reason": "No next step recorded"}
+      {"code": "deadline_pressure", "label": "Presión de fecha", "raw": 0.5, "weight": 0.25, "contribution": 12.5,
+       "reason": "Sin fecha comprometida, la presión de fecha no se puede evaluar."},
+      {"code": "overdue_work", "label": "Trabajo vencido", "raw": 0.5, "weight": 0.20, "contribution": 10.0,
+       "reason": "2 de 4 tareas abiertas pasaron su fecha."},
+      {"code": "criticality", "label": "Criticidad", "raw": 0.75, "weight": 0.15, "contribution": 11.25,
+       "reason": "3 tarea(s) abierta(s) de prioridad urgente."},
+      {"code": "business_value", "label": "Valor de negocio", "raw": 0.82, "weight": 0.15, "contribution": 12.3,
+       "reason": "Valor de contrato 28.000,00 USD, normalizado logarítmicamente contra el máximo del portafolio (50.000,00)."},
+      {"code": "blockage", "label": "Bloqueo", "raw": 1.0, "weight": 0.15, "contribution": 15.0,
+       "reason": "1 bloqueo(s) abierto(s); el más antiguo lleva 0 día(s) sin resolverse y necesita intervención."},
+      {"code": "staleness", "label": "Inactividad", "raw": 0.6, "weight": 0.10, "contribution": 6.0,
+       "reason": "Sin actividad registrada durante 8 día(s) frente a un umbral de 14 día(s); no hay próximo paso registrado."}
     ],
     "modifiers": {"engagement_type": 1.1},
     "flags": ["NO_TARGET_DATE", "OWNER_OVERLOADED"]

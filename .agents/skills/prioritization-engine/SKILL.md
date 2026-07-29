@@ -129,9 +129,20 @@ line. The evaluator is untouched.
 # backend/apps/prioritization/domain/specifications.py
 @register_risk(flag_code="NO_TARGET_DATE", severity=Severity.MEDIUM)
 class HasNoTargetDate(Specification):
+    label = "Sin fecha objetivo"
+
     def is_satisfied_by(self, data: RiskInput) -> bool:
         return not data.is_archived and data.target_date is None
+
+    def detail(self, data: RiskInput) -> str:
+        return "No hay fecha objetivo comprometida."
 ```
+
+`label` and `detail` are **Spanish**, and they are the only Spanish in the class: the interface is
+Spanish (`PRODUCT.md`) and the frontend may not keep an object literal keyed by a flag code
+(`docs/standards/FRONTEND.md` §7), so the words have to arrive from here or the chip renders as
+`NO_TARGET_DATE`. Identifiers, class names, docstrings, comments and tests stay English
+(`CLAUDE.md` §Language). `severity` stays a code the client branches on — never translate it.
 
 The evaluator returns a list of `RiskFlag` **values**, and nothing persists them (ADR 0011): the
 six conditions are pure functions of rows that already exist, so `evaluate_risk` is called where the

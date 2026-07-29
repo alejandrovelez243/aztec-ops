@@ -14,7 +14,15 @@
  * grew a field cannot take an island down.
  */
 
+import { cloneTemplate, setField } from "../../lib/dom/patch";
 import type { ToneSpec } from "./tone";
+
+/**
+ * Template cloning and field filling are shared with the portfolio-wide feed
+ * (`lib/dom/patch.ts`) and re-exported here so the projects islands keep one
+ * import.
+ */
+export { cloneTemplate, setField };
 
 /** Every tone class a patched element might currently be wearing. */
 const TONE_CLASSES = [
@@ -25,48 +33,6 @@ const TONE_CLASSES = [
   "tone-piedra",
   "tone-data",
 ];
-
-/**
- * Clones the markup of `<template data-template="name">` inside `root`.
- *
- * @returns The first element of the clone, or `null` when the template is
- *   absent — an island rendered on a page that does not host it must no-op, not
- *   throw, because every island script runs on every navigation.
- */
-export function cloneTemplate(
-  root: ParentNode,
-  name: string,
-): HTMLElement | null {
-  const template = root.querySelector(`template[data-template="${name}"]`);
-  if (!(template instanceof HTMLTemplateElement)) return null;
-  const fragment = template.content.cloneNode(true);
-  const first = fragment.firstElementChild;
-  return first instanceof HTMLElement ? first : null;
-}
-
-/**
- * Writes text into every `[data-field="name"]` inside `scope`.
- *
- * Text, never HTML: values here are operator prose (a blocker description, a
- * note body) and `innerHTML` would make every one of them a script tag.
- */
-export function setField(scope: ParentNode, name: string, value: string): void {
-  for (const node of scope.querySelectorAll(`[data-field="${name}"]`)) {
-    node.textContent = value;
-  }
-}
-
-/** Sets an attribute on every `[data-field="name"]` inside `scope`. */
-export function setFieldAttribute(
-  scope: ParentNode,
-  name: string,
-  attribute: string,
-  value: string,
-): void {
-  for (const node of scope.querySelectorAll(`[data-field="${name}"]`)) {
-    node.setAttribute(attribute, value);
-  }
-}
 
 /**
  * Repaints one element with a tone, dropping whichever tone it wore before.
@@ -147,11 +113,19 @@ export function pulse(element: HTMLElement): void {
   ) {
     return;
   }
+  // The ring colour is read from the design token rather than written here:
+  // this file may not contain a colour literal, and a keyframe carrying an
+  // unresolved `var()` is rejected by the animation API in some engines.
+  const ring = getComputedStyle(document.documentElement)
+    .getPropertyValue("--cobalto-papel")
+    .trim();
+  if (ring === "") return;
+
   element.animate(
     [
-      { boxShadow: "0 0 0 0 var(--cobalto-papel)" },
-      { boxShadow: "0 0 0 6px var(--cobalto-papel)", offset: 0.35 },
-      { boxShadow: "0 0 0 0 var(--cobalto-papel)" },
+      { boxShadow: `0 0 0 0 ${ring}` },
+      { boxShadow: `0 0 0 6px ${ring}`, offset: 0.35 },
+      { boxShadow: `0 0 0 0 ${ring}` },
     ],
     { duration: 900, easing: "ease-out" },
   );

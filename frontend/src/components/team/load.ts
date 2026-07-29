@@ -12,6 +12,7 @@
  * on this side would be a second definition of overload that no admin change could correct.
  */
 import type { TeamLoadEntry } from "../../lib/api/domain";
+import { errorDetailByCode } from "../../lib/api/error-copy";
 import type { ApiErrorCode } from "../../lib/api/errors";
 
 /**
@@ -57,6 +58,10 @@ export const BLANK_ENTRY: TeamLoadEntry = {
   alias: "",
   label: "",
   role: null,
+  // `TeamLoadView` grew these two when the roster read started reporting who can
+  // actually sign in; a blank row claims neither.
+  is_active: false,
+  has_password: false,
   weekly_capacity_points: 0,
   load_points: 0,
   utilization: 0,
@@ -122,7 +127,7 @@ export function barPercent(utilization: number): number {
  */
 export function formatUtilization(utilization: number): string {
   const safe = Number.isFinite(utilization) ? utilization : 0;
-  return `${Math.round(safe * FULL_BAR_PERCENT)} %`;
+  return `${Math.round(safe * FULL_BAR_PERCENT)}\u00A0%`;
 }
 
 /**
@@ -226,21 +231,8 @@ export function chipsFor(entry: TeamLoadEntry): readonly LoadChip[] {
  * nothing when the impossible happens is worse than one that admits it.
  */
 export function errorCopy(code: ApiErrorCode): string {
-  return ERROR_COPY[code];
+  return errorDetailByCode(code);
 }
-
-const ERROR_COPY: Record<ApiErrorCode, string> = {
-  network_error:
-    "No hubo respuesta de la API. Comprueba que el backend esté en marcha y vuelve a intentarlo.",
-  not_found: "La API no reconoce la ruta de carga del equipo.",
-  validation_error: "La API rechazó los parámetros de la consulta de carga.",
-  transition_not_allowed:
-    "La API respondió con un conflicto de transición, que una consulta de solo lectura no debería provocar.",
-  conflicting_state:
-    "La API respondió con un conflicto de estado, que una consulta de solo lectura no debería provocar.",
-  unknown_error:
-    "La API respondió con un error inesperado. Si acabas de volver, puede que tu sesión haya caducado.",
-};
 
 /**
  * The wall-clock hour of an instant, for the staleness marker: `14:32`.

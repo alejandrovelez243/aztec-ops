@@ -6,7 +6,18 @@ Both are re-exported here so a caller in another context imports from
 story somebody preferred afterwards.
 """
 
-from apps.activity.services.read_timeline import TimelineFilters, read_project_timeline
+from apps.activity.services.read_timeline import (
+    PortfolioTimelineFilters,
+    TimelineFilters,
+    read_portfolio_timeline,
+    read_project_timeline,
+)
 from apps.activity.services.record import write_activity
 
-__all__ = ["TimelineFilters", "read_project_timeline", "write_activity"]
+__all__ = [
+    "PortfolioTimelineFilters",
+    "TimelineFilters",
+    "read_portfolio_timeline",
+    "read_project_timeline",
+    "write_activity",
+]

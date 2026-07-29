@@ -37,7 +37,11 @@ const { renderedAt } = Astro.props;
       class="figure"
       data-stale-when></span>.
   </span>
-  <button class="btn btn-secondary reconnect" type="button" data-action="reconnect">
+  <button
+    class="btn btn-secondary reconnect"
+    type="button"
+    data-action="reconnect"
+  >
     Reconectar
   </button>
 </div>
@@ -45,7 +49,7 @@ const { renderedAt } = Astro.props;
 <p class="visually-hidden" data-announcer aria-live="polite"></p>
 
 <template data-signal-template>
-  <SignalBar code="" points="" reason="" ratio={0} />
+  <SignalBar code="" label="" points="" reason="" ratio={0} />
 </template>
 
 <!--
@@ -94,6 +98,8 @@ const { renderedAt } = Astro.props;
   /** One line of a breakdown, narrowed out of an envelope payload. */
   interface SignalLine {
     readonly code: string;
+    /** The signal's Spanish name, carried by the envelope beside its reason. */
+    readonly label: string;
     readonly contribution: number;
     readonly reason: string;
   }
@@ -179,7 +185,11 @@ const { renderedAt } = Astro.props;
   }
 
   /** Moves selection and focus by one row; a step past either end does nothing. */
-  function stepSelection(root: HTMLElement, from: HTMLElement, delta: number): void {
+  function stepSelection(
+    root: HTMLElement,
+    from: HTMLElement,
+    delta: number,
+  ): void {
     const list = rowsOf(root);
     const index = list.indexOf(from);
     if (index === -1) return;
@@ -205,7 +215,9 @@ const { renderedAt } = Astro.props;
   // --- Live patching -----------------------------------------------------------
 
   /** Narrows one `project.priority.recalculated` payload, or `null` if malformed. */
-  function readRecalculation(payload: Record<string, unknown>): Recalculation | null {
+  function readRecalculation(
+    payload: Record<string, unknown>,
+  ): Recalculation | null {
     const value = payload["value"];
     if (typeof value !== "number") return null;
     const policy = payload["policy_version"];
@@ -215,11 +227,16 @@ const { renderedAt } = Astro.props;
       for (const entry of raw) {
         if (!isRecord(entry)) continue;
         const code = entry["code"];
+        const label = entry["label"];
         const contribution = entry["contribution"];
         const reason = entry["reason"];
-        if (typeof code !== "string" || typeof contribution !== "number") continue;
+        if (typeof code !== "string" || typeof contribution !== "number")
+          continue;
         signals.push({
           code,
+          // A line from before labels existed falls back to its code rather
+          // than rendering blank: an unnamed contribution is unauditable.
+          label: typeof label === "string" && label !== "" ? label : code,
           contribution,
           reason: typeof reason === "string" ? reason : "",
         });
@@ -233,7 +250,10 @@ const { renderedAt } = Astro.props;
   }
 
   /** Rebuilds a panel's breakdown from the envelope, cloning `SignalBar`'s markup. */
-  function renderSignals(list: HTMLElement, signals: readonly SignalLine[]): void {
+  function renderSignals(
+    list: HTMLElement,
+    signals: readonly SignalLine[],
+  ): void {
     const template = document.querySelector<HTMLTemplateElement>(
       "[data-signal-template]",
     );
@@ -244,12 +264,15 @@ const { renderedAt } = Astro.props;
       const clone = template.content.firstElementChild?.cloneNode(true);
       if (!(clone instanceof HTMLElement)) continue;
       clone.dataset.signal = line.code;
-      setSlotText(clone, "code", line.code);
+      setSlotText(clone, "label", line.label);
       setSlotText(clone, "points", formatPoints(line.contribution));
       setSlotText(clone, "reason", line.reason);
       const fill = slot(clone, "fill");
       if (fill !== null) {
-        fill.style.setProperty("--bar", String(barRatio(line.contribution, widest)));
+        fill.style.setProperty(
+          "--bar",
+          String(barRatio(line.contribution, widest)),
+        );
       }
       fragment.appendChild(clone);
     }
@@ -276,7 +299,11 @@ const { renderedAt } = Astro.props;
     if (data.policyVersion !== null) {
       setSlotText(detail, "policy", data.policyVersion);
     }
-    setSlotText(detail, "computed", formatInstant(occurredAt) ?? "sin registro");
+    setSlotText(
+      detail,
+      "computed",
+      formatInstant(occurredAt) ?? "sin registro",
+    );
     const list = detail.querySelector<HTMLElement>("[data-signals]");
     if (list !== null) renderSignals(list, data.signals);
   }
@@ -298,7 +325,10 @@ const { renderedAt } = Astro.props;
    * sorts before `"Z"` — a lexicographic test would drop the newest frames on every
    * project whose snapshot was rebuilt in the same second.
    */
-  function isOutdated(renderedAt: string | undefined, occurredAt: string): boolean {
+  function isOutdated(
+    renderedAt: string | undefined,
+    occurredAt: string,
+  ): boolean {
     if (renderedAt === undefined) return false;
     const rendered = Date.parse(renderedAt);
     const occurred = Date.parse(occurredAt);
@@ -528,6 +558,13 @@ const { renderedAt } = Astro.props;
         return "No hay conexión con el servidor. Vuelve a intentarlo.";
       case "transition_not_allowed":
         return "Una regla del flujo de trabajo rechazó la operación.";
+      case "auth":
+        return "Tu sesión expiró. Vuelve a iniciar sesión para ajustar la prioridad.";
+      case "permission_denied":
+        // The control is only rendered for an ops lead, so reaching this means
+        // the capability was lost mid-session — say so instead of blaming the
+        // request.
+        return "Ajustar la prioridad está reservado a un responsable de operaciones.";
       case "unknown":
         return unknownOverrideMessage(error);
     }
@@ -574,7 +611,10 @@ const { renderedAt } = Astro.props;
     const reason = String(values.get("reason") ?? "").trim();
     const position = Number.parseInt(String(values.get("position") ?? ""), 10);
     if (reason === "") {
-      showFormError(form, "Escribe el motivo: un ajuste sin motivo no queda registrado.");
+      showFormError(
+        form,
+        "Escribe el motivo: un ajuste sin motivo no queda registrado.",
+      );
       return;
     }
     if (!Number.isInteger(position) || position < 1) {
@@ -582,7 +622,9 @@ const { renderedAt } = Astro.props;
       return;
     }
 
-    const submit = form.querySelector<HTMLButtonElement>("[data-override-submit]");
+    const submit = form.querySelector<HTMLButtonElement>(
+      "[data-override-submit]",
+    );
     startLoading(submit);
     const result = await postPriorityOverride(code, { position, reason });
     stopLoading(submit);
@@ -590,7 +632,11 @@ const { renderedAt } = Astro.props;
     if (!result.ok) {
       const message = overrideErrorMessage(result.error);
       showFormError(form, message);
-      toast({ kind: "error", title: "No se guardó el ajuste", detail: message });
+      toast({
+        kind: "error",
+        title: "No se guardó el ajuste",
+        detail: message,
+      });
       return;
     }
 
@@ -659,7 +705,9 @@ const { renderedAt } = Astro.props;
         window.location.reload();
         break;
       case "open-override": {
-        const form = detail?.querySelector<HTMLFormElement>("[data-override-form]");
+        const form = detail?.querySelector<HTMLFormElement>(
+          "[data-override-form]",
+        );
         if (form === undefined || form === null) break;
         const opening = form.hidden;
         form.hidden = !opening;
@@ -678,7 +726,8 @@ const { renderedAt } = Astro.props;
       }
       case "clear-override": {
         const code = detail?.dataset.code;
-        if (code === undefined || !(control instanceof HTMLButtonElement)) break;
+        if (code === undefined || !(control instanceof HTMLButtonElement))
+          break;
         void clearOverride(root, control, code);
         break;
       }
@@ -724,13 +773,16 @@ const { renderedAt } = Astro.props;
     });
 
     if (getOperator()?.isOpsLead === true) {
-      for (const control of root.querySelectorAll<HTMLElement>("[data-ops-lead]")) {
+      for (const control of root.querySelectorAll<HTMLElement>(
+        "[data-ops-lead]",
+      )) {
         control.hidden = false;
       }
     }
 
     const onClick = (event: MouseEvent): void => handleClick(root, event);
-    const onKeydown = (event: KeyboardEvent): void => handleKeydown(root, event);
+    const onKeydown = (event: KeyboardEvent): void =>
+      handleKeydown(root, event);
     const onSubmit = (event: SubmitEvent): void => {
       const form = event.target;
       if (!(form instanceof HTMLFormElement)) return;

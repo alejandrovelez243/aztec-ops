@@ -91,7 +91,9 @@ function wireOverrideDialog(
   code: string,
   signal: AbortSignal,
 ): void {
-  const dialog = plate.querySelector<HTMLDialogElement>("[data-override-dialog]");
+  const dialog = plate.querySelector<HTMLDialogElement>(
+    "[data-override-dialog]",
+  );
   const form = plate.querySelector<HTMLFormElement>("[data-override-form]");
   const mode = plate.querySelector<HTMLSelectElement>("[data-override-mode]");
 
@@ -109,7 +111,9 @@ function wireOverrideDialog(
         dialog?.close();
         return;
       }
-      const clear = target.closest<HTMLButtonElement>("[data-action='clear-override']");
+      const clear = target.closest<HTMLButtonElement>(
+        "[data-action='clear-override']",
+      );
       if (clear !== null) void revokeOverride(plate, code, clear);
     },
     { signal },
@@ -118,7 +122,11 @@ function wireOverrideDialog(
   mode?.addEventListener(
     "change",
     () => {
-      setField(plate, "amount-label", mode.value === "boost" ? "Impulso" : "Posición");
+      setField(
+        plate,
+        "amount-label",
+        mode.value === "boost" ? "Impulso" : "Posición",
+      );
     },
     { signal },
   );
@@ -150,7 +158,9 @@ async function saveOverride(
   const mode = String(data.get("mode") ?? "position");
   const amount = Number(data.get("amount"));
   const reason = String(data.get("reason") ?? "").trim();
-  const errorLine = plate.querySelector<HTMLElement>("[data-field='override-error']");
+  const errorLine = plate.querySelector<HTMLElement>(
+    "[data-field='override-error']",
+  );
 
   if (reason === "" || !Number.isFinite(amount)) {
     if (errorLine !== null) {
@@ -161,7 +171,9 @@ async function saveOverride(
   }
   if (errorLine !== null) errorLine.hidden = true;
 
-  const button = form.querySelector<HTMLButtonElement>("[data-action='submit-override']");
+  const button = form.querySelector<HTMLButtonElement>(
+    "[data-action='submit-override']",
+  );
   if (button !== null) setPending(button, true);
 
   const body =
@@ -216,7 +228,9 @@ async function revokeOverride(
 /** Shows or hides the "Ajuste manual" block and its companion control. */
 function applyOverride(plate: HTMLElement, forced: Override | null): void {
   const block = plate.querySelector<HTMLElement>("[data-override]");
-  const clear = plate.querySelector<HTMLElement>("[data-action='clear-override']");
+  const clear = plate.querySelector<HTMLElement>(
+    "[data-action='clear-override']",
+  );
   if (block !== null) {
     block.hidden = forced === null;
     setField(block, "override-reason", forced?.reason ?? "");
@@ -273,7 +287,10 @@ function patchBreakdown(
   const list = plate.querySelector<HTMLElement>("[data-breakdown]");
   if (list === null || entries.length === 0) return;
 
-  const total = entries.reduce((sum, entry) => sum + Math.abs(entry.contribution), 0);
+  const total = entries.reduce(
+    (sum, entry) => sum + Math.abs(entry.contribution),
+    0,
+  );
   const seen = new Set<string>();
 
   for (const entry of entries) {
@@ -287,7 +304,7 @@ function patchBreakdown(
       row.dataset.signal = entry.code;
       list.appendChild(row);
     }
-    setField(row, "signal-name", signalLabel(entry.code));
+    setField(row, "signal-name", signalLabel(entry));
     setField(row, "contribution", formatContribution(entry.contribution));
     setField(row, "reason", entry.reason);
     const bar = row.querySelector<HTMLElement>("[data-field='bar']");

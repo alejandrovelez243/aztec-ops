@@ -28,7 +28,9 @@ const { title, body, icon, tone } = Astro.props;
 ---
 
 <div class="region card">
-  <span class:list={["mark", tone]} aria-hidden="true"><Icon name={icon} size={22} /></span>
+  <span class:list={["mark", tone]} aria-hidden="true"
+    ><Icon name={icon} size={22} /></span
+  >
   <p class="h2">{title}</p>
   <p class="body-text">{body}</p>
   <p class="actions"><slot /></p>

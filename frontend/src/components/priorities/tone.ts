@@ -11,11 +11,7 @@
 
 /** The five tone classes `styles/base.css` defines; nothing else may colour data. */
 export type ToneClass =
-  | "tone-rojo"
-  | "tone-ambar"
-  | "tone-verde"
-  | "tone-cielo"
-  | "tone-piedra";
+  "tone-rojo" | "tone-ambar" | "tone-verde" | "tone-cielo" | "tone-piedra";
 
 /**
  * Severity vocabulary → tone (`docs/API.md` §2.2, DESIGN.md §Colors).

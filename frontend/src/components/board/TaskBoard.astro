@@ -1,0 +1,741 @@
+---
+import EmptyState from "../ui/EmptyState.astro";
+import Icon from "../ui/Icon.astro";
+import type { BoardSurfaceModel, ProjectCardModel, Tone } from "./board-model";
+
+/**
+ * The board: the tasks of the selected project, one column per task workflow state, dragged
+ * left and right.
+ *
+ * The rail answers "where is every project"; this answers "what is actually left on this
+ * one", and it is the surface the day's work is moved on. Columns are the TASK workflow's
+ * states in the operator's own order — every one of them, occupied or not — so a task can be
+ * dropped into a state nobody is in yet and an empty column can say so out loud.
+ *
+ * One panel per engagement type, mirroring `ProjectRail.astro`: two types can be bound to two
+ * different task graphs, so the select swaps these columns as well as the rail's bands.
+ *
+ * **Why the cards are `<template>`s.** The tasks arrive after the selection, so the runtime
+ * builds them; cloning a template keeps Astro's scope attribute on every node, and an element
+ * built with `createElement` carries none and would render unstyled.
+ *
+ * **The heading is the announcement.** `aria-live="polite"` sits on the heading block and
+ * nowhere else: a live region around the whole board would read every task again on each
+ * `task.updated`, which is worse than announcing nothing (`FRONTEND.md` §8).
+ *
+ * With nothing selected the region is not blank — an empty region is an unfinished view, so it
+ * invites the choice instead (DESIGN.md, Present-Absence), while the rail stays fully usable.
+ */
+export interface Props {
+  surfaces: readonly BoardSurfaceModel[];
+  /** Engagement type painted first; the browser may swap to the operator's stored choice. */
+  active: string;
+  /** The project rendered as selected on the server, or `null` for the inviting state. */
+  selected?: { card: ProjectCardModel; tone: Tone } | null;
+}
+
+const { surfaces, active, selected = null } = Astro.props;
+
+/** Cards drawn while the tasks are in flight — the geometry of a real card, shimmering. */
+const SKELETON_CARDS = [0, 1];
+---
+
+<section
+  class="tboard"
+  data-task-board
+  data-state={selected === null ? "idle" : "loading"}
+  aria-labelledby="task-board-title"
+>
+  <header class="tb-head">
+    <div class="tb-heading" aria-live="polite">
+      <h2 class="h2" id="task-board-title" data-tb-title lang="es">
+        {selected === null ? "Tareas" : `Tareas de ${selected.card.code}`}
+      </h2>
+      <p class="small tb-sub" data-tb-sub lang="es">
+        {
+          selected === null
+            ? "Ningún proyecto seleccionado."
+            : "Cargando las tareas del proyecto…"
+        }
+      </p>
+    </div>
+
+    <div class="tb-project" data-tb-project hidden={selected === null}>
+      <span class="chip chip-code" data-tb-code>
+        {selected === null ? "" : selected.card.code}
+      </span>
+      <span
+        class:list={[
+          "chip",
+          selected === null ? "tone-piedra" : selected.tone.className,
+        ]}
+        style={selected === null ? null : selected.tone.style}
+        data-tb-state
+        lang="es"
+      >
+        <span data-card-state-text>
+          {selected === null ? "" : selected.card.stateLabel}
+        </span>
+      </span>
+      <span class="tb-owner" data-tb-owner>
+        {
+          selected !== null && selected.card.owner !== null && (
+            <span
+              class="avatar tb-avatar"
+              style={`--avatar-h: ${selected.card.owner.hue}`}
+              title={selected.card.owner.label}
+              aria-label={`Responsable: ${selected.card.owner.label}`}
+              role="img"
+            >
+              {selected.card.owner.initials}
+            </span>
+          )
+        }
+      </span>
+      <a
+        class="btn btn-secondary tb-link"
+        data-tb-link
+        href={selected === null
+          ? "/projects"
+          : `/projects/${selected.card.code}`}
+        lang="es"
+      >
+        Ver proyecto
+        <Icon name="chevron-right" size={16} />
+      </a>
+      <button
+        type="button"
+        class="btn btn-ghost btn-icon"
+        data-tb-close
+        hidden={selected === null}
+        aria-label="Quitar la selección de proyecto"
+        title="Quitar la selección"
+      >
+        <Icon name="close" size={18} />
+      </button>
+    </div>
+  </header>
+
+  <div class="tb-idle" data-tb-idle hidden={selected !== null}>
+    <EmptyState
+      scene="quiet"
+      title="Elige un proyecto en el carril"
+      description="Toca una tarjeta de la izquierda y aquí aparecerán sus tareas, una columna por estado, listas para moverse."
+    />
+  </div>
+
+  <div class="tb-error card tone-rojo" data-tb-error hidden role="alert">
+    <Icon name="alert" size={18} />
+    <div class="tb-error-text">
+      <p class="title" data-tb-error-title lang="es"></p>
+      <p class="small" data-tb-error-detail lang="es"></p>
+    </div>
+    <button type="button" class="btn btn-secondary" data-tb-retry lang="es"
+      >Reintentar</button
+    >
+  </div>
+
+  <div class="tb-empty" data-tb-empty hidden>
+    <EmptyState
+      scene="clear"
+      title="Este proyecto todavía no tiene tareas"
+      description="Cuando alguien registre la primera, aparecerá aquí sin recargar."
+    />
+  </div>
+
+  <div class="tb-stage" data-tb-stage hidden={selected === null}>
+    {
+      surfaces.map((surface) => (
+        <div
+          class="tb-panel"
+          data-panel
+          data-engagement-code={surface.engagementType.code}
+          hidden={surface.engagementType.code !== active}
+        >
+          <div
+            class="tb-columns"
+            data-scroller
+            aria-label={`Tareas por estado (${surface.engagementType.label})`}
+          >
+            {surface.taskStates.map((column) => (
+              <section
+                class:list={["tcolumn", column.tone.className]}
+                style={column.tone.style}
+                data-column
+                data-state-code={column.state.code}
+                data-state-label={column.state.label}
+                data-state-category={column.state.category}
+                data-tone-class={column.tone.className}
+                data-tone-style={column.tone.style ?? ""}
+                data-drop="idle"
+                aria-label={`Tareas en ${column.state.label}`}
+              >
+                <header class="tcolumn-head">
+                  <span class="tcolumn-rail" aria-hidden="true" />
+                  <span class="dot" aria-hidden="true" />
+                  <h3 class="label tcolumn-title" lang="es">
+                    {column.state.label}
+                  </h3>
+                  <span class="chip figure tcolumn-count" data-column-count>
+                    0
+                  </span>
+                </header>
+
+                <p class="chip tcolumn-lock" data-column-lock hidden role="status">
+                  <Icon name="lock" size={14} />
+                  <span data-column-lock-text lang="es" />
+                </p>
+
+                <div class="well tcolumn-well">
+                  <div
+                    class="tcolumn-cards"
+                    data-column-body
+                    role="grid"
+                    aria-label={`Tareas en ${column.state.label}`}
+                  />
+                  <div class="tcolumn-skeleton" data-tb-skeleton aria-hidden="true">
+                    {SKELETON_CARDS.map(() => (
+                      <div class="card tb-skel-card">
+                        <span class="skeleton sk-line" />
+                        <span class="skeleton sk-line short" />
+                        <div class="tb-skel-foot">
+                          <span class="skeleton sk-avatar" />
+                          <span class="skeleton sk-chip" />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p class="small tcolumn-empty" data-column-empty lang="es">
+                    Sin tareas en este estado.
+                  </p>
+                </div>
+              </section>
+            ))}
+          </div>
+        </div>
+      ))
+    }
+  </div>
+
+  {
+    /* One home for the card markup; the runtime clones it per task so the cloned
+      nodes keep this component's scoped styles. */
+  }
+  <template data-template="task">
+    <article
+      class="card card-hover tcard"
+      data-card
+      data-pending="false"
+      role="row"
+      aria-selected="false"
+      tabindex="-1"
+    >
+      <div class="tcard-inner" role="gridcell">
+        <a class="title tcard-title" data-tb-task-link lang="es"></a>
+        <div class="tcard-foot">
+          <span class="tcard-owner" data-tb-task-owner></span>
+          <span class="chip tcard-due" data-tb-task-due lang="es"></span>
+          <span class="chip tone-rojo" data-tb-task-overdue hidden lang="es"
+            >vencida</span
+          >
+          <span class="chip chip-code tcard-code" data-tb-task-code></span>
+          <span class="chip tcard-pending" data-card-pending hidden lang="es">
+            <span class="tcard-spinner" aria-hidden="true"></span>
+            Moviendo…
+          </span>
+          <button
+            type="button"
+            class="btn btn-ghost btn-icon tcard-move"
+            data-move-trigger
+            aria-haspopup="menu"
+            aria-expanded="false"
+            aria-controls="board-move-menu"
+            title="Mover a…"
+          >
+            <span class="visually-hidden" data-tb-task-move-label></span>
+            <Icon name="chevron-down" size={18} />
+          </button>
+        </div>
+        <div class="tcard-deps" data-tb-task-deps hidden></div>
+      </div>
+    </article>
+  </template>
+
+  <template data-template="dependency">
+    <span class="chip tcard-dep" data-tb-dep></span>
+  </template>
+
+  <template data-template="owner">
+    <span class="avatar tcard-avatar" data-tb-owner-disk role="img"></span>
+  </template>
+</section>
+
+<style>
+  .tboard {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-height: 0;
+    min-width: 0;
+    padding: var(--space-4) 0 0;
+    background-color: var(--carta);
+  }
+
+  .tb-head {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+    padding-inline: var(--space-5);
+  }
+
+  .tb-heading {
+    min-width: 0;
+  }
+
+  .tb-project {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    margin-left: auto;
+  }
+
+  .tb-project[hidden] {
+    display: none;
+  }
+
+  .tb-owner {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .tb-avatar {
+    width: var(--space-5);
+    height: var(--space-5);
+  }
+
+  [data-tb-close][hidden] {
+    display: none;
+  }
+
+  /* --- The four arms --- */
+
+  .tb-idle,
+  .tb-empty {
+    display: grid;
+    place-items: center;
+    flex: 1;
+    min-height: 0;
+    padding-inline: var(--space-5);
+  }
+
+  .tb-error {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    margin-inline: var(--space-5);
+    padding: var(--space-4);
+    background-color: var(--tone-wash);
+    border-color: var(--tone-solid);
+    color: var(--tone-ink);
+    flex-wrap: wrap;
+  }
+
+  .tb-error-text {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .tb-error-text p {
+    color: var(--tone-ink);
+  }
+
+  .tb-idle[hidden],
+  .tb-empty[hidden],
+  .tb-error[hidden],
+  .tb-stage[hidden] {
+    display: none;
+  }
+
+  /* Loading and ready both draw the columns; error, empty and idle replace them. */
+  .tboard[data-state="error"] .tb-stage,
+  .tboard[data-state="empty"] .tb-stage,
+  .tboard[data-state="idle"] .tb-stage {
+    display: none;
+  }
+
+  /* --- The stage of columns --- */
+
+  .tb-stage {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .tb-panel {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .tb-panel[hidden] {
+    display: none;
+  }
+
+  .tb-columns {
+    display: grid;
+    grid-auto-flow: column;
+    /* One column's resting width: wide enough for a task title on two lines,
+       narrow enough that four fit a laptop beside the rail. */
+    grid-auto-columns: minmax(272px, 1fr);
+    gap: var(--space-4);
+    align-items: stretch;
+    height: 100%;
+    padding: var(--space-4) var(--space-5);
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* The board scrolls sideways and never hands the gesture to the page behind it. */
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+  }
+
+  /* A carried card must land where the hand is, not where a snap point decides. */
+  :global(html[data-board-dragging="true"]) .tb-columns {
+    scroll-snap-type: none;
+  }
+
+  .tcolumn {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-width: 0;
+    height: 100%;
+    min-height: 0;
+    scroll-snap-align: start;
+    transition: opacity var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .tcolumn-head {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+    min-height: var(--space-6);
+  }
+
+  .tcolumn-rail {
+    position: absolute;
+    inset-block: var(--space-1);
+    left: 0;
+    width: var(--rail-width);
+    border-radius: var(--radius-full);
+    background-color: var(--tone-solid);
+  }
+
+  .tcolumn-title {
+    color: var(--tinta);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tcolumn-count {
+    margin-left: auto;
+    background-color: var(--pozo);
+    color: var(--tinta-media);
+  }
+
+  .tcolumn-lock {
+    align-self: flex-start;
+    background-color: var(--pozo);
+    color: var(--tinta-media);
+    white-space: normal;
+  }
+
+  .tcolumn-lock[hidden] {
+    display: none;
+  }
+
+  .tcolumn-well {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    min-height: 120px;
+    flex: 1;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    transition: box-shadow var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .tcolumn-cards {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .tcolumn-cards:empty {
+    display: none;
+  }
+
+  .tcolumn-empty {
+    padding: var(--space-3) var(--space-2);
+    color: var(--tinta-suave);
+    text-align: center;
+  }
+
+  .tcolumn-empty[hidden] {
+    display: none;
+  }
+
+  /* --- Loading: the skeleton lives in the final geometry, inside the columns --- */
+
+  .tcolumn-skeleton {
+    display: none;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .tboard[data-state="loading"] .tcolumn-skeleton {
+    display: flex;
+  }
+
+  .tboard[data-state="loading"] .tcolumn-cards,
+  .tboard[data-state="loading"] .tcolumn-empty {
+    display: none;
+  }
+
+  .tb-skel-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+  }
+
+  .tb-skel-foot {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .sk-line {
+    width: 100%;
+    height: var(--space-4);
+  }
+
+  .sk-line.short {
+    width: 60%;
+  }
+
+  .sk-avatar {
+    width: var(--space-5);
+    height: var(--space-5);
+    border-radius: var(--radius-full);
+  }
+
+  .sk-chip {
+    width: var(--space-8);
+    height: var(--space-4);
+  }
+
+  /* --- Drag legality --- */
+
+  .tcolumn[data-drop="illegal"],
+  .tcolumn[data-drop="blocked"] {
+    opacity: 0.55;
+  }
+
+  .tcolumn[data-drop="legal"] .tcolumn-well {
+    box-shadow: inset 0 0 0 2px var(--cobalto-papel);
+  }
+
+  .tcolumn[data-drop="legal"][data-hover="true"] .tcolumn-well {
+    box-shadow: inset 0 0 0 2px var(--cobalto);
+  }
+
+  /* --- One task card, cloned from the template above --- */
+
+  .tboard :global(.tcard) {
+    padding: var(--space-3);
+    position: relative;
+    /* The grab affordance; vertical panning stays the browser's so a touch
+       scroll over the column still scrolls. */
+    touch-action: pan-y;
+    cursor: grab;
+  }
+
+  .tboard :global(.tcard[hidden]) {
+    display: none;
+  }
+
+  .tboard :global(.tcard-inner) {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .tboard :global(.tcard-title) {
+    color: var(--tinta);
+    text-decoration: none;
+  }
+
+  .tboard :global(.tcard-title:hover) {
+    color: var(--cobalto);
+    text-decoration: underline;
+  }
+
+  .tboard :global(.tcard-foot) {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    padding-top: var(--space-2);
+    border-top: var(--border-width) solid var(--hairline);
+  }
+
+  .tboard :global(.tcard-avatar) {
+    width: var(--space-5);
+    height: var(--space-5);
+  }
+
+  .tboard :global(.tcard-code) {
+    background-color: var(--pozo);
+  }
+
+  .tboard :global(.tcard-due) {
+    background-color: var(--tone-wash, var(--pozo));
+    color: var(--tone-ink, var(--tinta-media));
+  }
+
+  .tboard :global(.tcard-move) {
+    margin-left: auto;
+  }
+
+  .tboard :global(.tcard-pending) {
+    background-color: var(--cobalto-papel);
+    color: var(--cobalto);
+  }
+
+  .tboard :global(.tcard-pending[hidden]) {
+    display: none;
+  }
+
+  .tboard :global(.tcard-spinner) {
+    width: var(--space-3);
+    height: var(--space-3);
+    border-radius: var(--radius-full);
+    border: 2px solid var(--cobalto-papel);
+    border-top-color: var(--cobalto);
+    animation: gira-tarea 700ms linear infinite;
+  }
+
+  /* Declared here rather than borrowed from base.css: a scoped block renames the
+     keyframes it owns, and an animation that silently resolves to nothing is worse
+     than a duplicated four-line rule. */
+  @keyframes gira-tarea {
+    to {
+      transform: rotate(1turn);
+    }
+  }
+
+  .tboard :global(.tcard-deps) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+  }
+
+  .tboard :global(.tcard-deps[hidden]) {
+    display: none;
+  }
+
+  /* A dependency nobody could resolve keeps the operation's own words, so it
+     reads as prose rather than as a code that failed to link. */
+  .tboard :global(.tcard-dep) {
+    background-color: var(--pozo);
+    color: var(--tinta-media);
+    text-transform: none;
+    letter-spacing: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: inline-block;
+  }
+
+  .tboard :global(.tcard-dep[data-resolved="true"]) {
+    font-family: var(--font-mono);
+  }
+
+  .tboard :global(.tcard[data-dragging="true"]) {
+    cursor: grabbing;
+    box-shadow: var(--shadow-lifted);
+    z-index: var(--z-drawer);
+    will-change: transform;
+    /* The follower writes `transform` every frame; `.card-hover`'s transition
+       would smear each of those writes over 120ms and eat the spring lag. */
+    transition: none;
+  }
+
+  .tboard :global(.tcard[data-pending="true"]) {
+    opacity: 0.72;
+  }
+
+  .tboard :global(.tcard[data-remote="true"]) {
+    animation: anillo-tarea 900ms var(--motion-carta-ease);
+  }
+
+  /* The colleague's hand: a cobalto ring pulses where the card landed. */
+  @keyframes anillo-tarea {
+    0% {
+      box-shadow:
+        var(--shadow-resting),
+        0 0 0 0 var(--cobalto);
+    }
+    40% {
+      box-shadow:
+        var(--shadow-raised),
+        0 0 0 3px var(--cobalto-papel);
+    }
+    100% {
+      box-shadow:
+        var(--shadow-resting),
+        0 0 0 0 transparent;
+    }
+  }
+
+  @media (max-width: 1023px) {
+    .tb-head {
+      padding-inline: var(--space-4);
+    }
+
+    .tb-error {
+      margin-inline: var(--space-4);
+    }
+
+    .tb-columns {
+      padding-inline: var(--space-4);
+    }
+  }
+
+  @media (max-width: 767px) {
+    .tb-columns {
+      grid-auto-columns: min(84vw, 300px);
+      scroll-snap-type: x mandatory;
+    }
+
+    .tb-project {
+      margin-left: 0;
+    }
+  }
+
+  /* Touch: the card is already far past 40px, but its move trigger is not. */
+  @media (pointer: coarse) {
+    .tboard :global(.tcard-move) {
+      width: 44px;
+      height: 44px;
+    }
+  }
+</style>

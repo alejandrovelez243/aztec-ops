@@ -14,6 +14,8 @@
  * for whether local state is allowed to lead (§8).
  */
 
+import { navigate } from "astro:transitions/client";
+
 import { getProject } from "../../lib/api/client";
 import { countUp, flip } from "../../lib/motion/spring";
 import { onReset, subscribe, type Envelope } from "../../lib/stream/store";
@@ -27,11 +29,15 @@ import {
   setField,
 } from "./dom";
 import { dueState, formatScore } from "./format";
+import { COMPARATORS, sortLabel, toSortMode, type SortMode } from "./sort";
 import { markEvent } from "./stale";
 import { semanticTone, stateTone } from "./tone";
 
 /** Where the grid ↔ table choice is remembered, per browser. */
 const VIEW_KEY = "aztec.ui.projects-view";
+
+/** Where the ordering is remembered, per browser. */
+const SORT_KEY = "aztec.ui.projects-sort";
 
 /** The two shapes of the same rows. */
 type ViewMode = "grid" | "table";
@@ -73,7 +79,40 @@ export function mountProjectsList(root: HTMLElement): () => void {
   const controller = new AbortController();
   const { signal } = controller;
 
-  const searchInput = root.querySelector<HTMLInputElement>("[data-search-input]");
+  // The server rendered the rows by name, so the stored order is only replayed
+  // when it is a different one — re-sorting into the order already on screen
+  // would run a FLIP that moves nothing.
+  const sort = storedSort();
+  markSort(root, sort);
+  if (sort !== "name") void applySort(root, sort);
+
+  // The menu closes on anything that is not a choice inside it: a click
+  // elsewhere, Escape, or the focus leaving the surface. A popup that outlives
+  // the intent that opened it is the one bug every hand-built menu ships with.
+  document.addEventListener(
+    "click",
+    (event) => {
+      const target = event.target;
+      if (target instanceof Node && root.contains(target)) return;
+      closeSortMenu(root);
+    },
+    { signal },
+  );
+  root.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Escape") return;
+      if (root.querySelector("[data-sort-menu]")?.hasAttribute("hidden"))
+        return;
+      closeSortMenu(root);
+      root.querySelector<HTMLElement>("[data-sort-trigger]")?.focus();
+    },
+    { signal },
+  );
+
+  const searchInput = root.querySelector<HTMLInputElement>(
+    "[data-search-input]",
+  );
   searchInput?.addEventListener(
     "input",
     () => {
@@ -91,9 +130,26 @@ export function mountProjectsList(root: HTMLElement): () => void {
 
       const viewButton = target.closest<HTMLElement>("[data-view-button]");
       if (viewButton !== null) {
-        const mode = viewButton.dataset.viewButton === "table" ? "table" : "grid";
+        const mode =
+          viewButton.dataset.viewButton === "table" ? "table" : "grid";
         rememberView(mode);
         applyView(root, mode);
+        return;
+      }
+
+      if (target.closest("[data-sort-trigger]") !== null) {
+        toggleSortMenu(root);
+        return;
+      }
+
+      const option = target.closest<HTMLElement>("[data-sort-value]");
+      if (option !== null) {
+        const mode = toSortMode(option.dataset.sortValue ?? "");
+        rememberSort(mode);
+        markSort(root, mode);
+        closeSortMenu(root);
+        root.querySelector<HTMLElement>("[data-sort-trigger]")?.focus();
+        void applySort(root, mode);
         return;
       }
 
@@ -111,11 +167,13 @@ export function mountProjectsList(root: HTMLElement): () => void {
       }
 
       // A click anywhere on a table row opens it; the name is still a real
-      // link, so the keyboard path never depends on this.
+      // link, so the keyboard path never depends on this. The router is used
+      // rather than `location.assign` so the row still morphs into the detail
+      // header instead of the page cutting to it.
       const row = target.closest<HTMLElement>("tr[data-href]");
       if (row !== null && target.closest("a") === null) {
         const href = row.dataset.href;
-        if (href !== undefined) window.location.assign(href);
+        if (href !== undefined) void navigate(href);
       }
     },
     { signal },
@@ -158,10 +216,103 @@ function rememberView(mode: ViewMode): void {
   }
 }
 
+/** The remembered order, defaulting to the one the server rendered. */
+function storedSort(): SortMode {
+  try {
+    return toSortMode(window.localStorage.getItem(SORT_KEY) ?? "");
+  } catch {
+    return "name";
+  }
+}
+
+/** Persists the order; a browser refusing storage simply forgets it. */
+function rememberSort(mode: SortMode): void {
+  try {
+    window.localStorage.setItem(SORT_KEY, mode);
+  } catch {
+    /* preference not persisted; the surface still re-sorts */
+  }
+}
+
+/** Opens or closes the order menu, keeping the trigger's state in step. */
+function toggleSortMenu(root: HTMLElement): void {
+  const menu = root.querySelector<HTMLElement>("[data-sort-menu]");
+  const trigger = root.querySelector<HTMLElement>("[data-sort-trigger]");
+  if (menu === null || trigger === null) return;
+
+  const open = menu.hidden;
+  menu.hidden = !open;
+  trigger.setAttribute("aria-expanded", String(open));
+  if (open) {
+    menu
+      .querySelector<HTMLElement>("[aria-checked='true'], [data-sort-value]")
+      ?.focus();
+  }
+}
+
+/** Closes the order menu; a no-op when it is already closed. */
+function closeSortMenu(root: HTMLElement): void {
+  const menu = root.querySelector<HTMLElement>("[data-sort-menu]");
+  if (menu === null || menu.hidden) return;
+  menu.hidden = true;
+  root
+    .querySelector<HTMLElement>("[data-sort-trigger]")
+    ?.setAttribute("aria-expanded", "false");
+}
+
+/** Writes the chosen order onto the trigger and the menu's checked marks. */
+function markSort(root: HTMLElement, mode: SortMode): void {
+  setField(root, "sort-current", sortLabel(mode));
+  for (const option of root.querySelectorAll<HTMLElement>(
+    "[data-sort-value]",
+  )) {
+    option.setAttribute(
+      "aria-checked",
+      String(option.dataset.sortValue === mode),
+    );
+  }
+}
+
+/**
+ * Reorders both representations in place.
+ *
+ * Both are sorted, not just the visible one: the hidden half is one toggle
+ * away, and a table that reorders itself the moment it is revealed reads as a
+ * glitch. Only the visible elements are handed to the FLIP — an element inside
+ * a `display: none` container has no box to measure.
+ */
+async function applySort(root: HTMLElement, mode: SortMode): Promise<void> {
+  const compare = COMPARATORS[mode];
+  const containers = [
+    root.querySelector<HTMLElement>("[data-projects-grid]"),
+    root.querySelector<HTMLElement>("[data-projects-table] tbody"),
+  ];
+
+  const moving = [
+    ...root.querySelectorAll<HTMLElement>("[data-project]"),
+  ].filter((element) => !element.hidden && element.getClientRects().length > 0);
+
+  await flip(moving, () => {
+    for (const container of containers) {
+      if (container === null) continue;
+      const items = [...container.children].filter(
+        (child): child is HTMLElement =>
+          child instanceof HTMLElement && child.dataset.project !== undefined,
+      );
+      items.sort(compare);
+      // `append` on an element already in the tree moves it, so this walks the
+      // sorted list once and leaves the container in exactly that order.
+      for (const item of items) container.append(item);
+    }
+  });
+}
+
 /** Switches the surface and tells the toggle which half it is showing. */
 function applyView(root: HTMLElement, mode: ViewMode): void {
   root.dataset.view = mode;
-  for (const button of root.querySelectorAll<HTMLElement>("[data-view-button]")) {
+  for (const button of root.querySelectorAll<HTMLElement>(
+    "[data-view-button]",
+  )) {
     button.setAttribute(
       "aria-pressed",
       String(button.dataset.viewButton === mode),
@@ -180,7 +331,9 @@ function togglePill(filters: Filters, pill: HTMLElement): void {
     return;
   }
   const target =
-    pill.dataset.filter === "category" ? filters.categories : filters.engagements;
+    pill.dataset.filter === "category"
+      ? filters.categories
+      : filters.engagements;
   if (pressed) target.delete(value);
   else target.add(value);
 }
@@ -231,7 +384,10 @@ function matches(element: HTMLElement, filters: Filters): boolean {
  * has no previous position to travel from, and FLIP-ing it from `(0, 0)` would
  * fling it in from the page corner.
  */
-async function applyFilters(root: HTMLElement, filters: Filters): Promise<void> {
+async function applyFilters(
+  root: HTMLElement,
+  filters: Filters,
+): Promise<void> {
   const elements = [...root.querySelectorAll<HTMLElement>("[data-project]")];
   const surviving = elements.filter(
     (element) => !element.hidden && matches(element, filters),
@@ -258,7 +414,9 @@ async function applyFilters(root: HTMLElement, filters: Filters): Promise<void> 
     filters.engagements.size > 0 ||
     filters.onlyAtRisk;
 
-  const clear = root.querySelector<HTMLElement>("[data-action='clear-filters']");
+  const clear = root.querySelector<HTMLElement>(
+    "[data-action='clear-filters']",
+  );
   if (clear !== null) clear.hidden = !active;
 
   const empty = root.querySelector<HTMLElement>("[data-filter-empty]");
@@ -283,8 +441,12 @@ function handleEnvelope(root: HTMLElement, envelope: Envelope): void {
   if (code === null) return;
 
   const elements = [
-    ...root.querySelectorAll<HTMLElement>(`[data-project][data-code="${CSS.escape(code)}"]`),
-  ].filter((element) => isFresher(envelope.occurred_at, element.dataset.updatedAt));
+    ...root.querySelectorAll<HTMLElement>(
+      `[data-project][data-code="${CSS.escape(code)}"]`,
+    ),
+  ].filter((element) =>
+    isFresher(envelope.occurred_at, element.dataset.updatedAt),
+  );
   if (elements.length === 0) return;
 
   if (envelope.topic === "project.priority.recalculated") {
@@ -357,10 +519,15 @@ async function refreshRows(
         else dueChip.removeAttribute("title");
       }
 
-      const riskChip = element.querySelector<HTMLElement>("[data-field='risk-count']");
+      const riskChip = element.querySelector<HTMLElement>(
+        "[data-field='risk-count']",
+      );
       if (riskChip !== null) {
         const spellOut = riskChip.dataset.riskFormat === "words";
-        applyTone(riskChip, semanticTone(risks > 0 ? "tone-rojo" : "tone-verde"));
+        applyTone(
+          riskChip,
+          semanticTone(risks > 0 ? "tone-rojo" : "tone-verde"),
+        );
         riskChip.textContent = spellOut
           ? `${risks} ${risks === 1 ? "riesgo" : "riesgos"}`
           : String(risks);

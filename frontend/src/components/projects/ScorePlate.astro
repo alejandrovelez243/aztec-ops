@@ -18,7 +18,12 @@
  * its creation and the recalculator's first pass says so in words.
  */
 import Icon from "../ui/Icon.astro";
-import { barWidth, formatContribution, formatInstant, formatScore } from "./format";
+import {
+  barWidth,
+  formatContribution,
+  formatInstant,
+  formatScore,
+} from "./format";
 import { signalLabel } from "./messages";
 import { overrideSummary } from "./presentation";
 import type { Override, Score } from "../../lib/api/domain";
@@ -37,7 +42,10 @@ export interface Props {
 const { projectCode, score, override, updatedAt } = Astro.props;
 
 const breakdown = score?.breakdown ?? [];
-const total = breakdown.reduce((sum, entry) => sum + Math.abs(entry.contribution), 0);
+const total = breakdown.reduce(
+  (sum, entry) => sum + Math.abs(entry.contribution),
+  0,
+);
 const computedAt = formatInstant(score?.computed_at ?? null);
 
 const overrideLine = overrideSummary(override);
@@ -60,8 +68,13 @@ const overrideReason = override?.reason ?? "";
       {
         score !== null && (
           <p class="small meta">
-            Política <span class="figure" data-field="policy">{score.policy_version}</span>
-            {computedAt !== null && <> · calculada el {computedAt}</>}
+            Política{" "}
+            <span class="figure" data-field="policy">
+              {score.policy_version}
+            </span>
+            {computedAt !== null && (
+              <Fragment> · calculada el {computedAt}</Fragment>
+            )}
           </p>
         )
       }
@@ -69,7 +82,11 @@ const overrideReason = override?.reason ?? "";
     </div>
 
     <div class="ops" data-ops-lead hidden>
-      <button class="btn btn-secondary" type="button" data-action="open-override">
+      <button
+        class="btn btn-secondary"
+        type="button"
+        data-action="open-override"
+      >
         <Icon name="flag" size={18} />
         Ajustar prioridad
       </button>
@@ -100,7 +117,9 @@ const overrideReason = override?.reason ?? "";
     {
       breakdown.map((entry) => (
         <li class="signal" data-signal={entry.code}>
-          <p class="title name" data-field="signal-name">{signalLabel(entry.code)}</p>
+          <p class="title name" data-field="signal-name">
+            {signalLabel(entry)}
+          </p>
           <p class="figure contribution" data-field="contribution">
             {formatContribution(entry.contribution)}
           </p>
@@ -119,13 +138,17 @@ const overrideReason = override?.reason ?? "";
     }
   </ul>
 
-  {/* One home for the row markup: the island clones this when a recalculation
-      brings a signal the first paint did not have. */}
+  {
+    /* One home for the row markup: the island clones this when a recalculation
+      brings a signal the first paint did not have. */
+  }
   <template data-template="signal">
     <li class="signal">
       <p class="title name" data-field="signal-name"></p>
       <p class="figure contribution" data-field="contribution"></p>
-      <span class="bar" aria-hidden="true"><span class="fill" data-field="bar"></span></span>
+      <span class="bar" aria-hidden="true"
+        ><span class="fill" data-field="bar"></span></span
+      >
       <p class="small reason" lang="en" data-field="reason"></p>
     </li>
   </template>
@@ -134,8 +157,8 @@ const overrideReason = override?.reason ?? "";
     <form method="dialog" data-override-form>
       <h2 class="h2" id="override-title">Ajustar la prioridad</h2>
       <p class="small">
-        Fuerza la posición de este proyecto en la cola. El puntaje calculado no cambia: queda a la
-        vista junto a tu decisión.
+        Fuerza la posición de este proyecto en la cola. El puntaje calculado no
+        cambia: queda a la vista junto a tu decisión.
       </p>
 
       <label class="field">
@@ -148,7 +171,14 @@ const overrideReason = override?.reason ?? "";
 
       <label class="field">
         <span class="label" data-field="amount-label">Posición</span>
-        <input class="input" name="amount" type="number" min="1" step="1" required />
+        <input
+          class="input"
+          name="amount"
+          type="number"
+          min="1"
+          step="1"
+          required
+        />
       </label>
 
       <label class="field">
@@ -158,14 +188,21 @@ const overrideReason = override?.reason ?? "";
           name="reason"
           rows="3"
           required
-          placeholder="Por qué esta decisión pesa más que el cálculo"></textarea>
+          placeholder="Por qué esta decisión pesa más que el cálculo"
+        ></textarea>
       </label>
 
       <p class="small error" data-field="override-error" hidden></p>
 
       <div class="dialog-actions">
-        <button class="btn btn-ghost" type="button" data-action="close-override">Cancelar</button>
-        <button class="btn btn-primary" type="submit" data-action="submit-override">
+        <button class="btn btn-ghost" type="button" data-action="close-override"
+          >Cancelar</button
+        >
+        <button
+          class="btn btn-primary"
+          type="submit"
+          data-action="submit-override"
+        >
           Guardar ajuste
         </button>
       </div>
@@ -210,7 +247,9 @@ const overrideReason = override?.reason ?? "";
     flex-wrap: wrap;
   }
 
-  .ops[hidden] {
+  /* `hidden` must beat the flex/inline-flex displays above. */
+  .ops[hidden],
+  .ops .btn[hidden] {
     display: none;
   }
 

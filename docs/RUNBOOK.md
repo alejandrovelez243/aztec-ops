@@ -742,6 +742,34 @@ repair tool, not a workaround: if you need it after every change, the event chai
 of §8-§10 applies. Note that it emits no event, so an open dashboard will not see the new score
 until its next legitimate event.
 
+**When a recompute reports `changed: 0` and the rows are still wrong.** Recomputation
+short-circuits when `input_hash` and `policy_version` both match the stored row — same facts, same
+criterion, so no write. The hash covers the *facts*, not the engine, so a release that only changed
+what a signal *says* (its label, the wording of its `reason`) leaves every stored `breakdown`
+untouched, forever, until some fact moves. That is the correct default for an audit trail and the
+wrong one right after such a release. Clear the cache key and recompute — `input_hash` is blank by
+default and blank means "unknown", so this asks for a genuine rebuild rather than faking one:
+
+```bash
+docker compose exec api python manage.py shell -c "
+from apps.prioritization.models import PriorityScore
+PriorityScore.objects.update(input_hash='')"
+curl -s -X POST localhost:8000/api/v1/recompute -H "Authorization: Bearer $TOKEN"
+```
+
+The read model holds its own copy of the document, and the recompute emits nothing, so the queue
+keeps serving the old sentences until each project's next event. Rebuild it in the same pass:
+
+```bash
+docker compose exec api python manage.py shell -c "
+from django.utils import timezone
+from apps.portfolio.models import Project
+from apps.portfolio.services.rebuild_snapshot import rebuild_snapshot
+now = timezone.now()
+for code in Project.objects.values_list('code', flat=True):
+    rebuild_snapshot(project_code=code, now=now)"
+```
+
 If the score changed but the number looks wrong rather than stale, the active `PriorityPolicy`
 version may have moved. Every `PriorityScore` persists `policy_version` and its per-signal
 `breakdown`; compare the two rows before blaming the engine, and check whether a

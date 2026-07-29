@@ -56,12 +56,20 @@ logger = logging.getLogger(__name__)
 #: ``ProcessedEvent`` row it writes. Renaming it replays the whole backlog for it.
 PRIORITY_RECALCULATOR = "priority-recalculator"
 
-#: Everything that can change a project's rank: every write-side topic, plus the clock.
+#: Everything that can change a project's rank: every topic about the work itself, plus the clock.
 #:
 #: ``note.added`` is in here even though a note changes no field — a note is activity, so it resets
 #: the ``staleness`` signal, and a portfolio where writing a note did not move the score would rank
 #: an actively-managed project as abandoned. The one derived topic is excluded: see the module
 #: docstring.
+#:
+#: The ``member.*`` topics are excluded, and the reason is the same one ADR 0011 gives for risk
+#: flags. Raising somebody's capacity changes whether they are overloaded, and being overloaded is
+#: a ``OWNER_OVERLOADED`` *flag* — computed on read from the current task rows, never stored — so
+#: there is nothing for a recomputation to persist. Subscribing anyway would rescore every project
+#: that person owns on every roster edit, to arrive at the same number: cost with no consequence.
+#: What it must never do is lower those scores, because being short-staffed is a staffing decision
+#: and not a reason for the work to matter less (ARCHITECTURE §4.1).
 ENGINE_TOPICS: Final[frozenset[str]] = frozenset(
     {
         TOPIC_PROJECT_CREATED,

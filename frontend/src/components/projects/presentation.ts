@@ -12,8 +12,8 @@
  * rather than recomputed inside a keystroke handler that runs over every row.
  */
 
+import { activityChange } from "../../lib/activity/vocabulary";
 import type {
-  ActivityEntry,
   Blocker,
   Override,
   ProjectDetail,
@@ -21,6 +21,13 @@ import type {
 } from "../../lib/api/domain";
 import { formatInstant, relativeTime } from "./format";
 import { categoryLabel } from "./tone";
+
+/**
+ * "antes → después" is the trail's own phrasing and is shared with the
+ * portfolio-wide feed (`lib/activity/vocabulary.ts`); re-exported so the
+ * timeline's call sites keep one import.
+ */
+export { activityChange };
 
 /** One project as every list surface renders it. */
 export interface ProjectPresentation {
@@ -109,7 +116,9 @@ export function toPresentation(item: QueueItem): ProjectPresentation {
  * to a contract that grew is a button that refuses and says which field it is
  * waiting for, not a button that posts and is refused by the server.
  */
-export function emptyAggregateFields(project: ProjectDetail): readonly string[] {
+export function emptyAggregateFields(
+  project: ProjectDetail,
+): readonly string[] {
   const values: Readonly<Record<string, unknown>> = {
     name: project.name,
     summary: project.summary ?? null,
@@ -128,7 +137,8 @@ export function emptyAggregateFields(project: ProjectDetail): readonly string[] 
   for (const transition of project.transitions) {
     for (const field of transition.requires_fields) {
       const value = values[field];
-      if (value === undefined || value === null || value === "") empty.add(field);
+      if (value === undefined || value === null || value === "")
+        empty.add(field);
     }
   }
   return [...empty];
@@ -148,21 +158,6 @@ export function overrideSummary(forced: Override | null): string {
       ? `Posición ${forced.position}`
       : `Impulso ${forced.boost ?? ""}`;
   return `${amount} · ${forced.actor} · ${formatInstant(forced.created_at) ?? ""}`;
-}
-
-/**
- * What one audit record changed, as "antes → después".
- *
- * Both values are stored as strings by the audit trail and either may be empty
- * — a creation has no "before". The empty string is returned when neither side
- * says anything, and the caller hides the line rather than rendering an arrow
- * between two blanks.
- */
-export function activityChange(entry: ActivityEntry): string {
-  const from = entry.from_value;
-  const to = entry.to_value;
-  if (from !== "" && to !== "") return `${from} → ${to}`;
-  return to !== "" ? to : from;
 }
 
 /**

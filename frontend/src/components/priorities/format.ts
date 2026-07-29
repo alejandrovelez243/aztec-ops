@@ -148,9 +148,7 @@ export function barRatio(contribution: number, widest: number): number {
 }
 
 /** The widest magnitude in a breakdown; `0` when the breakdown is empty. */
-export function widestContribution(
-  contributions: readonly number[],
-): number {
+export function widestContribution(contributions: readonly number[]): number {
   let widest = 0;
   for (const value of contributions) {
     const magnitude = Math.abs(value);

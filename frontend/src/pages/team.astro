@@ -114,7 +114,11 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
       <h2 class="h2">Todavía no hay nadie en el equipo</h2>
       <p class="body-text" data-empty-copy>{EMPTY_MESSAGE}</p>
       <p>
-        <button class="btn btn-secondary" type="button" data-team-action="retry">
+        <button
+          class="btn btn-secondary"
+          type="button"
+          data-team-action="retry"
+        >
           Volver a consultar
         </button>
       </p>
@@ -127,13 +131,19 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
       <h2 class="h2">No pudimos leer la carga del equipo</h2>
       <p class="body-text" data-error-copy>{errorMessage}</p>
       <p>
-        <button class="btn btn-secondary" type="button" data-team-action="retry">
+        <button
+          class="btn btn-secondary"
+          type="button"
+          data-team-action="retry"
+        >
           Reintentar
         </button>
       </p>
     </div>
 
-    {/* Cloned by the island when the refetch brings back somebody who had no row yet. */}
+    {
+      /* Cloned by the island when the refetch brings back somebody who had no row yet. */
+    }
     <template data-row-template><LoadRow entry={BLANK_ENTRY} /></template>
   </section>
 </Shell>
@@ -541,8 +551,9 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
     if (prefersReducedMotion()) return;
     const { duration, easing } = sampleSpring("carta");
 
-    root.querySelectorAll<HTMLElement>("[data-rows] [data-alias]").forEach(
-      (row, index) => {
+    root
+      .querySelectorAll<HTMLElement>("[data-rows] [data-alias]")
+      .forEach((row, index) => {
         const shown = Number(row.dataset.utilization ?? "0");
         const target = Number.isFinite(shown) ? shown : 0;
         const utilization = field(row, "utilization");
@@ -565,8 +576,7 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
             countUp(utilization, 0, target, formatUtilization);
           }, index * INTRO_STAGGER_MS),
         );
-      },
-    );
+      });
   }
 
   function stop(): void {

@@ -258,6 +258,7 @@ class Specification(Protocol):
 class IsBlocked:
     flag_code = "BLOCKED"
     severity = "CRITICAL"
+    label = "Bloqueado"  # Spanish: it is the chip's text, and the UI is Spanish (PRODUCT.md)
 
     def is_satisfied_by(self, project: ProjectView) -> bool:
         return (
@@ -267,7 +268,7 @@ class IsBlocked:
         )
 
     def detail(self, project: ProjectView) -> str:
-        return f"{len(project.open_blockers)} open blocker(s)."
+        return f"{len(project.open_blockers)} bloqueos abiertos."
 
 # composition, not a bigger if
 needs_attention = And(IsOverdue(), Not(IsBlocked()))
@@ -285,12 +286,15 @@ Python, with no query inside the loop.
 It is derived beside the flags on the same read, so the two cannot disagree. The source
 spreadsheet's `health` is kept as `imported_health` and read by nothing at runtime.
 
-**Rule for extending.** One class, a `flag_code`, a `severity`, one `@register_risk` line, one
-table-driven database-free test asserting the `detail` string as well as the boolean.
+**Rule for extending.** One class — a `label`, a `detail`, an `is_satisfied_by` — a `flag_code`, a
+`severity`, one `@register_risk` line, one table-driven database-free test asserting the `detail`
+string as well as the boolean. `label` and `detail` are Spanish because they are what the operator
+reads (`PRODUCT.md`); everything around them stays English (`CLAUDE.md` §Language).
 
 **Smell.** A specification that queries the database. `severity` stored on the `RiskFlag` row as the
 source of truth instead of coming from the registry entry. A `Project.health` field appearing in a
-migration.
+migration. A dictionary anywhere — on either side of the wire — mapping a flag code to its Spanish
+label: that map is a second place to edit when a criterion is added, and the one that gets forgotten.
 
 ---
 

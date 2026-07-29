@@ -19,6 +19,7 @@ import QueueSkeleton from "../components/priorities/QueueSkeleton.astro";
 import RegionMessage from "../components/priorities/RegionMessage.astro";
 import Shell from "../layouts/Shell.astro";
 import { getQueue } from "../lib/api/client";
+import { errorDetailByCode } from "../lib/api/error-copy";
 import type { QueueItem, QueuePage } from "../lib/api/domain";
 import type { ApiErrorCode } from "../lib/api/errors";
 import { assertNever, toViewState } from "../lib/view-state";
@@ -57,21 +58,6 @@ type QueueRegion =
       /** Data is on screen but the stream is down; the marker says so. */
       isStale: boolean;
     };
-
-/**
- * Spanish copy per machine code. Branching on `code` and never on `message` is the
- * contract (`docs/API.md` §4.2): the message is generated English prose for logs.
- */
-const ERROR_DETAIL: Readonly<Record<ApiErrorCode, string>> = {
-  network_error:
-    "No hubo respuesta de la API. Comprueba que el backend esté en marcha y vuelve a intentarlo.",
-  not_found: "Esta versión de la API no expone la cola priorizada.",
-  validation_error: "La API rechazó los parámetros con los que se pidió la cola.",
-  transition_not_allowed: "Una regla del flujo de trabajo rechazó la lectura.",
-  conflicting_state: "El recurso cambió mientras se leía. Vuelve a intentarlo.",
-  unknown_error:
-    "El servidor respondió con un error inesperado. Si acabas de iniciar sesión, vuelve a intentarlo.",
-};
 
 const result = await getQueue({ page: 1, page_size: QUEUE_PAGE_SIZE });
 
@@ -137,15 +123,15 @@ const renderedAt = new Date().toISOString();
       <div class="titles">
         <h1 class="h1">Prioridades</h1>
         <p class="body-text lede">
-          La cola completa, en el orden que calculó el motor. Elige una fila y el panel
-          te dice por qué está ahí.
+          La cola completa, en el orden que calculó el motor. Elige una fila y
+          el panel te dice por qué está ahí.
         </p>
       </div>
       <div class="side">
         {counter !== null && <p class="figure counter">{counter}</p>}
         <p class="small hint">
-          Usa <kbd>↑</kbd> <kbd>↓</kbd> para recorrer la cola y <kbd>Enter</kbd> para abrir
-          el proyecto.
+          Usa <kbd>↑</kbd>
+          <kbd>↓</kbd> para recorrer la cola y <kbd>Enter</kbd> para abrir el proyecto.
         </p>
       </div>
     </header>
@@ -173,7 +159,7 @@ const renderedAt = new Date().toISOString();
       region.kind === "error" && (
         <RegionMessage
           title="No pudimos cargar la cola priorizada"
-          body={ERROR_DETAIL[region.code]}
+          body={errorDetailByCode(region.code)}
           icon="alert"
           tone="tone-rojo"
         >

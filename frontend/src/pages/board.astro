@@ -3,33 +3,53 @@ import BoardCanvas from "../islands/BoardCanvas.astro";
 import BoardNotice from "../components/board/BoardNotice.astro";
 import BoardSkeleton from "../components/board/BoardSkeleton.astro";
 import Shell from "../layouts/Shell.astro";
-import { buildPanels } from "../components/board/board-model";
-import type { BoardPanelModel } from "../components/board/board-model";
-import { getQueue } from "../lib/api/client";
+import {
+  NO_MEMBER_PHOTOS,
+  buildMembers,
+  buildPanels,
+  findCardLocation,
+} from "../components/board/board-model";
+import type {
+  BoardPanelModel,
+  MemberChipModel,
+  ProjectCardModel,
+  Tone,
+} from "../components/board/board-model";
+import { BOARD_PROJECT_PARAM } from "../components/board/board-dom";
+import { getQueue, getTeamLoad } from "../lib/api/client";
 import type { ApiErrorCode } from "../lib/api/errors";
 import type { QueuePage } from "../lib/api/domain";
 import { assertNever, toViewState } from "../lib/view-state";
 import type { ViewState } from "../lib/view-state";
 
 /**
- * `/board` — "Tablero": the wall, one engagement type at a time.
+ * `/board` — "Tablero": the wall, one engagement type at a time, full-bleed.
  *
- * This file is a container and nothing else (`PATTERNS_FRONTEND.md` §5): it fetches the
- * queue once on the server, turns it into the board's view model, and hands that to
+ * This file is a container and nothing else (`PATTERNS_FRONTEND.md` §5): it fetches on the
+ * server, turns the answers into the board's view model, and hands that to
  * `islands/BoardCanvas.astro`, which owns every interaction from there. No component below
- * fetches anything, and the island never refetches what this render already produced.
+ * fetches anything for the first paint, and the island never refetches what this render
+ * already produced.
  *
- * Why the queue and not a board endpoint: `GET /api/v1/queue` is the read model that already
- * carries state, engagement type, owner, due date and score per project — exactly the card —
- * in one request.
+ * Two reads, in parallel, because the toolbar and the wall are one screen and two round trips
+ * in series is a screen that paints in two halves:
  *
- * Its one cost, and the surface's known gap: the queue reports the state each project is in,
- * so the board can only draw the states somebody currently occupies. A workflow state that
- * exists in the admin but holds no project has no column, which means it cannot be dropped
- * into either — and a project moved into one leaves the board with a toast instead of landing
- * in an empty column. Closing this needs a workflow-states endpoint
- * (`GET /api/v1/workflows/{code}/states`) so the columns come from the workflow rather than
- * from the rows; until it exists the runtime says so out loud rather than pretending.
+ * - `GET /api/v1/queue` is the read model that already carries state, engagement type, owner,
+ *   due date and score per project — exactly the card — in one request.
+ * - `GET /api/v1/team/load` is the roster behind the "Miembros" bar; it also carries what each
+ *   person is currently holding, which is what the avatar's accessible name says out loud.
+ *   A failure here does not fail the board: the bar names the absence and the wall renders.
+ *
+ * **The surface's known gap, and why it is still here.** The queue reports the state each
+ * project is *in*, so the board can only draw the states somebody currently occupies. A
+ * workflow state that exists in the admin but holds no project has no column, which means it
+ * cannot be dropped into either. The obvious fix would be to read the states from the
+ * taxonomy, and `GET /api/v1/catalog` deliberately does not carry them — its own docstring
+ * says so, because a state is scoped to its workflow and legality lives in the project's
+ * `transitions`. No `workflows/{code}/states` route exists either (checked against the live
+ * OpenAPI document). Closing this needs that endpoint; until it exists, the runtime says out
+ * loud what happened rather than pretending, and every column that *is* drawn renders its
+ * "Sin proyectos" placeholder so an empty zone still reads as empty rather than as missing.
  */
 
 /**
@@ -52,10 +72,14 @@ type BoardRender =
       defaultEngagement: string;
       connection: "live" | "stale";
       lastEventAt: string | null;
+      selected: { card: ProjectCardModel; tone: Tone } | null;
     };
 
 const EMPTY_DETAIL =
   "El tablero dibuja una columna por cada estado ocupado del flujo. En cuanto exista un proyecto activo, aparecerá aquí.";
+
+const MEMBERS_FAILED =
+  "No pudimos cargar el equipo, así que el filtro por responsable no está disponible.";
 
 /**
  * Spanish copy per failure code. `error.message` is generated English prose meant for logs
@@ -91,8 +115,16 @@ function errorDetail(code: ApiErrorCode): string {
  * `ready` and `disconnected` share the board arm on purpose: the disconnected state keeps the
  * data on screen and marks it stale, because blanking a board an operator is reading is the
  * one failure mode this surface must not have (`FRONTEND.md` §1).
+ *
+ * `requestedProject` decides two things at once: which card renders selected, and which wall
+ * is on screen — a link to a project of another engagement type must open the board that
+ * project actually lives on, not the alphabetically first one.
  */
-function planBoard(state: ViewState<QueuePage>, now: Date): BoardRender {
+function planBoard(
+  state: ViewState<QueuePage>,
+  requestedProject: string | null,
+  now: Date,
+): BoardRender {
   switch (state.kind) {
     case "loading":
       return { kind: "loading" };
@@ -105,12 +137,23 @@ function planBoard(state: ViewState<QueuePage>, now: Date): BoardRender {
       const panels = buildPanels(state.data.items, now);
       const first = panels[0];
       if (first === undefined) return { kind: "empty", detail: EMPTY_DETAIL };
+      const located =
+        requestedProject === null
+          ? null
+          : findCardLocation(panels, requestedProject);
       return {
         kind: "board",
         panels,
-        defaultEngagement: first.engagementType.code,
+        defaultEngagement:
+          located === null
+            ? first.engagementType.code
+            : located.panel.engagementType.code,
         connection: state.kind === "ready" ? "live" : "stale",
         lastEventAt: state.lastEventAt,
+        selected:
+          located === null
+            ? null
+            : { card: located.card, tone: located.column.tone },
       };
     }
     default:
@@ -118,7 +161,12 @@ function planBoard(state: ViewState<QueuePage>, now: Date): BoardRender {
   }
 }
 
-const result = await getQueue({ page: 1, page_size: BOARD_PAGE_SIZE });
+const requestedProject = Astro.url.searchParams.get(BOARD_PROJECT_PARAM);
+
+const [result, teamResult] = await Promise.all([
+  getQueue({ page: 1, page_size: BOARD_PAGE_SIZE }),
+  getTeamLoad(),
+]);
 
 /**
  * `"connecting"` is the honest stream status during a server render: the browser has not
@@ -131,19 +179,31 @@ const state = toViewState(result, "connecting", {
   lastEventAt: null,
 });
 
-const plan = planBoard(state, new Date());
+const plan = planBoard(state, requestedProject, new Date());
+
+/**
+ * The roster, or nothing plus a sentence saying why.
+ *
+ * `NO_MEMBER_PHOTOS` is the lookup, because `TeamLoadView` carries no image field today; the
+ * day it does, this is the one line that changes and every avatar starts rendering photos.
+ */
+const members: readonly MemberChipModel[] = teamResult.ok
+  ? buildMembers(teamResult.data.items, NO_MEMBER_PHOTOS)
+  : [];
+const membersNote = teamResult.ok ? null : MEMBERS_FAILED;
 ---
 
 <Shell
   title="Tablero"
   active="board"
+  wide
   crumbs={[{ label: "Inicio", href: "/" }, { label: "Tablero" }]}
 >
   <header class="head">
     <h1 class="h1" lang="es">Tablero</h1>
     <p class="body-text" lang="es">
-      Una columna por estado del flujo. Mueve una tarjeta y el servidor decide si
-      el movimiento es legal; cuando alguien más mueve una, la ves viajar.
+      Una columna por estado del flujo. Mueve una tarjeta y el servidor decide
+      si el movimiento es legal; elige una y verás sus tareas al lado.
     </p>
   </header>
 
@@ -151,23 +211,27 @@ const plan = planBoard(state, new Date());
 
   {
     plan.kind === "empty" && (
-      <BoardNotice
-        kind="empty"
-        title="Todavía no hay nada en el muro"
-        detail={plan.detail}
-        link={{ label: "Ir a Proyectos", href: "/projects" }}
-      />
+      <div class="notice-wrap">
+        <BoardNotice
+          kind="empty"
+          title="Todavía no hay nada en el muro"
+          detail={plan.detail}
+          link={{ label: "Ir a Proyectos", href: "/projects" }}
+        />
+      </div>
     )
   }
 
   {
     plan.kind === "error" && (
-      <BoardNotice
-        kind="error"
-        title="No pudimos cargar el tablero"
-        detail={plan.detail}
-        retryLabel="Reintentar"
-      />
+      <div class="notice-wrap">
+        <BoardNotice
+          kind="error"
+          title="No pudimos cargar el tablero"
+          detail={plan.detail}
+          retryLabel="Reintentar"
+        />
+      </div>
     )
   }
 
@@ -178,20 +242,39 @@ const plan = planBoard(state, new Date());
         defaultEngagement={plan.defaultEngagement}
         connection={plan.connection}
         lastEventAt={plan.lastEventAt}
+        members={members}
+        membersNote={membersNote}
+        selected={plan.selected}
       />
     )
   }
 </Shell>
 
 <style>
+  /* The page owns its own gutters now that the shell hands over a full-bleed
+     region (`Shell.astro`, the `wide` prop). */
   .head {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    margin-bottom: var(--space-5);
+    padding: var(--space-5) var(--space-5) var(--space-4);
   }
 
   .head p {
     color: var(--tinta-media);
+  }
+
+  .notice-wrap {
+    padding: 0 var(--space-5) var(--space-6);
+  }
+
+  @media (max-width: 767px) {
+    .head {
+      padding: var(--space-4) var(--space-4) var(--space-3);
+    }
+
+    .notice-wrap {
+      padding: 0 var(--space-4) var(--space-5);
+    }
   }
 </style>

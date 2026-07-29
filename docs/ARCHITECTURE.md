@@ -652,7 +652,7 @@ flowchart TD
     D --> FLAGS
     E --> FLAGS
     F --> FLAGS
-    FLAGS["evaluate_risk → a tuple of RiskFlag<br/>each with code, severity, detail"]
+    FLAGS["evaluate_risk → a tuple of RiskFlag<br/>each with code, severity, label, detail"]
     FLAGS --> HEALTH["derive_health<br/>any CRITICAL → BLOCKED<br/>any flag → AT_RISK<br/>none → HEALTHY"]
   end
 
@@ -677,12 +677,19 @@ The severities are **code-owned and reviewed**, declared on the `@register_risk(
 they are the ordering the operator's attention follows and they are exactly the kind of thing that
 must not change silently from an admin form. They are what `derive_health` reads.
 
+Each specification also carries its own `label` — the Spanish chip text — beside the `detail` it
+writes, and both travel on the wire with the flag. The frontend may not hold a map from flag code to
+copy (`docs/standards/FRONTEND.md` §7), so a criterion that could not name itself would reach the
+operator as a bare `NO_TARGET_DATE`; putting the words on the class is what keeps a seventh criterion
+a backend-only change. Spanish there is the interface language (`PRODUCT.md`), the same exception the
+database's user-facing labels have — identifiers, class names and docstrings stay English.
+
 The same evaluator serves both read paths, from two different sources of facts — the write
 aggregates for a project detail, `ProjectSnapshot.to_risk_input()` for the queue — and that is why
 there is one implementation and no SQL predicate anywhere restating a specification.
 
-**Adding a risk criterion is one class plus one `@register_risk(flag_code=..., severity=...)`
-line.** Nothing else changes.
+**Adding a risk criterion is one class — with its `label`, its `is_satisfied_by` and its `detail` —
+plus one `@register_risk(flag_code=..., severity=...)` line.** Nothing else changes.
 
 ---
 

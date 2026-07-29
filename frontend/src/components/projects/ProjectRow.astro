@@ -32,6 +32,9 @@ const rail = healthTone(project.healthCode);
   data-engagement={project.engagementCode}
   data-health={project.healthCode}
   data-updated-at={project.updatedAt}
+  data-sort-name={project.name.toLocaleLowerCase("es")}
+  data-sort-score={project.score}
+  data-sort-due={project.targetDate ?? ""}
   data-href={`/projects/${project.code}`}
 >
   <td class="col-code rail">
@@ -62,7 +65,11 @@ const rail = healthTone(project.healthCode);
   </td>
   <td class="col-risk">
     <span
-      class:list={["chip", project.riskCount > 0 ? "tone-rojo" : "tone-verde"]}
+      class:list={[
+        "chip",
+        "figure",
+        project.riskCount > 0 ? "tone-rojo" : "tone-verde",
+      ]}
       data-field="risk-count"
       data-risk-format="number"
     >
@@ -79,7 +86,8 @@ const rail = healthTone(project.healthCode);
   .proj-row {
     border-bottom: var(--border-width) solid var(--hairline);
     background-color: var(--carta);
-    transition: background-color var(--motion-micro-duration) var(--motion-micro-ease);
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
   }
 
   .proj-row:hover {

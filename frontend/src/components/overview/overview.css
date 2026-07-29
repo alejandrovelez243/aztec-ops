@@ -331,8 +331,12 @@
 
 .ov-zone--radar .ov-card {
   flex-direction: row;
+  /* The row is allowed to break: with `nowrap`, the name is the only part that
+     can shrink, and it collapses to a column of single letters long before the
+     chips give up a pixel. Wrapping drops the foot onto its own line instead. */
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2) var(--space-3);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-control);
   box-shadow: none;
@@ -355,10 +359,26 @@
   background-color: var(--tone-wash);
 }
 
+/* The name is the widest thing on the row and the reason anyone reads it, so it
+   is what claims the free space — 260px is the width below which the row breaks
+   rather than the width the name is squeezed to. */
 .ov-zone--radar .ov-main {
-  flex: 1 1 auto;
+  flex: 1 1 260px;
   align-items: center;
   padding-inline: 0;
+}
+
+.ov-zone--radar .ov-ident {
+  flex: 1 1 auto;
+}
+
+/* One line, cut with an ellipsis: at this density a wrapped name would change
+   the row's height and break the scan down the rank column. */
+.ov-zone--radar .ov-name {
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ov-zone--radar .ov-sub {
@@ -394,8 +414,10 @@
 }
 
 .ov-zone--radar .ov-foot {
-  flex: none;
+  flex: 0 1 auto;
   flex-wrap: nowrap;
+  justify-content: flex-end;
+  margin-left: auto;
   padding-inline: 0;
   margin-top: 0;
 }
@@ -404,6 +426,41 @@
   height: var(--space-6);
   padding-inline: var(--space-3);
   font-size: var(--text-small-size);
+}
+
+/*
+ * Radar is a list to *scan*, and scanning needs columns: with the flex row each
+ * card sized its own parts, so the score, the signal and the chips landed at a
+ * different x on every line and the eye had to re-find them twelve times.
+ *
+ * The tracks are fixed rather than `auto` for exactly that reason — an `auto`
+ * track is content-sized, which is the flex behaviour again under a different
+ * name. Every card carries the same template, so the columns line up across
+ * cards even though each card is its own box (`display: contents` would align
+ * them too, and would throw away the card's border, hover and flash — the
+ * frame that makes a remote move visible).
+ *
+ * Below 1200px there is no room for four columns and the row falls back to the
+ * wrapping flex layout above.
+ */
+@media (min-width: 1200px) {
+  .ov-zone--radar .ov-card {
+    display: grid;
+    grid-template-columns:
+      minmax(0, 168px)
+      minmax(0, 1fr)
+      minmax(0, 176px)
+      minmax(0, 520px);
+    align-items: center;
+  }
+
+  .ov-zone--radar .ov-bars {
+    width: 100%;
+  }
+
+  .ov-zone--radar .ov-foot {
+    min-width: 0;
+  }
 }
 
 /* The wall is also touched: a coarse pointer never gets a sub-40px target. */
@@ -425,15 +482,21 @@
 
 @keyframes ov-ring {
   0% {
-    box-shadow: var(--shadow-resting), 0 0 0 0 var(--cobalto-papel);
+    box-shadow:
+      var(--shadow-resting),
+      0 0 0 0 var(--cobalto-papel);
   }
 
   45% {
-    box-shadow: var(--shadow-lifted), 0 0 0 4px var(--cobalto-papel);
+    box-shadow:
+      var(--shadow-lifted),
+      0 0 0 4px var(--cobalto-papel);
   }
 
   100% {
-    box-shadow: var(--shadow-resting), 0 0 0 0 var(--cobalto-papel);
+    box-shadow:
+      var(--shadow-resting),
+      0 0 0 0 var(--cobalto-papel);
   }
 }
 
@@ -542,37 +605,75 @@
   grid-column: 2 / -1;
 }
 
-/* --- Pending region: an honest hole, designed ---------------------------- */
+/* --- Última actividad: the last movements in the whole portfolio ---------- */
 
-.ov-pending {
+.ov-latest {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-4);
-  border-style: dashed;
-  box-shadow: none;
+  gap: var(--space-1);
 }
 
-.ov-pending-head {
+.ov-latest-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2);
+  border-radius: var(--radius-control);
+}
+
+/* A human's decision is the one row that must not read like bookkeeping. */
+.ov-latest-row[data-origin="MANUAL"] {
+  background-color: var(--tone-wash);
+}
+
+.ov-latest-row .dot {
+  /* Centred on the first line of the title, derived from the type tokens. */
+  margin-top: calc(
+    (var(--text-title-size) * var(--text-title-line) - var(--space-2)) / 2
+  );
+}
+
+.ov-latest-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.ov-latest-head,
+.ov-latest-meta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
+  min-width: 0;
 }
 
-.ov-pending-head .h2 {
-  margin-right: auto;
+.ov-latest-origin {
+  background-color: var(--tone-wash);
+  color: var(--tone-ink);
 }
 
-.ov-pending-icon {
-  color: var(--tinta-suave);
+.ov-latest-project {
+  font-weight: 600;
+  text-decoration: none;
+  border-radius: var(--radius-chip);
 }
 
-.ov-pending-aside {
-  color: var(--tinta-suave);
+.ov-latest-project:hover {
+  color: var(--cobalto);
 }
 
-.ov-pending-endpoint {
-  align-self: flex-start;
+.ov-latest-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-2);
+}
+
+.ov-latest-skeleton {
+  height: var(--space-8);
 }
 
 /* --- Notes: the empty and error arms ------------------------------------- */

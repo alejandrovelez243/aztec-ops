@@ -1,4 +1,8 @@
-"""Boundary behaviour of the six signal strategies, with no database."""
+"""Boundary behaviour of the six signal strategies, with no database.
+
+The asserted fragments are Spanish because the strings under test are: labels and reasons are the
+copy the interface renders (PRODUCT.md), while everything naming the code stays English.
+"""
 
 from datetime import date, timedelta
 from decimal import Decimal
@@ -27,12 +31,12 @@ class DeadlinePressureSignalTests(SimpleTestCase):
     def test_missing_target_date_scores_the_midpoint_and_names_the_gap(self) -> None:
         result = self.signal.evaluate(signal_input())
         self.assertEqual(result.score, NO_TARGET_DATE_SCORE)
-        self.assertIn("no target date", result.reason.lower())
+        self.assertIn("sin fecha comprometida", result.reason.lower())
 
     def test_overdue_target_date_saturates_and_names_the_days(self) -> None:
         result = self.signal.evaluate(signal_input(target_date=NOW.date() - timedelta(days=6)))
         self.assertEqual(result.score, 1.0)
-        self.assertIn("6 day(s) in the past", result.reason)
+        self.assertIn("pasó hace 6 día(s)", result.reason)
 
     def test_score_rises_as_the_target_date_approaches(self) -> None:
         previous = 0.0
@@ -42,7 +46,7 @@ class DeadlinePressureSignalTests(SimpleTestCase):
                     signal_input(target_date=NOW.date() + timedelta(days=days))
                 )
                 self.assertGreaterEqual(result.score, previous)
-                self.assertIn(f"{days} day(s) away", result.reason)
+                self.assertIn(f"Faltan {days} día(s)", result.reason)
                 previous = result.score
 
 
@@ -54,12 +58,12 @@ class OverdueWorkSignalTests(SimpleTestCase):
     def test_no_open_tasks_scores_zero(self) -> None:
         result = self.signal.evaluate(signal_input())
         self.assertEqual(result.score, 0.0)
-        self.assertIn("No open tasks", result.reason)
+        self.assertIn("Sin tareas abiertas", result.reason)
 
     def test_ratio_is_reported_with_both_counts(self) -> None:
         result = self.signal.evaluate(signal_input(open_task_count=7, overdue_task_count=4))
         self.assertAlmostEqual(result.score, 0.5714, places=4)
-        self.assertIn("4 of 7 open tasks", result.reason)
+        self.assertIn("4 de 7 tareas abiertas", result.reason)
 
 
 class CriticalitySignalTests(SimpleTestCase):
@@ -70,14 +74,14 @@ class CriticalitySignalTests(SimpleTestCase):
     def test_no_urgent_work_scores_zero(self) -> None:
         result = self.signal.evaluate(signal_input())
         self.assertEqual(result.score, 0.0)
-        self.assertIn("No open tasks at an urgent priority", result.reason)
+        self.assertIn("Sin tareas abiertas de prioridad urgente", result.reason)
 
     def test_saturates_at_the_named_threshold(self) -> None:
         for count, expected in ((3, 0.6), (URGENT_SATURATION_TASKS, 1.0), (9, 1.0)):
             with self.subTest(count=count):
                 result = self.signal.evaluate(signal_input(urgent_open_task_count=count))
                 self.assertEqual(result.score, expected)
-                self.assertIn(f"{count} open task(s)", result.reason)
+                self.assertIn(f"{count} tarea(s) abierta(s)", result.reason)
 
 
 class BusinessValueSignalTests(SimpleTestCase):
@@ -88,7 +92,7 @@ class BusinessValueSignalTests(SimpleTestCase):
     def test_missing_value_does_not_raise_the_project(self) -> None:
         result = self.signal.evaluate(signal_input())
         self.assertEqual(result.score, 0.0)
-        self.assertIn("No contract value", result.reason)
+        self.assertIn("Sin valor de contrato", result.reason)
 
     def test_log_scale_compresses_the_gap_between_a_small_and_a_large_contract(self) -> None:
         reference = Decimal("40000")
@@ -101,7 +105,17 @@ class BusinessValueSignalTests(SimpleTestCase):
         self.assertLess(small.score, large.score)
         # 28k is 3.5x of 8k in money and well under 1.2x of it here: that compression is the point.
         self.assertLess(large.score / small.score, 1.2)
-        self.assertIn("log-normalized", large.reason)
+        self.assertIn("normalizado logarítmicamente", large.reason)
+
+    def test_the_amount_is_written_in_spanish_notation(self) -> None:
+        result = self.signal.evaluate(
+            signal_input(
+                business_value=Decimal("28000"),
+                portfolio_max_business_value=Decimal("50000"),
+            )
+        )
+        self.assertIn("28.000,00 USD", result.reason)
+        self.assertIn("(50.000,00)", result.reason)
 
 
 class BlockageSignalTests(SimpleTestCase):
@@ -112,7 +126,7 @@ class BlockageSignalTests(SimpleTestCase):
     def test_no_open_blockers_scores_zero(self) -> None:
         result = self.signal.evaluate(signal_input())
         self.assertEqual(result.score, 0.0)
-        self.assertIn("No open blockers", result.reason)
+        self.assertIn("Sin bloqueos abiertos", result.reason)
 
     def test_age_raises_the_score_up_to_saturation(self) -> None:
         for days, expected in ((0, 0.5), (20, 0.75), (AGE_SATURATION_DAYS, 1.0), (60, 1.0)):
@@ -121,7 +135,7 @@ class BlockageSignalTests(SimpleTestCase):
                     signal_input(open_blocker_count=1, oldest_blocker_age_days=days)
                 )
                 self.assertEqual(result.score, expected)
-                self.assertIn(f"{days} day(s)", result.reason)
+                self.assertIn(f"{days} día(s)", result.reason)
 
 
 class StalenessSignalTests(SimpleTestCase):
@@ -132,7 +146,7 @@ class StalenessSignalTests(SimpleTestCase):
     def test_never_recorded_activity_saturates(self) -> None:
         result = self.signal.evaluate(signal_input())
         self.assertEqual(result.score, 1.0)
-        self.assertIn("No activity has ever been recorded", result.reason)
+        self.assertIn("Nunca se registró actividad", result.reason)
 
     def test_missing_next_step_adds_to_the_silence(self) -> None:
         with_step = self.signal.evaluate(
@@ -140,15 +154,15 @@ class StalenessSignalTests(SimpleTestCase):
         )
         without_step = self.signal.evaluate(signal_input(days_since_last_activity=7))
         self.assertLess(with_step.score, without_step.score)
-        self.assertIn("next step is set", with_step.reason)
-        self.assertIn("no next step is recorded", without_step.reason)
+        self.assertIn("hay próximo paso definido", with_step.reason)
+        self.assertIn("no hay próximo paso registrado", without_step.reason)
 
     def test_silence_past_the_threshold_saturates(self) -> None:
         result = self.signal.evaluate(
             signal_input(days_since_last_activity=30, next_step="Follow up")
         )
         self.assertEqual(result.score, 1.0)
-        self.assertIn("30 day(s)", result.reason)
+        self.assertIn("30 día(s)", result.reason)
 
 
 class EverySignalJustifiesItselfTests(SimpleTestCase):
@@ -160,3 +174,32 @@ class EverySignalJustifiesItselfTests(SimpleTestCase):
                 result = strategy.evaluate(signal_input(target_date=date(2026, 8, 30)))
                 self.assertGreaterEqual(len(result.reason), 10)
                 self.assertTrue(result.reason.endswith("."))
+
+
+class EverySignalNamesItselfTests(SimpleTestCase):
+    """A seventh signal must reach the interface named, without a frontend change.
+
+    The registry is the whole assertion: this passes for a signal that does not exist yet, and
+    fails the moment one is registered without a label — which is the only place that omission can
+    still be caught before it renders as ``overdue_work`` in a Spanish queue.
+    """
+
+    def test_every_registered_signal_carries_a_label_that_is_not_its_code(self) -> None:
+        for code, strategy in registered_signals().items():
+            with self.subTest(signal=code):
+                self.assertTrue(strategy.label.strip())
+                self.assertNotEqual(strategy.label, code)
+
+    def test_the_labels_are_the_interface_language(self) -> None:
+        labels = {code: strategy.label for code, strategy in registered_signals().items()}
+        self.assertEqual(
+            labels,
+            {
+                "deadline_pressure": "Presión de fecha",
+                "overdue_work": "Trabajo vencido",
+                "criticality": "Criticidad",
+                "business_value": "Valor de negocio",
+                "blockage": "Bloqueo",
+                "staleness": "Inactividad",
+            },
+        )

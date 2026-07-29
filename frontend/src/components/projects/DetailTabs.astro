@@ -55,19 +55,52 @@ const TABS = [
   </div>
 
   {
-    TABS.map((tab, index) => (
-      <section
-        class="panel"
-        role="tabpanel"
-        id={`panel-${tab.key}`}
-        data-panel={tab.key}
-        aria-labelledby={`tab-${tab.key}`}
-        hidden={index !== 0}
-      >
-        <slot name={tab.key} />
-      </section>
-    ))
+    /* The panels are written out rather than mapped: a slot's name is part of
+      the component's contract, and four literal names read better than one
+      dynamic one that has to be traced back to the array above. */
   }
+  <section
+    class="panel"
+    role="tabpanel"
+    id="panel-tasks"
+    data-panel="tasks"
+    aria-labelledby="tab-tasks"
+  >
+    <slot name="tasks" />
+  </section>
+
+  <section
+    class="panel"
+    role="tabpanel"
+    id="panel-blockers"
+    data-panel="blockers"
+    aria-labelledby="tab-blockers"
+    hidden
+  >
+    <slot name="blockers" />
+  </section>
+
+  <section
+    class="panel"
+    role="tabpanel"
+    id="panel-notes"
+    data-panel="notes"
+    aria-labelledby="tab-notes"
+    hidden
+  >
+    <slot name="notes" />
+  </section>
+
+  <section
+    class="panel"
+    role="tabpanel"
+    id="panel-activity"
+    data-panel="activity"
+    aria-labelledby="tab-activity"
+    hidden
+  >
+    <slot name="activity" />
+  </section>
 </div>
 
 <script>

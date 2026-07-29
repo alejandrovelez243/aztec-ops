@@ -101,14 +101,22 @@ export function renderQueueRegion(
         title: QUEUE_COPY.emptyTitle,
         body: QUEUE_COPY.emptyBody,
         tone: "tone-cielo",
-        action: { kind: "link", label: QUEUE_COPY.emptyAction, href: "/projects" },
+        action: {
+          kind: "link",
+          label: QUEUE_COPY.emptyAction,
+          href: "/projects",
+        },
       });
     case "error":
       return renderNote({
         title: QUEUE_COPY.errorTitle,
         body: failureText(state.code),
         tone: "tone-rojo",
-        action: { kind: "retry", label: QUEUE_COPY.errorAction, region: "queue" },
+        action: {
+          kind: "retry",
+          label: QUEUE_COPY.errorAction,
+          region: "queue",
+        },
       });
     case "ready":
     case "disconnected":
@@ -292,9 +300,8 @@ function renderOwnerRow(entry: TeamLoadEntry): string {
 /** Skeletons in the exact geometry of the loaded zones — never a page spinner. */
 function renderQueueSkeleton(): string {
   return ZONES.map((zone) => {
-    const cards = Array.from(
-      { length: SKELETON_ROWS[zone.key] },
-      () => renderCardSkeleton(),
+    const cards = Array.from({ length: SKELETON_ROWS[zone.key] }, () =>
+      renderCardSkeleton(),
     ).join("");
     return `<section class="ov-zone ov-zone--${zone.key}" data-ov-zone="${zone.key}" aria-busy="true" aria-label="${escapeHtml(QUEUE_COPY.loadingLabel)}">
   <header class="ov-zone-head">

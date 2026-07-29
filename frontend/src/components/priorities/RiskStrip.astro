@@ -34,13 +34,13 @@ const ordered = [...flags].sort(
 const summary =
   ordered.length === 0
     ? "Sin riesgos abiertos"
-    : `${ordered.length} riesgo(s): ${ordered.map((flag) => flag.code).join(", ")}`;
+    : `${ordered.length} riesgo(s): ${ordered.map((flag) => flag.label).join(", ")}`;
 ---
 
 <span class="strip" role="img" aria-label={summary}>
   {
     ordered.length === 0 ? (
-      <span class="dot dot-unlit" title="Sin riesgos abiertos"></span>
+      <span class="dot dot-unlit" title="Sin riesgos abiertos" />
     ) : (
       ordered.map((flag) => (
         <span
@@ -49,7 +49,7 @@ const summary =
             toneForSeverity(flag.severity),
             { "is-top": isTopSeverity(flag.severity) },
           ]}
-          title={`${flag.code} · ${flag.reason}`}
+          title={`${flag.label} · ${flag.reason}`}
           lang="en"
         />
       ))

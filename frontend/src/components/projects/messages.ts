@@ -16,14 +16,50 @@
  * words.
  */
 
+import { verbLabel } from "../../lib/activity/vocabulary";
 import type { ApiError } from "../../lib/api/errors";
 import type { BlockerKind } from "../../lib/api/domain";
+
+/**
+ * Activity verbs are named by the shared trail vocabulary
+ * (`lib/activity/vocabulary.ts`), which the portfolio-wide feed renders from
+ * too — re-exported here so the timeline's call sites keep one import and the
+ * two surfaces cannot name the same verb differently.
+ */
+export { verbLabel };
 
 /** A failure as the operator reads it: what happened, and what it means. */
 export interface FailureCopy {
   readonly title: string;
   readonly detail: string;
 }
+
+/**
+ * Why a task row's move control is dead, when it is.
+ *
+ * The list read (`TaskView`) does not publish `transitions`, and the legal moves
+ * out of a state are the only source a transition control may have
+ * (`docs/API.md` §2.2) — deriving them from the state code is the guess this
+ * codebase refuses. So the control renders visibly dead until the field lands,
+ * which `task-moves.ts` picks up with no further change.
+ *
+ * The sentence stays in the operator's terms: they do not need to know which
+ * payload is short a field, only that this is not their mistake and that no
+ * choice of theirs is being ignored.
+ */
+export const TASK_MOVES_UNAVAILABLE =
+  "Mover la tarea todavía no está disponible desde esta pantalla: aún no sabemos qué movimientos permite su flujo.";
+
+/**
+ * Why a task row's owner control is dead, when it is.
+ *
+ * `PATCH /api/v1/tasks/{code}` is the endpoint that carries the change; until it
+ * reaches the typed client the control renders visibly dead with this as its
+ * tooltip — never hidden, and never wired to some other route that happens to
+ * exist.
+ */
+export const TASK_OWNER_UNAVAILABLE =
+  "Cambiar el responsable de una tarea todavía no está disponible desde esta pantalla.";
 
 /**
  * Aggregate attributes a transition's `requires_fields` can name, and request
@@ -56,20 +92,6 @@ const FIELD_LABEL: Readonly<Record<string, string>> = {
   depends_on: "dependencias",
 };
 
-/** Verbs of `ActivityRecord`; the set is closed and versioned by migration. */
-const VERB_LABEL: Readonly<Record<string, string>> = {
-  CREATED: "Proyecto creado",
-  STATE_CHANGED: "Cambio de estado",
-  PRIORITY_CHANGED: "Prioridad recalculada",
-  BLOCKER_RAISED: "Bloqueo registrado",
-  BLOCKER_RESOLVED: "Bloqueo resuelto",
-  OWNER_CHANGED: "Cambio de responsable",
-  NEXT_STEP_SET: "Próximo paso definido",
-  TASK_ADDED: "Tarea agregada",
-  NOTE_ADDED: "Nota agregada",
-  SEEDED: "Carga inicial",
-};
-
 /**
  * The four blocker kinds. Typed as a total record over the generated union, so
  * a kind added by migration fails this file at build time instead of rendering
@@ -86,7 +108,8 @@ const BLOCKER_KIND_LABEL: Readonly<Record<BlockerKind, string>> = {
  * The same table widened to a string lookup, so an unknown kind arriving on the
  * wire can fall back instead of being cast into the union it is not in.
  */
-const BLOCKER_KIND_LOOKUP: Readonly<Record<string, string>> = BLOCKER_KIND_LABEL;
+const BLOCKER_KIND_LOOKUP: Readonly<Record<string, string>> =
+  BLOCKER_KIND_LABEL;
 
 /** Every blocker kind, in the order the form offers them. */
 export const BLOCKER_KINDS: readonly BlockerKind[] = [
@@ -96,53 +119,34 @@ export const BLOCKER_KINDS: readonly BlockerKind[] = [
   "TECHNICAL",
 ];
 
-/**
- * Spanish names for the risk flags and priority signals shipped today.
- *
- * Both sets are **open**: a flag or a signal is one class plus one registry
- * entry (CLAUDE.md rule 8), so a code this build has never seen will arrive.
- * That is why every lookup falls back to the code itself and why the flag's own
- * `reason` — the engine's evidence — is always rendered beside the name: an
- * unnamed risk still renders, which is the whole point (a dropped flag is a
- * risk nobody sees). These maps are naming, never behaviour: no branch anywhere
- * asks whether a code is in them.
- */
-const RISK_LABEL: Readonly<Record<string, string>> = {
-  BLOCKED: "Bloqueado",
-  OVERDUE: "Vencido",
-  NO_NEXT_STEP: "Sin próximo paso",
-  NO_TARGET_DATE: "Sin fecha objetivo",
-  STALE: "Sin actividad reciente",
-  OWNER_OVERLOADED: "Responsable sobrecargado",
-};
-
-const SIGNAL_LABEL: Readonly<Record<string, string>> = {
-  deadline_pressure: "Presión de fecha",
-  overdue_work: "Trabajo vencido",
-  criticality: "Criticidad",
-  business_value: "Valor de negocio",
-  blockage: "Bloqueo",
-  staleness: "Falta de avance",
-};
-
 /** Spanish name of an aggregate attribute; unknown names render verbatim. */
 export function fieldLabel(field: string): string {
   return FIELD_LABEL[field] ?? field;
 }
 
-/** Spanish name of a risk flag; an unknown code renders as itself. */
-export function riskLabel(code: string): string {
-  return RISK_LABEL[code] ?? code;
+/**
+ * The label the API shipped for a risk flag, with its code as the last resort.
+ *
+ * The Spanish wording belongs to the specification that raised the flag, not
+ * to this file: a criterion is one class plus one registry entry (CLAUDE.md
+ * rule 8), and a table here would have meant a seventh criterion rendering as
+ * `OWNER_OVERLOADED` until somebody remembered to translate it.
+ */
+export function riskLabel(flag: { label?: string; code: string }): string {
+  const label = flag.label ?? "";
+  return label === "" ? flag.code : label;
 }
 
-/** Spanish name of a priority signal; an unknown code renders readably. */
-export function signalLabel(code: string): string {
-  return SIGNAL_LABEL[code] ?? code.replace(/_/g, " ");
-}
-
-/** Spanish name of an activity verb; an unknown verb renders verbatim. */
-export function verbLabel(verb: string): string {
-  return VERB_LABEL[verb] ?? verb;
+/**
+ * The label the API persisted with a signal's contribution, code as fallback.
+ *
+ * The breakdown is an audit artifact: it carries the wording that was true when
+ * the score was computed, which is why the label travels with it instead of
+ * being resolved from a table at render time.
+ */
+export function signalLabel(entry: { label?: string; code: string }): string {
+  const label = entry.label ?? "";
+  return label === "" ? entry.code : label;
 }
 
 /** Spanish name of a blocker kind; an unknown kind renders verbatim. */
@@ -197,6 +201,8 @@ export function failureCopy(error: ApiError): FailureCopy {
       };
     case "unknown":
       return unknownCopy(error.backendCode);
+    case "auth":
+    case "permission_denied":
     default:
       return {
         title: "No pudimos completar la acción",
@@ -207,10 +213,18 @@ export function failureCopy(error: ApiError): FailureCopy {
 
 /** Copy for the `unknown` arm, split out so `failureCopy` stays flat. */
 function unknownCopy(backendCode: string | null): FailureCopy {
-  if (backendCode === "permission_denied") {
+  // `docs/API.md` §1.2.4 documents `permission_denied` with
+  // `details.required = "ops_lead"`; `ops_lead_required` is accepted beside it
+  // so a rename on the server surfaces as the right sentence rather than as
+  // "algo salió mal".
+  if (
+    backendCode === "permission_denied" ||
+    backendCode === "ops_lead_required"
+  ) {
     return {
       title: "Necesitas permiso de líder de operaciones",
-      detail: "Solo el líder de operaciones puede forzar o levantar la prioridad.",
+      detail:
+        "Solo el líder de operaciones puede forzar o levantar la prioridad.",
     };
   }
   if (backendCode === "conflicting_state") {
@@ -219,7 +233,10 @@ function unknownCopy(backendCode: string | null): FailureCopy {
       detail: "Alguien más lo hizo primero; recarga para ver el estado actual.",
     };
   }
-  if (backendCode === "authentication_required" || backendCode === "invalid_token") {
+  if (
+    backendCode === "authentication_required" ||
+    backendCode === "invalid_token"
+  ) {
     return {
       title: "Tu sesión no es válida",
       detail: "Vuelve a iniciar sesión para continuar.",
@@ -235,7 +252,10 @@ function unknownCopy(backendCode: string | null): FailureCopy {
  * Copy for a region that could not be read at all — the `error` arm of the view
  * state, where there is no data to keep on screen.
  */
-export function regionFailureCopy(error: ApiError, subject: string): FailureCopy {
+export function regionFailureCopy(
+  error: ApiError,
+  subject: string,
+): FailureCopy {
   const base = failureCopy(error);
   return {
     title: `No pudimos cargar ${subject}`,

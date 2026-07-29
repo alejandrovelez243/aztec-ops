@@ -24,8 +24,12 @@ export interface Props {
 
 const { projectCode, blockers } = Astro.props;
 
-const open = blockers.filter((blocker) => (blocker.resolved_at ?? null) === null);
-const resolved = blockers.filter((blocker) => (blocker.resolved_at ?? null) !== null);
+const open = blockers.filter(
+  (blocker) => (blocker.resolved_at ?? null) === null,
+);
+const resolved = blockers.filter(
+  (blocker) => (blocker.resolved_at ?? null) !== null,
+);
 ---
 
 <section class="blockers" data-blockers data-project-code={projectCode}>
@@ -46,10 +50,15 @@ const resolved = blockers.filter((blocker) => (blocker.resolved_at ?? null) !== 
                 {blockerKindLabel(blocker.kind)}
               </span>
               <span class="chip chip-code">{blocker.code}</span>
-              {blocker.task_code !== null && blocker.task_code !== undefined && (
-                <span class="chip chip-code">{blocker.task_code}</span>
-              )}
-              <button class="btn btn-secondary resolve" type="button" data-action="resolve">
+              {blocker.task_code !== null &&
+                blocker.task_code !== undefined && (
+                  <span class="chip chip-code">{blocker.task_code}</span>
+                )}
+              <button
+                class="btn btn-secondary resolve"
+                type="button"
+                data-action="resolve"
+              >
                 <Icon name="check" size={18} />
                 Resolver
               </button>
@@ -76,7 +85,11 @@ const resolved = blockers.filter((blocker) => (blocker.resolved_at ?? null) !== 
       <label class="field">
         <span class="label">Tipo</span>
         <select class="input" name="kind" required>
-          {BLOCKER_KINDS.map((kind) => <option value={kind}>{blockerKindLabel(kind)}</option>)}
+          {
+            BLOCKER_KINDS.map((kind) => (
+              <option value={kind}>{blockerKindLabel(kind)}</option>
+            ))
+          }
         </select>
       </label>
       <label class="field wide">
@@ -86,7 +99,8 @@ const resolved = blockers.filter((blocker) => (blocker.resolved_at ?? null) !== 
           name="description"
           rows="2"
           required
-          placeholder="Ej.: esperamos las credenciales del cliente para el ambiente de pruebas"></textarea>
+          placeholder="Ej.: esperamos las credenciales del cliente para el ambiente de pruebas"
+        ></textarea>
       </label>
     </div>
     <p class="small error" data-field="raise-error" hidden></p>
@@ -100,7 +114,9 @@ const resolved = blockers.filter((blocker) => (blocker.resolved_at ?? null) !== 
 
   <details class="resolved">
     <summary class="title">
-      Resueltos <span class="figure" data-field="resolved-count">{resolved.length}</span>
+      Resueltos <span class="figure" data-field="resolved-count"
+        >{resolved.length}</span
+      >
     </summary>
     <ul class="list" data-resolved-blockers>
       {
@@ -131,15 +147,21 @@ const resolved = blockers.filter((blocker) => (blocker.resolved_at ?? null) !== 
     </ul>
   </details>
 
-  {/* One home for both list shapes; the island clones them after every write
-      and after every blocker envelope for this project. */}
+  {
+    /* One home for both list shapes; the island clones them after every write
+      and after every blocker envelope for this project. */
+  }
   <template data-template="open-blocker">
     <li class="blocker card" data-blocker>
       <div class="blocker-head">
         <span class="chip tone-rojo" data-field="blocker-kind"></span>
         <span class="chip chip-code" data-field="blocker-code"></span>
         <span class="chip chip-code" data-field="blocker-task" hidden></span>
-        <button class="btn btn-secondary resolve" type="button" data-action="resolve">
+        <button
+          class="btn btn-secondary resolve"
+          type="button"
+          data-action="resolve"
+        >
           Resolver
         </button>
       </div>
@@ -164,8 +186,8 @@ const resolved = blockers.filter((blocker) => (blocker.resolved_at ?? null) !== 
     <form method="dialog" data-resolve-form>
       <h2 class="h2" id="resolve-title">Resolver el bloqueo</h2>
       <p class="small">
-        Cómo se destrabó. Es obligatorio: un bloqueo cerrado sin decir cómo es indistinguible de
-        uno que nunca existió.
+        Cómo se destrabó. Es obligatorio: un bloqueo cerrado sin decir cómo es
+        indistinguible de uno que nunca existió.
       </p>
       <label class="field">
         <span class="label">Resolución</span>
@@ -173,8 +195,14 @@ const resolved = blockers.filter((blocker) => (blocker.resolved_at ?? null) !== 
       </label>
       <p class="small error" data-field="resolve-error" hidden></p>
       <div class="dialog-actions">
-        <button class="btn btn-ghost" type="button" data-action="close-resolve">Cancelar</button>
-        <button class="btn btn-primary" type="submit" data-action="submit-resolve">
+        <button class="btn btn-ghost" type="button" data-action="close-resolve"
+          >Cancelar</button
+        >
+        <button
+          class="btn btn-primary"
+          type="submit"
+          data-action="submit-resolve"
+        >
           Marcar como resuelto
         </button>
       </div>
@@ -209,7 +237,9 @@ const resolved = blockers.filter((blocker) => (blocker.resolved_at ?? null) !== 
     flex-wrap: wrap;
   }
 
-  .head .chip[hidden] {
+  /* `hidden` must beat the inline-flex of `.chip`. */
+  .head .chip[hidden],
+  .blocker .chip[hidden] {
     display: none;
   }
 

@@ -27,7 +27,10 @@ const { kind, title, detail, actionLabel } = Astro.props;
 const isError = kind === "error";
 ---
 
-<div class:list={["region-message", isError ? "tone-rojo" : "tone-piedra"]} data-region-message>
+<div
+  class:list={["region-message", isError ? "tone-rojo" : "tone-piedra"]}
+  data-region-message
+>
   <span class="glyph" aria-hidden="true">
     <Icon name={isError ? "alert" : "folder"} size={22} />
   </span>
@@ -35,7 +38,11 @@ const isError = kind === "error";
   <p class="small">{detail}</p>
   {
     actionLabel !== null && (
-      <button class="btn btn-secondary" type="button" data-action="retry-region">
+      <button
+        class="btn btn-secondary"
+        type="button"
+        data-action="retry-region"
+      >
         <Icon name="refresh" size={18} />
         {actionLabel}
       </button>

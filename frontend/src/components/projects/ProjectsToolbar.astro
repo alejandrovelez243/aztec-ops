@@ -12,6 +12,7 @@
  */
 import Icon from "../ui/Icon.astro";
 import type { Facets } from "./presentation";
+import { SORT_OPTIONS, sortLabel } from "./sort";
 
 export interface Props {
   /** Facet values present in the fetched rows, with their counts. */
@@ -37,12 +38,64 @@ const { facets, total } = Astro.props;
       />
     </div>
 
+    <div class="sort" data-sort>
+      <span class="small sort-label" id="projects-sort-label">Ordenar por</span>
+      <button
+        class="btn btn-secondary sort-trigger"
+        type="button"
+        id="projects-sort-trigger"
+        aria-haspopup="true"
+        aria-expanded="false"
+        aria-labelledby="projects-sort-label projects-sort-trigger"
+        data-sort-trigger
+      >
+        <span data-field="sort-current">{sortLabel("name")}</span>
+        <Icon name="chevron-down" size={16} />
+      </button>
+      <ul
+        class="sort-menu card"
+        role="menu"
+        aria-labelledby="projects-sort-label"
+        data-sort-menu
+        hidden
+      >
+        {
+          SORT_OPTIONS.map((option, index) => (
+            <li>
+              <button
+                class="sort-option"
+                type="button"
+                role="menuitemradio"
+                aria-checked={index === 0}
+                data-sort-value={option.value}
+              >
+                <span class="tick" aria-hidden="true">
+                  <Icon name="check" size={14} />
+                </span>
+                <span>{option.label}</span>
+              </button>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+
     <div class="view-toggle" role="group" aria-label="Forma de ver la lista">
-      <button class="btn btn-ghost" type="button" data-view-button="grid" aria-pressed="true">
+      <button
+        class="btn btn-ghost"
+        type="button"
+        data-view-button="grid"
+        aria-pressed="true"
+      >
         <Icon name="board" size={18} />
         Tarjetas
       </button>
-      <button class="btn btn-ghost" type="button" data-view-button="table" aria-pressed="false">
+      <button
+        class="btn btn-ghost"
+        type="button"
+        data-view-button="table"
+        aria-pressed="false"
+      >
         <Icon name="menu" size={18} />
         Tabla
       </button>
@@ -95,14 +148,31 @@ const { facets, total } = Astro.props;
       }
     </div>
 
-    <p class="count-line small" aria-live="polite">
-      <span class="figure" data-field="visible-count">{total}</span> de
-      <span class="figure">{total}</span> proyectos
-      <button class="btn btn-ghost clear" type="button" data-action="clear-filters" hidden>
+    <div class="count-line">
+      {
+        /* Only the counter is live: an announcement per keystroke is useful,
+          the same button being re-read every time is not. */
+      }
+      {
+        /* The spaces are explicit: the compiler drops whitespace-only lines
+          between expressions, which is how "22 de22 proyectos" happens. */
+      }
+      <p class="small" aria-live="polite">
+        <span class="figure" data-field="visible-count">{total}</span>
+        {" de "}
+        <span class="figure">{total}</span>
+        {" proyectos"}
+      </p>
+      <button
+        class="btn btn-ghost clear"
+        type="button"
+        data-action="clear-filters"
+        hidden
+      >
         <Icon name="close" size={16} />
         Limpiar filtros
       </button>
-    </p>
+    </div>
   </div>
 </div>
 
@@ -140,10 +210,118 @@ const { facets, total } = Astro.props;
     padding-left: var(--space-6);
   }
 
+  /* The order menu is built rather than a `<select>`: the native popup is drawn
+     by the OS, so it lands as a grey system list in the middle of a surface
+     that is otherwise all paper and ink. */
+  .sort {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+    color: var(--tinta-media);
+    white-space: nowrap;
+  }
+
+  .sort-label {
+    color: var(--tinta-suave);
+  }
+
+  .sort-trigger {
+    height: 36px;
+    padding: 0 var(--space-2) 0 var(--space-3);
+    gap: var(--space-2);
+    font-size: var(--text-small-size);
+  }
+
+  .sort-trigger :global(svg) {
+    transition: transform var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .sort-trigger[aria-expanded="true"] {
+    border-color: var(--cobalto);
+    color: var(--cobalto);
+  }
+
+  .sort-trigger[aria-expanded="true"] :global(svg) {
+    transform: rotate(180deg);
+  }
+
+  .sort-menu {
+    position: absolute;
+    top: calc(100% + var(--space-1));
+    right: 0;
+    z-index: 20;
+    min-width: 240px;
+    margin: 0;
+    padding: var(--space-1);
+    list-style: none;
+    box-shadow: var(--shadow-lifted);
+    animation: sort-menu-in var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .sort-menu[hidden] {
+    display: none;
+  }
+
+  @keyframes sort-menu-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sort-menu {
+      animation: none;
+    }
+
+    .sort-trigger :global(svg) {
+      transition: none;
+    }
+  }
+
+  .sort-option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-2) var(--space-2);
+    border: 0;
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: var(--tinta);
+    font: inherit;
+    font-size: var(--text-small-size);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .sort-option:hover,
+  .sort-option:focus-visible {
+    background-color: var(--pozo);
+  }
+
+  .sort-option[aria-checked="true"] {
+    color: var(--cobalto);
+  }
+
+  /* The tick keeps its box when unchecked, so choosing one does not shunt the
+     labels sideways. */
+  .tick {
+    display: inline-flex;
+    width: 14px;
+    visibility: hidden;
+  }
+
+  .sort-option[aria-checked="true"] .tick {
+    visibility: visible;
+  }
+
   .view-toggle {
     display: flex;
     gap: var(--space-1);
-    margin-left: auto;
     padding: var(--space-1);
     background-color: var(--pozo);
     border-radius: var(--radius-control);
@@ -207,6 +385,10 @@ const { facets, total } = Astro.props;
     height: 32px;
     padding: 0 var(--space-2);
     font-size: var(--text-small-size);
+  }
+
+  .clear[hidden] {
+    display: none;
   }
 
   @media (pointer: coarse) {

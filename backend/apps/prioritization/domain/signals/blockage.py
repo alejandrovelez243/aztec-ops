@@ -27,6 +27,9 @@ class Blockage:
     blocker at or past forty days returns 1.0.
     """
 
+    # Spanish on purpose: ``label`` and every ``reason`` below are user-facing (CLAUDE.md §Language).
+    label = "Bloqueo"
+
     def evaluate(self, data: SignalInput) -> SignalResult:
         """Read the blockage pressure of one project.
 
@@ -38,7 +41,7 @@ class Blockage:
             The normalized pressure and a sentence naming the blocker count and the oldest age.
         """
         if data.open_blocker_count == 0:
-            return SignalResult(score=0.0, reason="No open blockers.")
+            return SignalResult(score=0.0, reason="Sin bloqueos abiertos.")
 
         oldest_days = data.oldest_blocker_age_days or 0
         score = OPEN_BLOCKER_FLOOR + (1.0 - OPEN_BLOCKER_FLOOR) * (
@@ -46,6 +49,6 @@ class Blockage:
         )
         return SignalResult.clamped(
             round(score, 4),
-            f"{data.open_blocker_count} open blocker(s); the oldest has been open for "
-            f"{oldest_days} day(s) and needs intervention.",
+            f"{data.open_blocker_count} bloqueo(s) abierto(s); el más antiguo lleva "
+            f"{oldest_days} día(s) sin resolverse y necesita intervención.",
         )

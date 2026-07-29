@@ -259,9 +259,9 @@ TaxonomyRef   { code: str, label: str, color: str | null }
 CurrencyRef   { code: str, label: str, color: str | null, minor_units: int }
 StateRef      { code: str, label: str, category: str, color: str | null }
 ActorRef      { alias: str, label: str, role: str | null }
-RiskFlag      { code: str, severity: "LOW"|"MEDIUM"|"HIGH"|"CRITICAL", reason: str }
+RiskFlag      { code: str, severity: "LOW"|"MEDIUM"|"HIGH"|"CRITICAL", label: str, reason: str }
 HealthRef     { code: "HEALTHY"|"AT_RISK"|"BLOCKED", label: str }
-ScoreSignal   { code: str, raw: float, weight: float, contribution: float, reason: str }
+ScoreSignal   { code: str, label: str, raw: float, weight: float, contribution: float, reason: str }
 Score         { value: float, policy_version: int, computed_at: datetime,
                 breakdown: ScoreSignal[], modifiers: {code: float}, flags: str[] }
 Override      { position: int | null, boost: float | null, reason: str,
@@ -277,6 +277,12 @@ not any event was emitted, and there is no `project.risk.changed` frame on the s
 is no stored set for anything to change *from*. `health` is derived from the flags —
 `BLOCKED` when any `CRITICAL` flag is raised, `AT_RISK` when any flag is raised, else `HEALTHY` — so
 the two can never disagree.
+
+`RiskFlag.label` and `RiskFlag.reason` are the Spanish the client renders (`PRODUCT.md`); `code` and
+`severity` are the identifiers it branches on. The words travel on the wire because the frontend may
+not hold an object literal keyed by a flag code (`docs/standards/FRONTEND.md` §7) — a seventh
+specification would ship a code that map does not have, and the flag would render as `NO_TARGET_DATE`
+or vanish. The same holds for `HealthRef.label`.
 
 `Score.value` is the computed 0–100 number and is **never** rewritten by an override. When
 `override` is non-null the frontend labels the row as a manual override and still shows
@@ -329,7 +335,7 @@ QueueItemOut {
       "project_type": {"code": "automatizacion", "label": "Automatizacion", "color": null},
       "stage": {"code": "ejecucion", "label": "Ejecucion", "color": null},
       "state": {"code": "ejecucion", "label": "En ejecucion", "category": "IN_PROGRESS", "color": "#3E63DD"},
-      "health": {"code": "BLOCKED", "label": "Blocked"},
+      "health": {"code": "BLOCKED", "label": "Bloqueado"},
       "target_date": null,
       "business_value": 28000,
       "currency": "USD",
@@ -342,32 +348,32 @@ QueueItemOut {
         "policy_version": 1,
         "computed_at": "2026-07-28T06:00:00Z",
         "breakdown": [
-          {"code": "blockage", "raw": 1.0, "weight": 0.15, "contribution": 15.0,
-           "reason": "2 open blocker(s); the oldest has been open for 24 day(s) and needs intervention."},
-          {"code": "business_value", "raw": 0.86, "weight": 0.15, "contribution": 12.9,
-           "reason": "28000 USD, log-normalized against the portfolio range 4000-40000."},
-          {"code": "deadline_pressure", "raw": 0.5, "weight": 0.25, "contribution": 12.5,
-           "reason": "No target date recorded; neutral 0.5 applied and NO_TARGET_DATE raised."},
-          {"code": "overdue_work", "raw": 0.5, "weight": 0.2, "contribution": 10.0,
-           "reason": "2 of 4 open tasks are past due."},
-          {"code": "criticality", "raw": 0.5, "weight": 0.15, "contribution": 7.5,
-           "reason": "2 of 4 open tasks are Critica or Alta."},
-          {"code": "staleness", "raw": 0.6, "weight": 0.1, "contribution": 6.0,
-           "reason": "9 day(s) without recorded activity and no next step set."}
+          {"code": "blockage", "label": "Bloqueo", "raw": 1.0, "weight": 0.15, "contribution": 15.0,
+           "reason": "2 bloqueo(s) abierto(s); el más antiguo lleva 24 día(s) sin resolverse y necesita intervención."},
+          {"code": "business_value", "label": "Valor de negocio", "raw": 0.86, "weight": 0.15, "contribution": 12.9,
+           "reason": "Valor de contrato 28.000,00 USD, normalizado logarítmicamente contra el máximo del portafolio (40.000,00)."},
+          {"code": "deadline_pressure", "label": "Presión de fecha", "raw": 0.5, "weight": 0.25, "contribution": 12.5,
+           "reason": "Sin fecha comprometida, la presión de fecha no se puede evaluar."},
+          {"code": "overdue_work", "label": "Trabajo vencido", "raw": 0.5, "weight": 0.2, "contribution": 10.0,
+           "reason": "2 de 4 tareas abiertas pasaron su fecha."},
+          {"code": "criticality", "label": "Criticidad", "raw": 0.5, "weight": 0.15, "contribution": 7.5,
+           "reason": "2 tarea(s) abierta(s) de prioridad urgente."},
+          {"code": "staleness", "label": "Inactividad", "raw": 0.6, "weight": 0.1, "contribution": 6.0,
+           "reason": "Sin actividad registrada durante 9 día(s) frente a un umbral de 14 día(s); no hay próximo paso registrado."}
         ],
         "modifiers": {"engagement_type": 1.1},
         "flags": ["NO_TARGET_DATE"]
       },
       "override": null,
       "risk_flags": [
-        {"code": "BLOCKED", "severity": "HIGH",
-         "reason": "2 open blockers and 1 task in a BLOCKED state."},
-        {"code": "OVERDUE", "severity": "HIGH",
-         "reason": "2 tasks past due; the oldest by 18 day(s)."},
-        {"code": "NO_TARGET_DATE", "severity": "MEDIUM",
-         "reason": "Active project with no target date."},
-        {"code": "NO_NEXT_STEP", "severity": "MEDIUM",
-         "reason": "No next step recorded and no task in progress."}
+        {"code": "BLOCKED", "severity": "CRITICAL", "label": "Bloqueado",
+         "reason": "2 bloqueos abiertos; el más antiguo lleva 24 días."},
+        {"code": "OVERDUE", "severity": "HIGH", "label": "Vencido",
+         "reason": "2 tareas pasaron su fecha de vencimiento."},
+        {"code": "NO_TARGET_DATE", "severity": "MEDIUM", "label": "Sin fecha objetivo",
+         "reason": "No hay fecha objetivo comprometida."},
+        {"code": "NO_NEXT_STEP", "severity": "MEDIUM", "label": "Sin próximo paso",
+         "reason": "No hay próximo paso registrado ni ninguna tarea en curso."}
       ],
       "updated_at": "2026-07-28T06:00:00Z"
     }
@@ -376,7 +382,9 @@ QueueItemOut {
 ```
 
 `breakdown` is returned sorted by `contribution` descending, which is the order the UI reads it
-in. `sum(contribution) * product(modifiers)` equals `value` to one decimal.
+in. `sum(contribution) * product(modifiers)` equals `value` to one decimal. Each line names itself:
+`label` is what the signal measures and `reason` the sentence that defends the number, both already
+in the interface's language, so the client never maps a signal `code` to text of its own.
 
 ### 2.2 `GET /api/v1/projects/{code}` — project detail
 
@@ -750,6 +758,36 @@ ActivityOut {
 sharing a `correlation_id` are one decision ("deprioritize A to prioritize B") and the UI groups
 them. The timeline is append-only: there is no `PATCH` or `DELETE` on it.
 
+#### 2.13.1 `GET /api/v1/activity` — portfolio-wide feed
+
+The same table read across every project, task and blocker: "what moved today", which the
+per-project timeline cannot answer. Items are the **identical** `ActivityOut`, so one client type
+and one component render both surfaces; `entity` is what identifies a row's subject here.
+
+Query: §1.3 pagination, plus
+
+| Param | Type | Meaning |
+| --- | --- | --- |
+| `entity_type` | `project`\|`task`\|`blocker` | Only facts about that kind of thing. |
+| `entity_id` | str | Business code (`PRJ-22`), meant to be paired with `entity_type`. |
+| `verb` | str, repeatable | ORs its values. |
+| `actor` | str | The alias stored on the record (`camila`, `system`). |
+| `origin` | `MANUAL`\|`POLICY`\|`SYSTEM` | Who caused it: a person, the engine, the system. |
+| `since` / `until` | datetime | Inclusive bounds on `occurred_at`. |
+| `correlation_id` | uuid | Expands one decision, exactly as in 2.13. |
+
+Ordered `-occurred_at, -id` only; there is no `order_by`, because a feed sorted by anything else is
+not a narrative. Response `200: Paginated[ActivityOut]`, `count` being the total match, not the
+page length.
+
+**No facet is rejected for naming an unknown value.** An unrecognised `verb`, `entity_type`,
+`origin` or `actor` returns an empty page, never `422`: those vocabularies move by migration and by
+the accounts table, and a filter saved in someone's URL must not be able to break a read-only
+screen. The only `422` on this endpoint is a malformed `correlation_id` or datetime.
+
+`origin=POLICY` is how the engine's own behaviour is audited — every score the ranking moved on its
+own, portfolio-wide, in one read.
+
 ### 2.14 `GET /api/v1/team/load` — load per person
 
 Computed from `Task` rows at read time. The `Team` sheet counters in the source dataset are a
@@ -926,7 +964,64 @@ hardcoded 2 is wrong by two orders of magnitude for every zero-decimal currency.
 **Workflow states are deliberately absent.** A state code is unique only inside its workflow, and
 the legal moves out of the state a project is actually in are `transitions` on the project detail
 (§2.2). A global list of states would invite the client to guess legality, which is exactly what
-that field exists to prevent.
+that field exists to prevent. The *shape* of a workflow — which columns a board has — is a
+different question and is served by §2.18.
+
+### 2.18 `GET /api/v1/workflows` — the shape of every state graph
+
+Authenticated like every other read; the opt-out list in §1.2 is five routes long and closed.
+
+Response `200: WorkflowCatalogOut`:
+
+```
+WorkflowCatalogOut {
+  workflows: WorkflowShape[]
+}
+WorkflowShape {
+  code: str                      # stable slug of the graph
+  name: str                      # operator-editable display name
+  applies_to: "PROJECT"|"TASK"   # kind of aggregate the graph governs
+  is_default: bool               # the fallback graph for its applies_to
+  is_active: bool                # false = retired; still served, see below
+  engagement_types: TaxonomyRef[]
+  states: StateRef[]             # every node, in the operator's `order`
+}
+```
+
+```json
+{"workflows": [{"code": "project_default", "name": "Ciclo de vida de proyecto",
+                "applies_to": "PROJECT", "is_default": true, "is_active": true,
+                "engagement_types": [],
+                "states": [{"code": "descubrimiento", "label": "Descubrimiento",
+                            "category": "BACKLOG", "color": "#f59e0b"},
+                           {"code": "bloqueado", "label": "Bloqueado",
+                            "category": "BLOCKED", "color": "#ef4444"}]}]}
+```
+
+One document rather than a route per engagement type, for the same reason §2.17 is one document: a
+board draws all of its columns at once. Asking per engagement type would also force the client to
+know *which* type to ask about before its first request, which means reimplementing the binding
+precedence `Workflow.objects.resolve` owns (`DATA_MODEL.md` §2).
+
+**This is shape, not legality, and it is not the global state list §2.17 refuses.** States arrive
+grouped under the graph that owns them — never flat, so the collision that makes a global list
+unsafe (`bloqueada` in two graphs) cannot happen — and **no edge is published at all**. A board
+needs the column set and cannot derive it: columns inferred from the states projects happen to
+occupy cannot represent an empty one, so a workflow whose `Bloqueado` state is unoccupied has no
+such column, cannot say "nothing is blocked", and cannot accept a card dropped into it. Whether
+that drop is allowed is still answered only by `transitions` on the project detail (§2.2); a card
+dragged into a column it may not enter gets the `409 transition_not_allowed` that carries
+`details.allowed` (§1.5), exactly like a stale button.
+
+Unlike §2.17, **retired graphs are served too**, flagged `is_active: false`. The catalog filters
+because it feeds pickers, where offering a retired value would let somebody choose it and quietly
+un-retire it. Nothing here is chooseable, and aggregates keep sitting on the states of a retired
+graph — they are `PROTECT`ed exactly so — so a board that could not draw their columns would lose
+those projects from the screen entirely.
+
+`engagement_types` lists the types whose active binding names this graph; empty is the common case
+and means the graph is reached as the per-kind default rather than by name. `states` is empty for a
+graph nobody has configured states for, which is an answer and not an error.
 
 ## 3. `GET /api/stream` — server-sent events
 
@@ -1081,11 +1176,12 @@ multi-line body would need one `data:` line per fragment and the client would ha
 - Numeric primary keys (`Blocker.id`, `ActivityRecord.id`) beyond passing them straight back to
   the route that issued them. They are not stable across a reseed.
 - The signal codes and weights inside `breakdown`, and `policy_version`. They change when a new
-  `PriorityPolicy` version is activated; the UI renders whatever entries arrive and must not
-  hardcode the six current ones.
+  `PriorityPolicy` version is activated; the UI renders whatever entries arrive — from each line's
+  own `label` and `reason` — and must not hardcode the six current ones or map their codes to text.
 - `RiskFlag.code` values as a closed set. New specifications add codes (`CLAUDE.md` rule 8); the
-  UI renders unknown codes with their `reason` rather than dropping them.
-- The wording of `reason` strings and of `message`. They are generated text, not identifiers.
+  UI renders unknown codes with their `label` and `reason` rather than dropping them.
+- The wording of `label` and of `reason` strings and of `message`. They are generated text, not
+  identifiers — render them, never branch on them.
 - `metadata` on `ActivityRecord` — free-form JSONB, per-verb, and it evolves.
 - `ProjectSnapshot`, the outbox table, the Celery queues and the handler registry. None of them are
   addressable over HTTP; the SSE endpoint is the only live window onto the bus, and

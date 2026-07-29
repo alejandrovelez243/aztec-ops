@@ -1,4 +1,4 @@
-"""Route of the audit trail: the project timeline.
+"""Routes of the audit trail: the project timeline and the portfolio-wide feed.
 
 Read-only and append-only at the source: reading who changed what is not itself a change, so this
 router calls a read service and nothing here writes. Authenticated like every other route — the
@@ -8,9 +8,14 @@ trail names people and clients, and the API's default is that you have to be sig
 from django.http import HttpRequest
 from ninja import Query, Router
 
-from apps.activity.api.schemas import TimelineQuery
+from apps.activity.api.schemas import PortfolioTimelineQuery, TimelineQuery
 from apps.activity.domain.value_objects import ActivityEntry
-from apps.activity.services import TimelineFilters, read_project_timeline
+from apps.activity.services import (
+    PortfolioTimelineFilters,
+    TimelineFilters,
+    read_portfolio_timeline,
+    read_project_timeline,
+)
 from apps.shared.pagination import Page, PageWindow
 
 router = Router(tags=["activity"])
@@ -40,6 +45,40 @@ def get_project_activity(
         TimelineFilters(
             project_code=project_code,
             verbs=tuple(filters.verb),
+            since=filters.since,
+            until=filters.until,
+            correlation_id=filters.correlation_id,
+            limit=window.limit,
+            offset=window.offset,
+        )
+    )
+
+
+@router.get("/activity", response=Page[ActivityEntry], url_name="portfolio_activity")
+def get_portfolio_activity(
+    request: HttpRequest, filters: Query[PortfolioTimelineQuery]
+) -> Page[ActivityEntry]:
+    """The whole portfolio's trail, newest first, in the same item type as a project timeline.
+
+    This is the cross-project reading of the same table: what moved today, across every project,
+    task and blocker. Items are identical to
+    ``GET /api/v1/projects/{code}/activity`` — one component and one generated type render both,
+    and ``entity`` is what tells a row's subject apart here.
+
+    Every facet is optional and none is rejected for naming an unknown value. A verb, entity type,
+    origin or actor this deployment does not know returns an empty page rather than a 422: those
+    vocabularies move by migration and by the accounts table, and a saved filter must not be able
+    to break a read-only screen.
+    """
+    del request
+    window = PageWindow.of(page=filters.page, page_size=filters.page_size)
+    return read_portfolio_timeline(
+        PortfolioTimelineFilters(
+            entity_type=filters.entity_type,
+            entity_id=filters.entity_id,
+            verbs=tuple(filters.verb),
+            actor=filters.actor,
+            origin=filters.origin,
             since=filters.since,
             until=filters.until,
             correlation_id=filters.correlation_id,

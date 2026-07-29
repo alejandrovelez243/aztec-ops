@@ -10,7 +10,10 @@ import EmptyState from "../components/ui/EmptyState.astro";
 import Shell from "../layouts/Shell.astro";
 ---
 
-<Shell title="Página no encontrada" crumbs={[{ label: "Inicio", href: "/" }, { label: "No encontrada" }]}>
+<Shell
+  title="Página no encontrada"
+  crumbs={[{ label: "Inicio", href: "/" }, { label: "No encontrada" }]}
+>
   <section class="not-found card">
     <EmptyState
       scene="lost"

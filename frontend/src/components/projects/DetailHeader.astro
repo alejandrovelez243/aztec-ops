@@ -7,11 +7,19 @@
  * `/projects` becomes this heading instead of the page cutting to it — the
  * shared element that makes the two surfaces feel like one object being opened.
  *
- * Absences are named, never blank: no deadline is an ámbar "Sin fecha", no next
- * step is an ámbar chip saying so, and an unowned project says that too.
+ * Absences are named, never blank: no deadline is an ámbar "Sin fecha", and an
+ * unowned project says so instead of leaving the cell empty.
+ *
+ * Two of those facts are also *editable here*, because naming an absence and
+ * offering no cure is only half the job. The responsable is a menu over the
+ * team, and the próximo paso — the one field a risk flag actively asks for — is
+ * written in place. Both go through `PATCH /api/v1/projects/{code}` and both
+ * repaint the whole header, the transition bar and the risk list from the
+ * response, which is the project re-read after the write.
  */
 import DueChip from "./DueChip.astro";
-import OwnerBadge from "./OwnerBadge.astro";
+import NextStepField from "./NextStepField.astro";
+import OwnerMenu from "./OwnerMenu.astro";
 import StateChip from "./StateChip.astro";
 import TransitionBar from "./TransitionBar.astro";
 import { healthTone, taxonomyTone, toneStyle } from "./tone";
@@ -79,7 +87,11 @@ const health = healthTone(healthCode);
   </div>
 
   <h1 class="h1 name" transition:name={`proj-${code}`}>{name}</h1>
-  {summary !== null && summary !== "" && <p class="body-text summary">{summary}</p>}
+  {
+    summary !== null && summary !== "" && (
+      <p class="body-text summary">{summary}</p>
+    )
+  }
 
   <dl class="facts">
     <div class="fact">
@@ -89,13 +101,21 @@ const health = healthTone(healthCode);
     <div class="fact">
       <dt class="label">Responsable</dt>
       <dd>
-        <OwnerBadge alias={ownerAlias} label={ownerLabel} />
+        <OwnerMenu
+          scope="project"
+          code={code}
+          alias={ownerAlias}
+          label={ownerLabel}
+        />
       </dd>
     </div>
     <div class="fact">
       <dt class="label">Tipo de contrato</dt>
       <dd>
-        <span class:list={["chip", engagement.className]} style={toneStyle(engagement)}>
+        <span
+          class:list={["chip", engagement.className]}
+          style={toneStyle(engagement)}
+        >
           {engagementLabel}
         </span>
       </dd>
@@ -106,14 +126,8 @@ const health = healthTone(healthCode);
     </div>
     <div class="fact wide">
       <dt class="label">Próximo paso</dt>
-      <dd data-next-step>
-        {
-          nextStep === null || nextStep === "" ? (
-            <span class="chip tone-ambar">Sin próximo paso</span>
-          ) : (
-            <span class="body-text">{nextStep}</span>
-          )
-        }
+      <dd>
+        <NextStepField projectCode={code} nextStep={nextStep} />
       </dd>
     </div>
   </dl>
@@ -125,6 +139,13 @@ const health = healthTone(healthCode);
     updatedAt={updatedAt}
   />
 </header>
+
+<script>
+  import { mountHeaderControls } from "./header-controls";
+  import { onPage } from "./island";
+
+  onPage("[data-project-header]", mountHeaderControls);
+</script>
 
 <style>
   .head {

@@ -1,12 +1,40 @@
 ---
+/**
+ * `/projects/{code}` — one project, and everything you can do to it.
+ *
+ * The container: this frontmatter performs the three reads of the first paint
+ * (the project, its tasks, its timeline) and hands them to presentational
+ * components; the islands underneath own the writes and the live patches.
+ *
+ * Layering, in one sentence each. `transitions` from the project read is the
+ * only source of transition buttons, so a workflow state added in the admin
+ * needs no frontend change. The score is never rendered without the breakdown
+ * that defends it. A manual override is shown beside the computed score, never
+ * instead of it. And nothing repaints a state change until the stream confirms
+ * it — the server owns legality, and a rollback the operator has already read
+ * past is worse than a wait.
+ *
+ * There is no SSR adapter, so the route is pre-rendered once per project in the
+ * queue; a code the build did not know still renders the error arm rather than
+ * a blank page.
+ */
 import Shell from "../../layouts/Shell.astro";
-import ProjectHeader from "../../islands/ProjectHeader.astro";
-import TransitionBar from "../../islands/TransitionBar.astro";
-import TimelineIsland from "../../islands/TimelineIsland.astro";
-import TasksTable from "../../components/project/TasksTable.astro";
-import BlockerPanel from "../../components/project/BlockerPanel.astro";
-import NotesPanel from "../../components/project/NotesPanel.astro";
-import RegionFallback from "../../components/project/RegionFallback.astro";
+import ActivityFeed from "../../components/projects/ActivityFeed.astro";
+import BlockersPanel from "../../components/projects/BlockersPanel.astro";
+import DetailHeader from "../../components/projects/DetailHeader.astro";
+import DetailTabs from "../../components/projects/DetailTabs.astro";
+import NotesPanel from "../../components/projects/NotesPanel.astro";
+import ReasonDialog from "../../components/projects/ReasonDialog.astro";
+import RegionMessage from "../../components/projects/RegionMessage.astro";
+import RiskFlagList from "../../components/projects/RiskFlagList.astro";
+import ScorePlate from "../../components/projects/ScorePlate.astro";
+import StaleBanner from "../../components/projects/StaleBanner.astro";
+import TasksTable from "../../components/projects/TasksTable.astro";
+import {
+  regionFailureCopy,
+  type FailureCopy,
+} from "../../components/projects/messages";
+import { emptyAggregateFields } from "../../components/projects/presentation";
 import {
   getProject,
   getProjectActivity,
@@ -14,7 +42,7 @@ import {
   getQueue,
   type Result,
 } from "../../lib/api/client";
-import type { ApiError, ApiErrorCode } from "../../lib/api/errors";
+import type { ApiError } from "../../lib/api/errors";
 import type {
   ActivityPage,
   ProjectDetail,
@@ -22,290 +50,291 @@ import type {
 } from "../../lib/api/domain";
 import { assertNever, toViewState, type ViewState } from "../../lib/view-state";
 
-/**
- * Project detail — `/projects/{code}`. The container: the frontmatter fetches the
- * three reads for first paint (project, tasks, activity) and maps each onto the
- * view-state union; the islands patch from the stream afterwards.
- *
- * A `not_found` (or any failed) project read renders the error arm as real markup
- * with a retry — never a crash, never a blank page.
- *
- * The project has no SSR adapter, so the dynamic route prerenders one path per
- * project in the queue. An unknown code still renders the error arm — the
- * frontmatter read runs for every request in dev, and a code the build did not
- * know simply reaches the `not_found` Result.
- */
+/** First page of the timeline; "Cargar más" keeps the same size. */
+const ACTIVITY_PAGE_SIZE = 20;
+
 export async function getStaticPaths() {
-  const res = await getQueue({ page_size: 200 });
-  if (!res.ok) return [];
-  return res.data.items.map((item) => ({ params: { code: item.code } }));
+  const result = await getQueue({ page_size: 200 });
+  if (!result.ok) return [];
+  return result.data.items.map((item) => ({ params: { code: item.code } }));
 }
 
 const code = Astro.params.code;
 
-const missingCodeError: ApiError = {
+/** A route reached without a code cannot be read; it is a `not_found`, not a crash. */
+const MISSING_CODE: ApiError = {
   kind: "not_found",
   code: "not_found",
   message: "The URL carries no project code.",
   details: {},
 };
 
-const [projectRes, tasksRes, activityRes]: [
+const [projectResult, tasksResult, activityResult]: [
   Result<ProjectDetail>,
   Result<TaskPage>,
   Result<ActivityPage>,
 ] =
   code === undefined
     ? [
-        { ok: false, error: missingCodeError },
-        { ok: false, error: missingCodeError },
-        { ok: false, error: missingCodeError },
+        { ok: false, error: MISSING_CODE },
+        { ok: false, error: MISSING_CODE },
+        { ok: false, error: MISSING_CODE },
       ]
     : await Promise.all([
         getProject(code),
         getProjectTasks(code),
-        getProjectActivity(code),
+        getProjectActivity(code, { page_size: ACTIVITY_PAGE_SIZE }),
       ]);
 
 /**
- * UI copy for the error arm, keyed by the typed error code — the envelope's
- * `message` is English prose for logs and is never rendered as UI text
- * (docs/API.md §1.5).
- */
-function errorCopy(code: ApiErrorCode): string {
-  switch (code) {
-    case "not_found":
-      return "No project with this code.";
-    case "transition_not_allowed":
-      return "That move is not legal from the current state.";
-    case "validation_error":
-      return "The request was rejected as invalid.";
-    case "conflicting_state":
-      return "The record changed underneath this view.";
-    case "network_error":
-      return "The API is unreachable.";
-    case "unknown_error":
-      return "Something failed unexpectedly.";
-    default:
-      return assertNever(code);
-  }
-}
-
-/**
- * Collapses a region's view state into what the template renders. SSR has no
- * stream status, so `disconnected` cannot occur here — it is still an arm of the
- * union and still handled, so adding a state fails the build, not the page.
+ * What a region renders, one arm at a time.
+ *
+ * `disconnected` collapses into `data`: on the server the read is fresh by
+ * construction, and staleness is `StaleBanner`'s job in the browser.
  */
 type RegionPlan<T> =
   | { mode: "data"; data: T }
-  | { mode: "empty"; message: string }
-  | { mode: "error"; code: ApiErrorCode }
+  | { mode: "empty" }
+  | { mode: "error"; copy: FailureCopy }
   | { mode: "loading" };
 
-function plan<T>(view: ViewState<T>): RegionPlan<T> {
-  switch (view.kind) {
+function planFor<T>(
+  state: ViewState<T>,
+  failure: ApiError | null,
+  subject: string,
+): RegionPlan<T> {
+  switch (state.kind) {
     case "ready":
     case "disconnected":
-      return { mode: "data", data: view.data };
+      return { mode: "data", data: state.data };
     case "empty":
-      return { mode: "empty", message: view.message };
+      return { mode: "empty" };
     case "error":
-      return { mode: "error", code: view.code };
+      return {
+        mode: "error",
+        copy:
+          failure === null
+            ? {
+                title: `No pudimos cargar ${subject}`,
+                detail: "Vuelve a intentarlo.",
+              }
+            : regionFailureCopy(failure, subject),
+      };
     case "loading":
       return { mode: "loading" };
     default:
-      return assertNever(view);
+      return assertNever(state);
   }
 }
 
-/**
- * The aggregate attributes `requires_fields` can name, with their current
- * emptiness. An unknown field name counts as empty — the button renders dead and
- * names it, which is the honest answer to a contract that grew.
- */
-function collectEmptyFields(project: ProjectDetail): string[] {
-  const values: Record<string, unknown> = {
-    name: project.name,
-    summary: project.summary ?? null,
-    next_step: project.next_step ?? null,
-    target_date: project.target_date ?? null,
-    start_date: project.start_date ?? null,
-    business_value: project.business_value ?? null,
-    owner: project.owner ?? null,
-    stage: project.stage ?? null,
-    project_type: project.project_type ?? null,
-  };
-  const empty = new Set<string>();
-  for (const transition of project.transitions) {
-    for (const field of transition.requires_fields) {
-      const value = values[field];
-      if (value === undefined || value === null || value === "") {
-        empty.add(field);
-      }
-    }
-  }
-  return [...empty];
-}
+// SSR has no stream, so the status is "connecting": a successful read is
+// `ready` and a failed one is `error`; `disconnected` is a client-side arm.
+const tasksPlan = planFor(
+  toViewState(tasksResult, "connecting", {
+    isEmpty: (page) => page.items.length === 0,
+    emptyMessage: "Sin tareas registradas.",
+    lastEventAt: null,
+  }),
+  tasksResult.ok ? null : tasksResult.error,
+  "las tareas",
+);
 
-const TASKS_EMPTY = "No tasks recorded on this project.";
-const ACTIVITY_EMPTY = "No activity recorded yet.";
+const activityPlan = planFor(
+  toViewState(activityResult, "connecting", {
+    isEmpty: (page) => page.items.length === 0,
+    emptyMessage: "Sin movimientos registrados.",
+    lastEventAt: null,
+  }),
+  activityResult.ok ? null : activityResult.error,
+  "la actividad",
+);
 
-// SSR runs before the stream exists, so the status is "connecting": a successful
-// read is `ready`, a failed one is `error` — `disconnected` is a client-side arm.
-const tasksView = toViewState(tasksRes, "connecting", {
-  isEmpty: (page) => page.items.length === 0,
-  emptyMessage: TASKS_EMPTY,
-  lastEventAt: null,
-});
-const activityView = toViewState(activityRes, "connecting", {
-  isEmpty: (page) => page.items.length === 0,
-  emptyMessage: ACTIVITY_EMPTY,
-  lastEventAt: null,
-});
+const project = projectResult.ok ? projectResult.data : null;
+const projectFailure = projectResult.ok ? null : projectResult.error;
 
-const tasksPlan = plan(tasksView);
-const activityPlan = plan(activityView);
+const openBlockers =
+  project?.blockers.filter(
+    (blocker) => (blocker.resolved_at ?? null) === null,
+  ) ?? [];
 
-const project = projectRes.ok ? projectRes.data : null;
+const crumbs = [
+  { label: "Inicio", href: "/" },
+  { label: "Proyectos", href: "/projects" },
+  { label: project?.code ?? code ?? "Proyecto" },
+];
 
-const retryHref = Astro.url.pathname;
+const failureCopyForProject: FailureCopy =
+  projectFailure === null
+    ? { title: "No pudimos cargar el proyecto", detail: "Vuelve a intentarlo." }
+    : regionFailureCopy(projectFailure, "el proyecto");
 ---
 
 {
-  project === null && !projectRes.ok ? (
-    <Shell title="Project not found">
-      <main class="detail">
-        <RegionFallback
-          kind="error"
-          message={errorCopy(projectRes.error.code)}
-          retryHref={retryHref}
-        />
-        <p>
-          <a class="label back-link" href="/">
-            BACK TO COMMAND CENTER
-          </a>
-        </p>
-      </main>
+  project === null ? (
+    <Shell title="Proyecto no encontrado" active="projects" crumbs={crumbs}>
+      <RegionMessage
+        kind="error"
+        title={failureCopyForProject.title}
+        detail={failureCopyForProject.detail}
+        actionLabel="Reintentar"
+      >
+        <a class="btn btn-ghost" href="/projects">
+          Volver a Proyectos
+        </a>
+      </RegionMessage>
     </Shell>
-  ) : project !== null ? (
-    <Shell title={project.name}>
-      <div class="detail">
-        <ProjectHeader
+  ) : (
+    <Shell title={project.name} active="projects" crumbs={crumbs}>
+      <div class="detail" data-project-detail data-project-code={project.code}>
+        <StaleBanner />
+
+        <DetailHeader
           code={project.code}
           name={project.name}
           summary={project.summary ?? null}
           clientLabel={project.client.label}
+          ownerAlias={project.owner?.alias ?? null}
           ownerLabel={project.owner?.label ?? null}
-          stageLabel={project.stage?.label ?? null}
           engagementLabel={project.engagement_type.label}
-          state={project.state}
-          health={project.health}
+          engagementColor={project.engagement_type.color ?? null}
+          stateLabel={project.state.label}
+          stateCategory={project.state.category}
+          stateColor={project.state.color ?? null}
+          healthCode={project.health.code}
+          healthLabel={project.health.label}
           targetDate={project.target_date ?? null}
           nextStep={project.next_step ?? null}
           isArchived={project.is_archived}
-          score={project.score ?? null}
-          override={project.override ?? null}
-          riskFlags={project.risk_flags}
           updatedAt={project.updated_at}
-        />
-
-        <span class="rule" />
-
-        <TransitionBar
           transitions={project.transitions}
-          projectCode={project.code}
-          emptyFields={collectEmptyFields(project)}
-          updatedAt={project.updated_at}
+          emptyFields={emptyAggregateFields(project)}
         />
 
-        <span class="rule" />
-
-        <section class="region" aria-label="Tasks">
-          <h2 class="headline">WORK</h2>
-          {tasksPlan.mode === "data" ? (
-            <TasksTable tasks={tasksPlan.data.items} />
-          ) : tasksPlan.mode === "empty" ? (
-            <RegionFallback kind="empty" message={tasksPlan.message} />
-          ) : tasksPlan.mode === "error" ? (
-            <RegionFallback
-              kind="error"
-              message={errorCopy(tasksPlan.code)}
-              retryHref={retryHref}
-            />
-          ) : (
-            <RegionFallback kind="loading" message="" />
-          )}
-        </section>
-
-        <span class="rule" />
-
-        <section class="region" aria-label="Blockers">
-          <h2 class="headline">BLOCKERS</h2>
-          <BlockerPanel
-            blockers={project.blockers}
+        <div class="split">
+          <ScorePlate
             projectCode={project.code}
+            score={project.score ?? null}
+            override={project.override ?? null}
             updatedAt={project.updated_at}
           />
-        </section>
+          <div class="card risks">
+            <RiskFlagList flags={project.risk_flags} />
+          </div>
+        </div>
 
-        <span class="rule" />
+        <DetailTabs
+          taskCount={tasksPlan.mode === "data" ? tasksPlan.data.count : 0}
+          blockerCount={openBlockers.length}
+          activityCount={
+            activityPlan.mode === "data" ? activityPlan.data.count : 0
+          }
+        >
+          <Fragment slot="tasks">
+            {tasksPlan.mode === "data" && (
+              <TasksTable
+                projectCode={project.code}
+                tasks={tasksPlan.data.items}
+                updatedAt={project.updated_at}
+              />
+            )}
+            {/* The table owns its own empty sentence and stays mounted, so a
+                task created while the page is open lands in it. */}
+            {tasksPlan.mode === "empty" && (
+              <TasksTable
+                projectCode={project.code}
+                tasks={[]}
+                updatedAt={project.updated_at}
+              />
+            )}
+            {tasksPlan.mode === "error" && (
+              <RegionMessage
+                kind="error"
+                title={tasksPlan.copy.title}
+                detail={tasksPlan.copy.detail}
+                actionLabel="Reintentar"
+              />
+            )}
+            {tasksPlan.mode === "loading" && (
+              <p class="skeleton loading-block" />
+            )}
+          </Fragment>
 
-        <section class="region" aria-label="Notes">
-          <h2 class="headline">NOTES</h2>
-          <NotesPanel projectCode={project.code} />
-        </section>
-
-        <span class="rule" />
-
-        <section class="region" aria-label="Chronology">
-          <h2 class="headline">CHRONOLOGY</h2>
-          {activityPlan.mode === "error" ? (
-            <RegionFallback
-              kind="error"
-              message={errorCopy(activityPlan.code)}
-              retryHref={retryHref}
-            />
-          ) : activityPlan.mode === "loading" ? (
-            <RegionFallback kind="loading" message="" />
-          ) : (
-            <TimelineIsland
-              entries={
-                activityPlan.mode === "data" ? activityPlan.data.items : []
-              }
+          <Fragment slot="blockers">
+            <BlockersPanel
               projectCode={project.code}
-              emptyMessage={ACTIVITY_EMPTY}
+              blockers={project.blockers}
             />
-          )}
-        </section>
+          </Fragment>
+
+          <Fragment slot="notes">
+            <NotesPanel projectCode={project.code} />
+          </Fragment>
+
+          <Fragment slot="activity">
+            {activityPlan.mode === "data" && (
+              <ActivityFeed
+                projectCode={project.code}
+                entries={activityPlan.data.items}
+                count={activityPlan.data.count}
+                pageSize={ACTIVITY_PAGE_SIZE}
+              />
+            )}
+            {activityPlan.mode === "empty" && (
+              <ActivityFeed
+                projectCode={project.code}
+                entries={[]}
+                count={0}
+                pageSize={ACTIVITY_PAGE_SIZE}
+              />
+            )}
+            {activityPlan.mode === "error" && (
+              <RegionMessage
+                kind="error"
+                title={activityPlan.copy.title}
+                detail={activityPlan.copy.detail}
+                actionLabel="Reintentar"
+              />
+            )}
+            {activityPlan.mode === "loading" && (
+              <p class="skeleton loading-block" />
+            )}
+          </Fragment>
+        </DetailTabs>
+
+        {/* One motive dialog for the whole screen: `requires_reason` is a
+            property of a transition edge, so the project bar and a task row ask
+            the same question and must not ask it in two different forms. */}
+        <ReasonDialog />
       </div>
     </Shell>
-  ) : null
+  )
 }
 
 <style>
   .detail {
     display: flex;
     flex-direction: column;
+    gap: var(--space-5);
+  }
+
+  .split {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
     gap: var(--space-4);
-    padding: var(--space-4);
+    align-items: start;
   }
 
-  .region {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
+  .risks {
+    padding: var(--space-5);
   }
 
-  .region .headline {
-    color: var(--color-legend);
+  .loading-block {
+    height: var(--space-8);
   }
 
-  .back-link {
-    color: var(--color-legend-dim);
-    text-decoration: none;
-  }
-
-  .back-link:hover {
-    color: var(--color-legend);
+  @media (max-width: 1023px) {
+    .split {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

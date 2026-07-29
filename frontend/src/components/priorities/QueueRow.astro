@@ -75,14 +75,20 @@ const ownerName = ownerLabel ?? "Sin responsable";
   aria-current={isSelected ? "true" : undefined}
   tabindex={isSelected ? 0 : -1}
 >
-  <span class="rank figure" data-slot="rank" aria-hidden="true">{formatRank(rank)}</span>
+  <span class="rank figure" data-slot="rank" aria-hidden="true"
+    >{formatRank(rank)}</span
+  >
   <span class="visually-hidden" data-slot="rank-text">Puesto {rank}.</span>
 
   <span class="main">
     <span class="title name" transition:name={`proj-${code}`}>{name}</span>
     <span class="meta">
       <span class="small client">{clientAlias}</span>
-      <span class="chip tone-ambar manual" data-slot="manual" hidden={!hasOverride}>
+      <span
+        class="chip tone-ambar manual"
+        data-slot="manual"
+        hidden={!hasOverride}
+      >
         Ajuste manual
       </span>
     </span>
@@ -91,7 +97,11 @@ const ownerName = ownerLabel ?? "Sin responsable";
   <span class="visually-hidden">Responsable: {ownerName}.</span>
   {
     ownerAlias === null ? (
-      <span class="avatar unowned tone-ambar" title="Sin responsable" aria-hidden="true">
+      <span
+        class="avatar unowned tone-ambar"
+        title="Sin responsable"
+        aria-hidden="true"
+      >
         —
       </span>
     ) : (
@@ -216,11 +226,15 @@ const ownerName = ownerLabel ?? "Sin responsable";
    */
   .row[aria-current="true"] {
     background-color: var(--cobalto-papel);
-    box-shadow: inset var(--rail-width) 0 0 0 var(--cobalto), var(--shadow-resting);
+    box-shadow:
+      inset var(--rail-width) 0 0 0 var(--cobalto),
+      var(--shadow-resting);
   }
 
   .row[aria-current="true"]:hover {
-    box-shadow: inset var(--rail-width) 0 0 0 var(--cobalto), var(--shadow-raised);
+    box-shadow:
+      inset var(--rail-width) 0 0 0 var(--cobalto),
+      var(--shadow-raised);
   }
 
   .row[aria-current="true"] .rank,

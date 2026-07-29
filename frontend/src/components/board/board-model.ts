@@ -1,26 +1,44 @@
 /**
  * Pure view model of the board surface (`/board`) — no DOM, no Astro, no network.
  *
- * Everything the board renders is derived here from one `GET /api/v1/queue` page, so the
- * page frontmatter composes components instead of computing, and the same functions can be
- * reasoned about (and one day tested) without a browser.
+ * Everything the board renders is derived here from one `GET /api/v1/queue` page, one
+ * `GET /api/v1/workflows` and one `GET /api/v1/team/load`, so the page frontmatter composes
+ * components instead of computing, and the same functions can be reasoned about (and one day
+ * tested) without a browser. The task cards are derived here too, because the island builds
+ * them at runtime and the derivation must not fork into a second copy that drifts.
  *
- * Two rules shape this module:
+ * The surface is two halves that swap the axes of the old board:
  *
- * - **Data owns colour and order.** A column's tone comes from `StateRef.color` when the
- *   operator set one and falls back to the state's `category`; nothing here branches on a
- *   state `code` (`docs/standards/PATTERNS_FRONTEND.md` §7). A workflow state added from the
- *   admin therefore renders with zero frontend changes.
+ * - the **rail** is a vertical stack of PROJECT workflow states, one section each, and a
+ *   project is dragged up and down between them;
+ * - the **board** is a horizontal row of TASK workflow states, one column each, holding the
+ *   tasks of the selected project, dragged left and right.
+ *
+ * Three rules shape this module:
+ *
+ * - **Data owns colour and order.** A section's tone comes from `StateRef.color` when the
+ *   operator set one and falls back to the state's `category`; the order of the sections and
+ *   of the columns is the order the operator arranged in the admin, read off
+ *   `GET /api/v1/workflows`. Nothing here branches on a state `code`
+ *   (`docs/standards/PATTERNS_FRONTEND.md` §7).
+ * - **Every state gets a section, occupied or not.** A state with no section is a state you
+ *   cannot drop into, which is the defect the workflow endpoint exists to fix.
  * - **Absence is a signal.** A project with no target date or no computed breakdown renders
  *   an ámbar chip naming what is missing, never an empty cell (DESIGN.md, Present-Absence).
  */
 import { avatarHue, initials } from "../../lib/auth/session";
 import type {
+  DependencyRef,
   QueueItem,
   QueueOverride,
+  RiskFlag,
   Score,
   StateRef,
+  TaskItem,
   TaxonomyRef,
+  TeamLoadEntry,
+  WorkflowCatalog,
+  WorkflowShape,
 } from "../../lib/api/domain";
 
 /**
@@ -36,18 +54,34 @@ export interface Tone {
   readonly style: string | null;
 }
 
-/** One column of the board: a workflow state plus the cards currently sitting in it. */
-export interface BoardColumnModel {
+/** One PROJECT workflow state as a section of the rail: the state, its tone, its cards. */
+export interface RailSectionModel {
   readonly state: StateRef;
   readonly tone: Tone;
   readonly cards: readonly ProjectCardModel[];
 }
 
-/** One engagement type's board — the columns the switcher shows one at a time. */
-export interface BoardPanelModel {
+/** One TASK workflow state as a column of the main board; its cards arrive on selection. */
+export interface TaskColumnModel {
+  readonly state: StateRef;
+  readonly tone: Tone;
+}
+
+/**
+ * One engagement type's whole surface: the rail on the left and the task columns on the right.
+ *
+ * Both halves are bound to the engagement type rather than to the page, because
+ * `Workflow.objects.resolve` binds a graph per engagement type: two types can run two
+ * different project workflows *and* two different task workflows, so the select swaps the
+ * columns as well as the sections.
+ */
+export interface BoardSurfaceModel {
   readonly engagementType: TaxonomyRef;
   readonly tone: Tone;
-  readonly columns: readonly BoardColumnModel[];
+  readonly sections: readonly RailSectionModel[];
+  readonly taskStates: readonly TaskColumnModel[];
+  /** Projects of this type on the rail — the count the select shows beside the label. */
+  readonly count: number;
 }
 
 /** The due-date chip: a countdown, or the named absence of a date. */
@@ -76,7 +110,11 @@ export type ScoreDisplay =
       readonly text: string;
       readonly description: string;
     }
-  | { readonly kind: "absent"; readonly text: string; readonly description: string };
+  | {
+      readonly kind: "absent";
+      readonly text: string;
+      readonly description: string;
+    };
 
 /** A human's forced ranking, as the card labels it. Never merged into the score. */
 export interface OverrideNote {
@@ -84,14 +122,35 @@ export interface OverrideNote {
   readonly description: string;
 }
 
-/** The owner's disk: initials plus the deterministic hue that keeps one person one colour. */
+/**
+ * The risk mark of one card: how many flags the read raised, and which ones.
+ *
+ * A count rather than a strip of chips, because the rail is 360px wide and six flags would
+ * bury the project's name. The full list travels in `description`, so the fact is never lost —
+ * only folded. Tone comes from the worst severity present, mapped through the semantic set;
+ * a severity the frontend has never seen renders neutral instead of disappearing.
+ */
+export interface RiskSummary {
+  readonly count: number;
+  readonly text: string;
+  readonly toneClass: string;
+  readonly description: string;
+}
+
+/**
+ * The owner's disk: initials plus the deterministic hue that keeps one person one colour.
+ *
+ * `alias` travels with it because the board filters by owner, and the filter compares the
+ * stable slug the API accepts back — never the display label, which two people can share.
+ */
 export interface OwnerBadge {
+  readonly alias: string;
   readonly label: string;
   readonly initials: string;
   readonly hue: number;
 }
 
-/** Everything one project mini-card renders, and nothing else (FRONTEND.md §3, ISP). */
+/** Everything one project card renders, and nothing else (FRONTEND.md §3, ISP). */
 export interface ProjectCardModel {
   readonly code: string;
   readonly name: string;
@@ -102,28 +161,65 @@ export interface ProjectCardModel {
   readonly due: DueChip;
   readonly score: ScoreDisplay;
   readonly manualOverride: OverrideNote | null;
-  readonly openBlockers: number;
+  readonly risks: RiskSummary | null;
   /** `updated_at` of the fetch that rendered the card: the stale-patch guard for SSE. */
   readonly updatedAt: string;
 }
 
 /**
- * Column order on the wall: what is waiting, what is moving, what is stuck, what is done.
+ * How a person's avatar renders.
  *
- * Keyed by `StateRef.category` — the closed structural set (`docs/DATA_MODEL.md` §12) — and
- * never by `code`, which is unique only inside its own workflow. An unlisted category sorts
- * last instead of disappearing.
+ * A discriminated union rather than `photoUrl: string | null` plus initials beside it,
+ * because exactly one of the two is ever drawn and the boolean form admits "a photo *and*
+ * initials" — a state the markup cannot represent (CLAUDE.md rule 13).
  */
-const CATEGORY_ORDER: Record<string, number> = {
-  BACKLOG: 0,
-  IN_PROGRESS: 1,
-  BLOCKED: 2,
-  DONE: 3,
-  CANCELLED: 4,
-};
+export type MemberAvatar =
+  | { readonly kind: "photo"; readonly src: string }
+  | { readonly kind: "initials"; readonly text: string; readonly hue: number };
 
-/** Where a category the frontend has never seen sorts: after everything it knows. */
-const UNKNOWN_CATEGORY_RANK = 9;
+/** One roster member as the board's "Miembros" bar renders and filters by them. */
+export interface MemberChipModel {
+  readonly alias: string;
+  readonly label: string;
+  readonly avatar: MemberAvatar;
+  readonly openTasks: number;
+  /** Full sentence for `title` / `aria-label`; the disk alone names nobody. */
+  readonly description: string;
+}
+
+/** One prerequisite chip on a task card. */
+export interface DependencyChip {
+  /** The prerequisite's task code, or — the normal case — the operation's own words. */
+  readonly text: string;
+  readonly description: string;
+  /** True when the reference resolved to a real task rather than staying free text. */
+  readonly isResolved: boolean;
+}
+
+/** One task as a card on the main board. */
+export interface TaskCardModel {
+  readonly code: string;
+  readonly title: string;
+  /** Where the server says it sits; the column the card is placed in. */
+  readonly stateCode: string;
+  readonly stateLabel: string;
+  readonly owner: OwnerBadge | null;
+  readonly due: DueChip;
+  /** Derived server-side on the server's clock; never recomputed here. */
+  readonly isOverdue: boolean;
+  readonly dependencies: readonly DependencyChip[];
+}
+
+/** Where one project sits on the rail: its surface, its section, and the card itself. */
+export interface CardLocation {
+  readonly surface: BoardSurfaceModel;
+  readonly section: RailSectionModel;
+  readonly card: ProjectCardModel;
+}
+
+/** Which kind of aggregate a workflow governs, as `WorkflowShapeView.applies_to` spells it. */
+const PROJECT_WORKFLOW = "PROJECT";
+const TASK_WORKFLOW = "TASK";
 
 /**
  * Category → semantic tone, exactly as DESIGN.md §Colors assigns them. Used only when the
@@ -136,6 +232,31 @@ const CATEGORY_TONE: Record<string, string> = {
   DONE: "tone-verde",
   CANCELLED: "tone-piedra",
 };
+
+/**
+ * Risk severity → semantic tone.
+ *
+ * `severity` is a bare code the client branches on to pick a tone (`RiskFlagView`), and this
+ * is the only place that branch lives. A severity added server-side renders neutral rather
+ * than unstyled — the flag still shows, which is the whole point of the open set.
+ */
+const SEVERITY_TONE: Record<string, string> = {
+  CRITICAL: "tone-rojo",
+  HIGH: "tone-ambar",
+  MEDIUM: "tone-ambar",
+  LOW: "tone-piedra",
+};
+
+/** How severe one flag is, for picking the worst of a list. Unknown severities sort last. */
+const SEVERITY_RANK: Record<string, number> = {
+  CRITICAL: 0,
+  HIGH: 1,
+  MEDIUM: 2,
+  LOW: 3,
+};
+
+/** Where a severity the frontend has never seen sorts: after everything it knows. */
+const UNKNOWN_SEVERITY_RANK = 9;
 
 /** Neutral tone for a category (or a taxonomy) the frontend cannot place. */
 const NEUTRAL_TONE = "tone-piedra";
@@ -163,23 +284,35 @@ const FIELD_LABELS: Record<string, string> = {
   owner: "responsable",
   stage: "etapa",
   project_type: "tipo de proyecto",
+  title: "título",
+  assignee: "responsable",
+  due_date: "fecha de entrega",
+  last_progress: "último avance",
+  priority: "prioridad",
 };
 
 /**
- * Sort rank of one workflow category. Unknown categories collapse onto
- * {@link UNKNOWN_CATEGORY_RANK} so a category added server-side lands at the end of the
- * board instead of reordering it arbitrarily.
+ * Resolves the photo of one roster member, or `null` when there is none.
+ *
+ * The seam exists because `TeamLoadView` and `ActorRef` carry `alias`, `label` and `role` and
+ * **no image field at all** (checked against the live OpenAPI document). Initials are
+ * therefore the only path that runs today, and the photo arm of {@link MemberAvatar} is dead
+ * code on purpose: when the backend grows the field, binding it is one line at the call site
+ * in `pages/board.astro` and no component changes shape. Inventing an optional property on
+ * the generated type instead would be a hand-written contract the schema never agreed to
+ * (`docs/standards/FRONTEND.md` §1).
  */
-export function categoryRank(category: string): number {
-  return CATEGORY_ORDER[category] ?? UNKNOWN_CATEGORY_RANK;
-}
+export type MemberPhotoLookup = (entry: TeamLoadEntry) => string | null;
+
+/** The lookup to pass while the wire carries no image field: every member falls to initials. */
+export const NO_MEMBER_PHOTOS: MemberPhotoLookup = () => null;
 
 /**
  * Tone for one workflow state: the operator's own colour when there is one, otherwise the
  * category's semantic tone.
  *
  * Failure mode this prevents: a hardcoded `code → colour` map, which drops a state added from
- * the admin into an unstyled column (`docs/standards/PATTERNS_FRONTEND.md` §7).
+ * the admin into an unstyled section (`docs/standards/PATTERNS_FRONTEND.md` §7).
  */
 export function toneForState(state: StateRef): Tone {
   return toneFromColor(state.color ?? null, state.category);
@@ -199,99 +332,302 @@ function toneFromColor(color: string | null, category: string | null): Tone {
 }
 
 /**
- * Groups one queue page into the boards the switcher toggles between.
+ * The workflow that governs one engagement type, mirroring `Workflow.objects.resolve`.
  *
- * Both levels are derived from the rows themselves: one panel per engagement type present,
- * one column per workflow state present inside it. That is deliberately *not* the full set of
- * states — the queue cannot report a state nobody is in — which is why an empty column is
- * missing rather than empty (see the page's `unresolved` note).
+ * Precedence, and why: an active graph whose `engagement_types` names this type wins, because
+ * that binding is the operator saying "this type runs on that graph"; otherwise the per-kind
+ * default; otherwise any graph of the right kind, so a portfolio configured without a default
+ * still draws columns instead of nothing. Returns `null` only when the catalog publishes no
+ * graph of that kind at all.
  *
- * Ordering: panels by engagement label, columns by category then label, cards in the order
- * the API sent them (score descending), so the top of a column is the most urgent card in it.
+ * `is_active` is a preference, not a filter: a retired graph is still published because
+ * aggregates keep sitting on its states, and dropping it would lose those projects entirely.
  */
-export function buildPanels(
+export function resolveWorkflow(
+  catalog: WorkflowCatalog,
+  appliesTo: string,
+  engagementCode: string | null,
+): WorkflowShape | null {
+  const candidates = catalog.workflows.filter(
+    (workflow) => workflow.applies_to === appliesTo,
+  );
+  if (engagementCode !== null) {
+    const bound = candidates.find(
+      (workflow) =>
+        workflow.is_active &&
+        (workflow.engagement_types ?? []).some(
+          (type) => type.code === engagementCode,
+        ),
+    );
+    if (bound !== undefined) return bound;
+  }
+  return (
+    candidates.find((workflow) => workflow.is_default && workflow.is_active) ??
+    candidates.find((workflow) => workflow.is_default) ??
+    candidates.find((workflow) => workflow.is_active) ??
+    candidates[0] ??
+    null
+  );
+}
+
+/**
+ * Builds one surface per engagement type present in the queue: rail sections on the left,
+ * task columns on the right.
+ *
+ * `catalog` is what makes an unoccupied state renderable, and therefore droppable. When the
+ * workflow read failed it is `null` and the sections fall back to the states projects happen
+ * to sit in — a degraded board that still works, beside the note the page renders saying so.
+ *
+ * A project sitting in a state the resolved graph does not publish (a retired graph, a state
+ * an operator removed from this workflow) still gets a section, appended after the graph's
+ * own: losing the card would be worse than an extra section at the end.
+ *
+ * Ordering: engagement types by label, sections and columns in the operator's own order,
+ * cards in the order the API sent them (score descending), so the top of a section is the
+ * most urgent project in it.
+ */
+export function buildSurfaces(
   items: readonly QueueItem[],
+  catalog: WorkflowCatalog | null,
   now: Date,
-): BoardPanelModel[] {
-  const panels = new Map<
+): BoardSurfaceModel[] {
+  const groups = new Map<
     string,
-    { type: TaxonomyRef; columns: Map<string, { state: StateRef; cards: ProjectCardModel[] }> }
+    { type: TaxonomyRef; byState: Map<string, ProjectCardModel[]>; seen: Map<string, StateRef> }
   >();
 
   for (const item of items) {
     const typeCode = item.engagement_type.code;
-    let panel = panels.get(typeCode);
-    if (panel === undefined) {
-      panel = { type: item.engagement_type, columns: new Map() };
-      panels.set(typeCode, panel);
+    let group = groups.get(typeCode);
+    if (group === undefined) {
+      group = {
+        type: item.engagement_type,
+        byState: new Map(),
+        seen: new Map(),
+      };
+      groups.set(typeCode, group);
     }
-    let column = panel.columns.get(item.state.code);
-    if (column === undefined) {
-      column = { state: item.state, cards: [] };
-      panel.columns.set(item.state.code, column);
-    }
-    column.cards.push(toCardModel(item, now));
+    group.seen.set(item.state.code, item.state);
+    const bucket = group.byState.get(item.state.code);
+    if (bucket === undefined) group.byState.set(item.state.code, [toCardModel(item, now)]);
+    else bucket.push(toCardModel(item, now));
   }
 
-  return [...panels.values()]
-    .map((panel) => ({
-      engagementType: panel.type,
-      tone: toneForTaxonomy(panel.type),
-      columns: [...panel.columns.values()]
-        .sort(compareColumns)
-        .map((column) => ({
-          state: column.state,
-          tone: toneForState(column.state),
-          cards: column.cards,
+  return [...groups.values()]
+    .map((group) => {
+      const projectStates = orderedStates(
+        catalog,
+        PROJECT_WORKFLOW,
+        group.type.code,
+        group.seen,
+      );
+      return {
+        engagementType: group.type,
+        tone: toneForTaxonomy(group.type),
+        sections: projectStates.map((state) => ({
+          state,
+          tone: toneForState(state),
+          cards: group.byState.get(state.code) ?? [],
         })),
-    }))
+        taskStates: orderedStates(
+          catalog,
+          TASK_WORKFLOW,
+          group.type.code,
+          new Map(),
+        ).map((state) => ({ state, tone: toneForState(state) })),
+        count: [...group.byState.values()].reduce(
+          (total, cards) => total + cards.length,
+          0,
+        ),
+      };
+    })
     .sort((a, b) =>
       a.engagementType.label.localeCompare(b.engagementType.label, "es"),
     );
 }
 
-function compareColumns(
-  a: { state: StateRef },
-  b: { state: StateRef },
-): number {
-  const rank = categoryRank(a.state.category) - categoryRank(b.state.category);
-  if (rank !== 0) return rank;
-  return a.state.label.localeCompare(b.state.label, "es");
+/**
+ * The states one surface draws, in the operator's order, with nothing lost.
+ *
+ * The graph's own states come first, exactly as arranged in the admin; any state the data
+ * occupies that the graph does not publish is appended, because a card with no zone is a card
+ * that vanishes. With no catalog at all the occupied states are the whole answer.
+ */
+function orderedStates(
+  catalog: WorkflowCatalog | null,
+  appliesTo: string,
+  engagementCode: string,
+  occupied: ReadonlyMap<string, StateRef>,
+): StateRef[] {
+  const workflow =
+    catalog === null ? null : resolveWorkflow(catalog, appliesTo, engagementCode);
+  const published = workflow === null ? [] : workflow.states;
+  const known = new Set(published.map((state) => state.code));
+  const extra = [...occupied.entries()]
+    .filter(([code]) => !known.has(code))
+    .map(([, state]) => state);
+  return [...published, ...extra];
 }
 
 /**
- * Projects one queue row onto the narrow model the mini-card renders.
+ * Locates one project on the built rail, or `null` when no card carries that code.
+ *
+ * The board's header is rendered from the same card model the section renders, rather than
+ * from a second `GET /api/v1/projects/{code}`: the page already holds the row, and a second
+ * read of the same fact is a second thing that can disagree with it.
+ */
+export function findCardLocation(
+  surfaces: readonly BoardSurfaceModel[],
+  code: string,
+): CardLocation | null {
+  for (const surface of surfaces) {
+    for (const section of surface.sections) {
+      for (const card of section.cards) {
+        if (card.code === code) return { surface, section, card };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Projects one queue row onto the narrow model the card renders.
  *
  * The card never receives the entity: everything it shows is decided here once, so the
  * component stays a template and the derivations (absence chips, tones, the breakdown
  * sentence) live in one testable place (`docs/standards/FRONTEND.md` §3).
  */
 export function toCardModel(item: QueueItem, now: Date): ProjectCardModel {
-  const owner = item.owner ?? null;
   return {
     code: item.code,
     name: item.name,
     clientAlias: item.client_alias,
-    owner:
-      owner === null
-        ? null
-        : {
-            label: owner.label,
-            initials: initials(owner.label),
-            hue: avatarHue(owner.alias),
-          },
+    owner: toOwnerBadge(item.owner ?? null),
     stateCode: item.state.code,
     stateLabel: item.state.label,
     due: formatDue(item.target_date ?? null, now),
     score: describeScore(item.score),
     manualOverride: describeOverride(item.override ?? null),
-    openBlockers: item.open_blockers,
+    risks: summariseRisks(item.risk_flags),
     updatedAt: item.updated_at,
   };
 }
 
+/** The owner's disk, or `null` when nobody owns the row — an absence the card names. */
+export function toOwnerBadge(
+  actor: { alias: string; label: string } | null,
+): OwnerBadge | null {
+  if (actor === null) return null;
+  return {
+    alias: actor.alias,
+    label: actor.label,
+    initials: initials(actor.label),
+    hue: avatarHue(actor.alias),
+  };
+}
+
 /**
- * Formats a target date as the card's due chip.
+ * Folds a row's risk flags into one chip: the count, the worst severity's tone, and every
+ * label in the accessible description.
+ *
+ * Returns `null` for a clean project rather than a "0 riesgos" chip: the absence of risk is
+ * the default and does not need a mark, while the presence of it does.
+ */
+export function summariseRisks(flags: readonly RiskFlag[]): RiskSummary | null {
+  if (flags.length === 0) return null;
+  const worst = flags.reduce((current, flag) =>
+    severityRank(flag.severity) < severityRank(current.severity) ? flag : current,
+  );
+  return {
+    count: flags.length,
+    text: flags.length === 1 ? "1 riesgo" : `${flags.length} riesgos`,
+    toneClass: SEVERITY_TONE[worst.severity] ?? NEUTRAL_TONE,
+    description: `Riesgos: ${flags.map((flag) => flag.label).join(" · ")}`,
+  };
+}
+
+function severityRank(severity: string): number {
+  return SEVERITY_RANK[severity] ?? UNKNOWN_SEVERITY_RANK;
+}
+
+/**
+ * Builds the "Miembros" bar from the roster's load.
+ *
+ * Order is the server's — `GET /api/v1/team/load` is the whole roster, arranged as the
+ * operation arranged it — because re-sorting a five-person bar on every render makes the same
+ * face land in a different place each morning, which is exactly what an avatar row must not do.
+ * A member with no open work still appears: the filter has to be able to answer "nothing".
+ */
+export function buildMembers(
+  entries: readonly TeamLoadEntry[],
+  photoOf: MemberPhotoLookup = NO_MEMBER_PHOTOS,
+): MemberChipModel[] {
+  return entries.map((entry) => {
+    const photo = photoOf(entry);
+    const avatar: MemberAvatar =
+      photo === null || photo === ""
+        ? {
+            kind: "initials",
+            text: initials(entry.label),
+            hue: avatarHue(entry.alias),
+          }
+        : { kind: "photo", src: photo };
+    return {
+      alias: entry.alias,
+      label: entry.label,
+      avatar,
+      openTasks: entry.open_tasks,
+      description: `${entry.label} · ${describeOpenTasks(entry.open_tasks)}`,
+    };
+  });
+}
+
+function describeOpenTasks(count: number): string {
+  if (count === 0) return "sin tareas abiertas";
+  return count === 1 ? "1 tarea abierta" : `${count} tareas abiertas`;
+}
+
+/** Projects one task onto the card the main board renders. */
+export function toTaskCard(task: TaskItem, now: Date): TaskCardModel {
+  return {
+    code: task.code,
+    title: task.title,
+    stateCode: task.state.code,
+    stateLabel: task.state.label,
+    owner: toOwnerBadge(task.assignee ?? null),
+    due: formatDue(task.due_date ?? null, now),
+    isOverdue: task.is_overdue,
+    dependencies: task.dependencies.map(toDependencyChip),
+  };
+}
+
+/**
+ * One dependency as a chip.
+ *
+ * `task_code: null` with a `raw_label` is the normal case — most source tasks name their
+ * prerequisite in prose — so the chip renders the words somebody wrote rather than hiding an
+ * unresolved reference behind a dash.
+ */
+export function toDependencyChip(dependency: DependencyRef): DependencyChip {
+  const code = dependency.task_code ?? null;
+  const raw = dependency.raw_label;
+  if (code !== null && code !== "") {
+    return {
+      text: code,
+      description: raw === "" ? `Depende de ${code}` : `Depende de ${raw}`,
+      isResolved: true,
+    };
+  }
+  const text = raw === "" ? "sin detalle" : raw;
+  return {
+    text,
+    description: `Depende de: ${text}`,
+    isResolved: false,
+  };
+}
+
+/**
+ * Formats a target date as a due chip.
  *
  * A missing date is the `NO_TARGET_DATE` signal itself, so it renders as the ámbar words
  * "sin fecha" — substituting today's date, or an empty cell, erases a real risk
@@ -373,7 +709,9 @@ export function describeScore(score: Score): ScoreDisplay {
  * the engine and the person who argued with it is the only evidence that the argument
  * happened (`docs/API.md`, `QueueItemView`).
  */
-export function describeOverride(override: QueueOverride | null): OverrideNote | null {
+export function describeOverride(
+  override: QueueOverride | null,
+): OverrideNote | null {
   if (override === null) return null;
   const position = override.position ?? null;
   const place = position === null ? "" : ` a la posición ${position}`;

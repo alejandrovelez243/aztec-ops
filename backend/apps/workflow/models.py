@@ -19,7 +19,11 @@ from django.db.models import F, Q
 
 from apps.shared.refs import StateRef
 from apps.workflow.domain.errors import WorkflowNotConfigured
-from apps.workflow.domain.views import TransitionOption, required_field_names
+from apps.workflow.domain.views import (
+    TransitionOption,
+    WorkflowShapeView,
+    required_field_names,
+)
 
 
 class AppliesTo(models.TextChoices):
@@ -70,6 +74,19 @@ class WorkflowQuerySet(models.QuerySet["Workflow"]):
     def default(self) -> Self:
         """The fallback graph of its kind: at most one per `applies_to`, by unique constraint."""
         return self.filter(is_default=True)
+
+    def with_shape(self) -> Self:
+        """Load what :meth:`Workflow.to_shape` reads, in two extra queries for the whole chain.
+
+        Prefetches the nodes and the engagement-type bindings of every selected graph, so the board
+        document costs three index scans instead of two per workflow. The bindings are prefetched
+        already narrowed to :meth:`WorkflowBindingQuerySet.engagement_typed`, which is why
+        `to_shape` re-checks each one: the projection has to stay correct when nobody chained this.
+        """
+        return self.prefetch_related(
+            "states",
+            models.Prefetch("bindings", queryset=WorkflowBinding.objects.engagement_typed()),
+        )
 
 
 #: `from_queryset` builds the manager that carries every `WorkflowQuerySet` method; it is bound to
@@ -160,6 +177,38 @@ class Workflow(models.Model):
     def __str__(self) -> str:
         """Name and entity kind, which is what disambiguates two graphs in an admin picker."""
         return f"{self.name} ({self.applies_to})"
+
+    def to_shape(self) -> WorkflowShapeView:
+        """Describe this graph as the column set a board draws.
+
+        Publishes every node — including the ones no aggregate currently occupies, which is the
+        whole point — and no edge at all: which move is legal is answered per project by
+        ``transitions`` on the detail, never by this shape.
+
+        Reads ``states`` and ``bindings``, so callers chain
+        :meth:`WorkflowQuerySet.with_shape`; without it this is two queries per workflow. Bindings
+        are re-filtered here rather than trusted from the prefetch, so an unprefetched call
+        describes the same graph instead of raising on the per-kind default binding, whose
+        ``engagement_type`` is null by definition.
+
+        Returns:
+            The graph as an immutable
+            :class:`~apps.workflow.domain.views.WorkflowShapeView`, its states in the operator's
+            ``order`` and its engagement types in the catalog's.
+        """
+        return WorkflowShapeView(
+            code=self.code,
+            name=self.name,
+            applies_to=self.applies_to,
+            is_default=self.is_default,
+            is_active=self.is_active,
+            engagement_types=tuple(
+                binding.engagement_type.to_ref()
+                for binding in self.bindings.all()
+                if binding.is_active and binding.engagement_type is not None
+            ),
+            states=tuple(state.to_ref() for state in self.states.all()),
+        )
 
 
 class WorkflowStateQuerySet(models.QuerySet["WorkflowState"]):
@@ -428,6 +477,30 @@ class WorkflowBindingQuerySet(models.QuerySet["WorkflowBinding"]):
         """
         return self.filter(
             Q(engagement_type_id=engagement_type_id) | Q(engagement_type__isnull=True)
+        )
+
+    def engagement_typed(self) -> Self:
+        """The active bindings that name a specific engagement type, ready to render.
+
+        The per-kind default binding — the row whose `engagement_type` is null — is excluded on
+        purpose: it attributes a graph to no engagement type, and publishing it as one would make
+        a board believe the fallback is a specific choice.
+
+        Ordered by the catalog's own `(order, code)` rather than by this table's `Meta.ordering`,
+        which sorts by the foreign key and so would list the types in the order somebody inserted
+        them. `select_related` loads the engagement type each caller reads the label off.
+
+        Filters `is_active` on the binding row alone, unlike :meth:`active`, which additionally
+        requires the graph to be in service because it answers "may this be resolved through
+        today". Here the question is only which types a graph is named by; whether the graph itself
+        is retired is a fact the caller reports separately, and folding it in would make a retired
+        graph describe itself differently depending on whether the caller prefetched.
+        """
+        return (
+            self.filter(is_active=True)
+            .exclude(engagement_type__isnull=True)
+            .select_related("engagement_type")
+            .order_by("engagement_type__order", "engagement_type__code")
         )
 
 

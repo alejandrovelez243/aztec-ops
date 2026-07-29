@@ -79,7 +79,9 @@ const {
 } = Astro.props;
 
 const stateTone = toneForColor(stateColor);
-const widest = widestContribution(breakdown.map((signal) => signal.contribution));
+const widest = widestContribution(
+  breakdown.map((signal) => signal.contribution),
+);
 const computedLabel = computedAt === null ? null : formatInstant(computedAt);
 const hasOverride = overrideReason !== null;
 const trimmedNextStep = nextStep === null ? "" : nextStep.trim();
@@ -111,12 +113,16 @@ const trimmedNextStep = nextStep === null ? "" : nextStep.trim();
     <dl class="meta">
       <dt class="label">Puesto</dt>
       <dd class="figure">
-        <span data-slot="rank">{formatRank(rank)}</span> de <span>{queueSize}</span>
+        <span data-slot="rank">{formatRank(rank)}</span> de <span
+          >{queueSize}</span
+        >
       </dd>
       <dt class="label">Política</dt>
       <dd class="figure" data-slot="policy">{policyVersion}</dd>
       <dt class="label">Calculado</dt>
-      <dd class="figure" data-slot="computed">{computedLabel ?? "sin registro"}</dd>
+      <dd class="figure" data-slot="computed">
+        {computedLabel ?? "sin registro"}
+      </dd>
     </dl>
   </div>
 
@@ -155,14 +161,15 @@ const trimmedNextStep = nextStep === null ? "" : nextStep.trim();
     {
       breakdown.length === 0 ? (
         <p class="small">
-          El motor todavía no registró el desglose de este puntaje. Recalcula la cartera
-          para reconstruirlo.
+          El motor todavía no registró el desglose de este puntaje. Recalcula la
+          cartera para reconstruirlo.
         </p>
       ) : (
         <ul class="signals" data-signals>
           {breakdown.map((signal) => (
             <SignalBar
               code={signal.code}
+              label={signal.label}
               points={formatPoints(signal.contribution)}
               reason={signal.reason}
               ratio={barRatio(signal.contribution, widest)}

@@ -1,0 +1,12 @@
+# Mirrors the `ignores` block of eslint.config.mjs, so one file is never clean for
+# one tool and dirty for the other.
+#
+# Everything here is generated: `dist/` and `.astro/` are build output (both are in
+# .gitignore), and `src/lib/api/types.ts` is written by `npm run gen:api` from the
+# OpenAPI schema — formatting it by hand only makes the next regeneration a diff.
+dist/
+node_modules/
+.astro/
+src/env.d.ts
+src/lib/api/types.ts
+package-lock.json

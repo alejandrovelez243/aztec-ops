@@ -29,7 +29,9 @@ const { projectCode, transitions, emptyFields, updatedAt } = Astro.props;
 
 /** The fields this edge demands that the project has not got. */
 function missingFor(transition: Transition): readonly string[] {
-  return transition.requires_fields.filter((field) => emptyFields.includes(field));
+  return transition.requires_fields.filter((field) =>
+    emptyFields.includes(field),
+  );
 }
 
 const options = transitions.map((transition) => ({
@@ -63,7 +65,11 @@ const options = transitions.map((transition) => ({
             <span data-field="transition-label">{transition.label}</span>
           </button>
           {missing.length > 0 && (
-            <span class="small missing" id={describedBy} data-field="transition-missing">
+            <span
+              class="small missing"
+              id={describedBy}
+              data-field="transition-missing"
+            >
               Falta {joinFields(missing)}
             </span>
           )}
@@ -72,14 +78,18 @@ const options = transitions.map((transition) => ({
     }
   </div>
 
-  {/* Always rendered, so the island can reveal it when a move lands the
-      project in a terminal state and the button list becomes empty. */}
+  {
+    /* Always rendered, so the island can reveal it when a move lands the
+      project in a terminal state and the button list becomes empty. */
+  }
   <p class="small" data-no-transitions hidden={transitions.length > 0}>
     Este estado es terminal: no hay movimientos disponibles.
   </p>
 
-  {/* One home for the option markup; the island clones it when the legal moves
-      change after a transition. */}
+  {
+    /* One home for the option markup; the island clones it when the legal moves
+      change after a transition. */
+  }
   <template data-template="transition">
     <span class="option">
       <button class="btn btn-secondary" type="button" data-transition>
@@ -89,32 +99,12 @@ const options = transitions.map((transition) => ({
     </span>
   </template>
 
-  <dialog class="dialog" data-reason-dialog aria-labelledby="reason-title">
-    <form method="dialog" data-reason-form>
-      <h2 class="h2" id="reason-title">
-        Mover a <span data-field="reason-target"></span>
-      </h2>
-      <p class="small">
-        Esta transición exige un motivo. Queda en la bitácora del proyecto junto al cambio.
-      </p>
-      <label class="field">
-        <span class="label">Motivo</span>
-        <textarea
-          class="input"
-          name="reason"
-          rows="3"
-          required
-          placeholder="Qué obliga a este movimiento"></textarea>
-      </label>
-      <p class="small error" data-field="reason-error" hidden></p>
-      <div class="dialog-actions">
-        <button class="btn btn-ghost" type="button" data-action="close-reason">Cancelar</button>
-        <button class="btn btn-primary" type="submit" data-action="submit-reason">
-          Confirmar movimiento
-        </button>
-      </div>
-    </form>
-  </dialog>
+  {
+    /* The motive a transition can demand is asked by `ReasonDialog`, rendered
+      once at the root of the detail: a task's move can demand one too, and two
+      copies of that form would be two chances to phrase the same rule
+      differently. */
+  }
 </div>
 
 <script>
@@ -152,42 +142,5 @@ const options = transitions.map((transition) => ({
 
   .missing[hidden] {
     display: none;
-  }
-
-  .dialog {
-    width: min(460px, calc(100vw - var(--space-6)));
-    padding: var(--space-5);
-    border: var(--border-width) solid var(--hairline);
-    border-radius: var(--radius-card);
-    background-color: var(--carta);
-    box-shadow: var(--shadow-lifted);
-    color: var(--tinta);
-  }
-
-  .dialog::backdrop {
-    background-color: var(--scrim);
-  }
-
-  .dialog form {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .error {
-    color: var(--rojo-ink);
-  }
-
-  .dialog-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--space-2);
-    margin-top: var(--space-2);
   }
 </style>

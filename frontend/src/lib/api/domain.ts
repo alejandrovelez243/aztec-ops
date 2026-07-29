@@ -126,6 +126,22 @@ export type TeamLoadQuery = QueryOf<"apps_portfolio_api_routers_get_team_load">;
 export type TimelineQuery =
   QueryOf<"apps_activity_api_routers_get_project_activity">;
 
+/**
+ * Facets of the portfolio-wide feed. Every one is optional and none is
+ * validated against its vocabulary on the server: a saved URL naming a retired
+ * verb or a departed colleague answers with an empty page, never a 422.
+ */
+export type PortfolioActivityQuery =
+  QueryOf<"apps_activity_api_routers_get_portfolio_activity">;
+
+// --- Workflows ---------------------------------------------------------------
+
+/** Every configured workflow with its ordered states; no transitions, by design. */
+export type WorkflowCatalog = Schemas["WorkflowCatalogView"];
+
+/** One workflow graph: which states exist, in the order an operator arranged them. */
+export type WorkflowShape = Schemas["WorkflowShapeView"];
+
 // --- Authentication ----------------------------------------------------------
 
 /** Sign-in response: the pair plus who the caller is; `is_ops_lead` gates the override UI. */

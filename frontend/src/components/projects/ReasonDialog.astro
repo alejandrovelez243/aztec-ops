@@ -1,0 +1,88 @@
+---
+/**
+ * The motive a transition demands, asked once for the whole detail screen.
+ *
+ * `requires_reason` lives on the `WorkflowTransition` row, so a task's move can
+ * demand it exactly as a project's can. Rendered once at the root of the detail
+ * and driven by `reason-dialog.ts`, which is what makes "the same dialog" a fact
+ * rather than an intention: the copy, the empty-motive rule and the focus
+ * behaviour cannot diverge between the project bar and a task row, because
+ * there is only one of them.
+ *
+ * A `<dialog>` and not a div: modality, `Escape`, the focus trap and the
+ * backdrop are the platform's, and this is the one interaction DESIGN.md still
+ * grants a modal — a confirmation the operator must not miss.
+ */
+---
+
+<dialog class="dialog" data-reason-dialog aria-labelledby="reason-title">
+  <form method="dialog" data-reason-form>
+    <h2 class="h2" id="reason-title">
+      Mover a <span data-field="reason-target"></span>
+    </h2>
+    <p class="small">
+      Esta transición exige un motivo. Queda en la bitácora junto al cambio.
+    </p>
+    <label class="field">
+      <span class="label">Motivo</span>
+      <textarea
+        class="input"
+        name="reason"
+        rows="3"
+        required
+        placeholder="Qué obliga a este movimiento"></textarea>
+    </label>
+    <p class="small error" data-field="reason-error" hidden></p>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" type="button" data-action="close-reason"
+        >Cancelar</button
+      >
+      <button class="btn btn-primary" type="submit" data-action="submit-reason">
+        Confirmar movimiento
+      </button>
+    </div>
+  </form>
+</dialog>
+
+<style>
+  .dialog {
+    width: min(460px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+  }
+
+  .dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .error {
+    color: var(--rojo-ink);
+  }
+
+  .error[hidden] {
+    display: none;
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+</style>

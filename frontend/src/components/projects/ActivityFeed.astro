@@ -54,10 +54,18 @@ const { projectCode, entries, count, pageSize } = Astro.props;
                 {entry.actor}
               </span>
             </p>
-            <p class="small change" data-field="activity-change" hidden={activityChange(entry) === ""}>
+            <p
+              class="small change"
+              data-field="activity-change"
+              hidden={activityChange(entry) === ""}
+            >
               {activityChange(entry)}
             </p>
-            <p class="small reason" data-field="activity-reason" hidden={entry.reason === ""}>
+            <p
+              class="small reason"
+              data-field="activity-reason"
+              hidden={entry.reason === ""}
+            >
               {entry.reason}
             </p>
             <p
@@ -90,8 +98,10 @@ const { projectCode, entries, count, pageSize } = Astro.props;
     </p>
   </div>
 
-  {/* One home for the row markup; the island clones it when paging and when a
-      change lands while the page is open. */}
+  {
+    /* One home for the row markup; the island clones it when paging and when a
+      change lands while the page is open. */
+  }
   <template data-template="activity">
     <li class="entry" data-activity>
       <span class="dot tone-cielo" aria-hidden="true"></span>

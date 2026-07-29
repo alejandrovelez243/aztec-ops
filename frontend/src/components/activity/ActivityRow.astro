@@ -1,0 +1,220 @@
+---
+/**
+ * One record of the portfolio-wide trail.
+ *
+ * Purely presentational: it receives the row model built by
+ * `lib/activity/model.ts` and renders it. It fetches nothing, knows no filters,
+ * and never decides what a verb or an origin is called — those come from the
+ * shared trail vocabulary so this row and the project timeline cannot describe
+ * the same record differently.
+ *
+ * Origin is the distinction the feed exists to make legible, so it is carried
+ * three ways: the tone class of the row, a named chip, and — for `MANUAL` — the
+ * mandatory `reason` rendered as a quoted line rather than as metadata. A
+ * `POLICY` row shows the engine's own note instead: which signal moved, and by
+ * how much.
+ *
+ * Every line that can be empty is rendered and hidden, never omitted: the island
+ * fills the same nodes when a record arrives over the stream, and a node that
+ * exists only on one of the two paths is how the live row starts drifting from
+ * its server-rendered siblings.
+ */
+import type { ActivityRow } from "../../lib/activity/model";
+import { hrefForCorrelation } from "../../lib/activity/filters";
+import { ROW_COPY } from "./copy";
+
+export interface Props {
+  /** The presentation model; the wire shape never reaches this component. */
+  row: ActivityRow;
+  /** Hidden on the compact widget, where every row is already one line. */
+  showDecisionLink?: boolean;
+}
+
+const { row, showDecisionLink = true } = Astro.props;
+
+const projectHref =
+  row.projectCode === null
+    ? ""
+    : `/projects/${encodeURIComponent(row.projectCode)}`;
+---
+
+<li
+  class:list={["row", row.originTone]}
+  data-activity-row
+  data-id={row.id}
+  data-origin={row.origin}
+  data-occurred-at={row.occurredAt}
+>
+  <span class="dot" aria-hidden="true"></span>
+
+  <div class="body">
+    <p class="head">
+      <span class="title" data-field="verb">{row.verbLabel}</span>
+      <span class="chip origin" data-field="origin">{row.originLabel}</span>
+    </p>
+
+    <p class="subject">
+      <a
+        class="project"
+        data-link="project"
+        data-field="project"
+        href={projectHref}
+        hidden={row.projectCode === null}>{row.projectName}</a
+      >
+      <span class="chip chip-code" data-field="entity-id">{row.entityId}</span>
+      <span class="chip" data-field="entity-type">{row.entityTypeLabel}</span>
+    </p>
+
+    <p class="change" data-field="change" hidden={row.change === ""}>
+      {row.change}
+    </p>
+
+    <p class="reason" data-block="reason" hidden={row.reason === ""}>
+      <span class="label">{ROW_COPY.reasonLabel}</span>
+      <span data-field="reason">{row.reason}</span>
+    </p>
+
+    <p
+      class="small explanation"
+      data-field="explanation"
+      hidden={row.explanation === ""}
+    >
+      {row.explanation}
+    </p>
+
+    <p class="small meta">
+      <span data-field="actor" lang="es">{row.actor}</span>
+      <span aria-hidden="true">·</span>
+      <time
+        data-field="when"
+        data-link="when"
+        datetime={row.occurredAt}
+        title={row.occurredTitle}>{row.occurredLabel}</time
+      >
+      {
+        showDecisionLink && (
+          <Fragment>
+            <span aria-hidden="true">·</span>
+            <a
+              class="decision-link"
+              data-link="decision"
+              href={hrefForCorrelation(row.correlationId)}
+            >
+              {ROW_COPY.seeDecision}
+            </a>
+          </Fragment>
+        )
+      }
+    </p>
+  </div>
+</li>
+
+<style>
+  .row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--space-3);
+    align-items: start;
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-control);
+    background-color: var(--carta);
+  }
+
+  /* The origin's tone is the row's own marker: a human decision must not read
+     like the engine's bookkeeping. */
+  .row[data-origin="MANUAL"] {
+    background-color: var(--tone-wash);
+    box-shadow: inset var(--rail-width) 0 0 0 var(--tone-solid);
+  }
+
+  .dot {
+    width: var(--space-2);
+    height: var(--space-2);
+    border-radius: var(--radius-full);
+    background-color: var(--tone-solid);
+    flex: none;
+    /* Centred on the first line of the title, derived from the type tokens. */
+    margin-top: calc(
+      (var(--text-title-size) * var(--text-title-line) - var(--space-2)) / 2
+    );
+  }
+
+  .body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .head,
+  .subject,
+  .meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .origin {
+    background-color: var(--tone-wash);
+    color: var(--tone-ink);
+  }
+
+  .project {
+    font-size: var(--text-small-size);
+    font-weight: 600;
+    text-decoration: none;
+    border-radius: var(--radius-chip);
+    transition: color var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .project:hover {
+    color: var(--cobalto);
+  }
+
+  .change {
+    font-family: var(--font-mono);
+    font-size: var(--text-figure-size);
+    font-variant-numeric: tabular-nums;
+    color: var(--tinta);
+    overflow-wrap: anywhere;
+  }
+
+  .reason {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    font-size: var(--text-small-size);
+    line-height: var(--text-small-line);
+    color: var(--tinta);
+  }
+
+  .reason .label {
+    flex: none;
+    color: var(--tone-ink);
+  }
+
+  .explanation {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .meta {
+    color: var(--tinta-media);
+  }
+
+  .decision-link {
+    text-decoration: none;
+    border-radius: var(--radius-chip);
+  }
+
+  .decision-link:hover {
+    color: var(--cobalto);
+  }
+
+  /* `hidden` must beat the flex/grid displays above, or an empty line shows. */
+  .row [hidden] {
+    display: none;
+  }
+</style>

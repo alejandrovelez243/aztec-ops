@@ -1,20 +1,34 @@
 ---
 /**
- * The project's work: one row per task, in the server's triage order.
+ * The project's work: one row per task, in the server's triage order — and the
+ * three things an operator wants to do with a row without leaving this screen.
  *
- * Read-only by design today. `TaskView` carries no `transitions`, and the only
- * legal source of a transition control is the API's own list of legal moves
- * (`docs/API.md` §2.2) — inventing one from the task's state code is exactly
- * the guess this codebase refuses, so the row shows state and lateness and
- * stops there.
+ * **Open it.** The title is a link to `/tasks/{code}`, where the comments and
+ * the rest of the task live.
+ *
+ * **Move it.** `TaskMoveMenu` lists the moves the API published for that task
+ * and nothing else; with none published it renders visibly dead with the reason
+ * named. The frontend never derives a legal move from a state code.
+ *
+ * **Reassign it.** `OwnerMenu`, the same control the header uses, against the
+ * task. `PATCH /api/v1/tasks/{code}` is not in the client yet, so the trigger is
+ * disabled with the reason in its tooltip rather than absent — an operator who
+ * can see the affordance and read why it is off is better served than one who
+ * is left wondering whether reassignment exists.
+ *
+ * It stays a table: `<th scope="col">`, one row per task, controls inside cells.
+ * A menu is a button and a list of buttons, so every row is fully keyboard
+ * operable and the semantics a screen reader reads are unchanged.
  *
  * A dependency that resolved to no task keeps the operation's own words
- * (`raw_label`): 61 of the 82 source tasks describe their prerequisite in
- * prose, so an unresolved reference is the normal case, not a defect.
+ * (`raw_label`): 61 of the 82 source tasks describe their prerequisite in prose,
+ * so an unresolved reference is the normal case, not a defect.
  */
 import DueChip from "./DueChip.astro";
-import OwnerBadge from "./OwnerBadge.astro";
-import StateChip from "./StateChip.astro";
+import OwnerMenu from "./OwnerMenu.astro";
+import TaskMoveMenu from "./TaskMoveMenu.astro";
+import { TASK_OWNER_UNAVAILABLE } from "./messages";
+import { taskMoves } from "./task-moves";
 import type { TaskItem } from "../../lib/api/domain";
 
 export interface Props {
@@ -25,6 +39,11 @@ export interface Props {
 }
 
 const { projectCode, tasks, updatedAt } = Astro.props;
+
+/** Where a task's own screen lives; built here so the row and the island agree. */
+function taskHref(code: string): string {
+  return `/tasks/${encodeURIComponent(code)}`;
+}
 ---
 
 <div class="tasks" data-tasks data-project-code={projectCode}>
@@ -49,28 +68,40 @@ const { projectCode, tasks, updatedAt } = Astro.props;
           tasks.map((task) => (
             <tr data-task-row data-code={task.code} data-updated-at={updatedAt}>
               <td class="col-title">
-                <span class="title" data-field="task-title">
+                <a
+                  class="title link"
+                  href={taskHref(task.code)}
+                  data-task-link
+                  data-field="task-title"
+                >
                   {task.title}
-                </span>
+                </a>
                 <span class="chip chip-code">{task.code}</span>
               </td>
               <td>
-                <StateChip
-                  label={task.state.label}
-                  category={task.state.category}
-                  color={task.state.color ?? null}
+                <TaskMoveMenu
+                  code={task.code}
+                  state={task.state}
+                  moves={taskMoves(task)}
                 />
               </td>
               <td>
-                <OwnerBadge
+                <OwnerMenu
+                  scope="task"
+                  code={task.code}
                   alias={task.assignee?.alias ?? null}
                   label={task.assignee?.label ?? null}
                   compact
+                  disabledReason={TASK_OWNER_UNAVAILABLE}
                 />
               </td>
               <td class="col-due">
                 <DueChip date={task.due_date ?? null} />
-                <span class="chip tone-rojo" data-field="overdue" hidden={!task.is_overdue}>
+                <span
+                  class="chip tone-rojo"
+                  data-field="overdue"
+                  hidden={!task.is_overdue}
+                >
                   vencida
                 </span>
               </td>
@@ -89,27 +120,56 @@ const { projectCode, tasks, updatedAt } = Astro.props;
     </table>
   </div>
 
-  {/* One home for the row markup; the island clones it when a task is created
-      while the page is open. */}
+  {
+    /* One home for the row markup; the island clones it when a task is created
+      while the page is open. The controls are rendered empty and filled by the
+      island from the same read that fills the rest of the row. */
+  }
   <template data-template="task">
     <tr data-task-row>
       <td class="col-title">
-        <span class="title" data-field="task-title"></span>
+        <a class="title link" href="#" data-task-link data-field="task-title"
+        ></a>
         <span class="chip chip-code" data-field="task-code"></span>
       </td>
       <td>
-        <span class="chip tone-piedra" data-state-chip>
-          <span class="dot" aria-hidden="true"></span>
-          <span data-field="state-label"></span>
-        </span>
+        <TaskMoveMenu
+          code=""
+          state={{ code: "", label: "", category: "", color: null }}
+          moves={[]}
+        />
       </td>
-      <td><span class="small" data-field="task-owner"></span></td>
+      <td>
+        <OwnerMenu
+          scope="task"
+          code=""
+          alias={null}
+          label={null}
+          compact
+          disabledReason={TASK_OWNER_UNAVAILABLE}
+        />
+      </td>
       <td class="col-due">
-        <span class="chip tone-piedra" data-due-chip><span data-field="due-label"></span></span>
+        <span class="chip tone-piedra" data-due-chip
+          ><span data-field="due-label"></span></span
+        >
         <span class="chip tone-rojo" data-field="overdue" hidden>vencida</span>
       </td>
       <td class="col-deps" data-field="dependencies"></td>
     </tr>
+  </template>
+
+  {
+    /* Dependency chips are cloned too, so they keep this component's scoped
+      styles — an element built with `createElement` carries no scope id and
+      would render unclipped. */
+  }
+  <template data-template="dependency">
+    <span class="chip chip-code dep"></span>
+  </template>
+
+  <template data-template="no-dependency">
+    <span class="small">—</span>
   </template>
 </div>
 
@@ -122,6 +182,8 @@ const { projectCode, tasks, updatedAt } = Astro.props;
 
 <style>
   .table-wrap {
+    /* Still the row scroller. The menus are positioned in viewport coordinates
+      by `menu.ts` precisely so this container cannot clip them. */
     overflow-x: auto;
     padding: 0;
   }
@@ -161,6 +223,22 @@ const { projectCode, tasks, updatedAt } = Astro.props;
     align-items: flex-start;
     gap: var(--space-1);
     min-width: 220px;
+  }
+
+  .link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    color: var(--tinta);
+    text-decoration: none;
+    border-bottom: var(--border-width) solid transparent;
+    transition: border-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .link:hover {
+    color: var(--cobalto);
+    border-bottom-color: var(--cobalto);
   }
 
   .col-due {

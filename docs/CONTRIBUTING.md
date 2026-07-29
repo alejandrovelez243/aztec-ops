@@ -492,8 +492,10 @@ One class plus one registry entry. The evaluator is never edited. Owning skill:
    then recompute the portfolio (the admin action or `POST /api/v1/recompute`) so persisted scores
    reflect the new policy version.
 
-A risk criterion follows the same shape: one `Specification` subclass, a `flag_code`, a severity,
-one `@register_risk` line. If you are editing an existing `if`, stop — the design is wrong.
+A risk criterion follows the same shape: one `Specification` subclass carrying its Spanish `label`
+and its `detail`, a `flag_code`, a severity, one `@register_risk` line. If you are editing an
+existing `if` — or writing a map from flag code to label on either side of the wire — stop, the
+design is wrong.
 
 ## 10. How to add an event
 

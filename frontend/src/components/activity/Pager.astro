@@ -1,0 +1,165 @@
+---
+/**
+ * Numbered paging, as links.
+ *
+ * The API sends no next/prev links because the page belongs in the URL beside
+ * the filters (`backend/apps/shared/pagination.py`), so this component derives
+ * the page count from `count` and renders one `<a>` per reachable page. Links
+ * and not buttons: page 4 of a filtered feed has to be addressable, has to work
+ * with the back button, and has to survive a reload — which is the same reason
+ * the filters are a form and not a JavaScript control.
+ *
+ * The current page renders as a non-link with `aria-current`, and the edges
+ * render dead rather than disappearing, so the control does not change width as
+ * the reader moves through it.
+ */
+import { hrefForPage, type ActivityFilters } from "../../lib/activity/filters";
+import Icon from "../ui/Icon.astro";
+import { PAGER_COPY } from "./copy";
+
+export interface Props {
+  filters: ActivityFilters;
+  /** 1-based, already clamped by the page. */
+  page: number;
+  /** At least 1; an empty feed still has a page one. */
+  pageCount: number;
+}
+
+const { filters, page, pageCount } = Astro.props;
+
+/** How many numbered links surround the current page before it starts eliding. */
+const WINDOW = 2;
+
+const first = Math.max(1, page - WINDOW);
+const last = Math.min(pageCount, page + WINDOW);
+const numbers = Array.from({ length: last - first + 1 }, (_, i) => first + i);
+
+const hasPrevious = page > 1;
+const hasNext = page < pageCount;
+---
+
+{
+  pageCount > 1 && (
+    <nav class="pager" aria-label={PAGER_COPY.label}>
+      {hasPrevious ? (
+        <a class="btn btn-secondary" href={hrefForPage(filters, page - 1)}>
+          <Icon name="back" size={18} />
+          {PAGER_COPY.previous}
+        </a>
+      ) : (
+        <span class="btn btn-secondary is-dead" aria-disabled="true">
+          <Icon name="back" size={18} />
+          {PAGER_COPY.previous}
+        </span>
+      )}
+
+      <ol class="numbers">
+        {first > 1 && (
+          <li>
+            <a class="page-link figure" href={hrefForPage(filters, 1)}>
+              1
+            </a>
+          </li>
+        )}
+        {first > 2 && (
+          <li class="gap" aria-hidden="true">
+            …
+          </li>
+        )}
+        {numbers.map((number) => (
+          <li>
+            {number === page ? (
+              <span class="page-link figure is-current" aria-current="page">
+                {number}
+              </span>
+            ) : (
+              <a class="page-link figure" href={hrefForPage(filters, number)}>
+                {number}
+              </a>
+            )}
+          </li>
+        ))}
+        {last < pageCount - 1 && (
+          <li class="gap" aria-hidden="true">
+            …
+          </li>
+        )}
+        {last < pageCount && (
+          <li>
+            <a class="page-link figure" href={hrefForPage(filters, pageCount)}>
+              {pageCount}
+            </a>
+          </li>
+        )}
+      </ol>
+
+      {hasNext ? (
+        <a class="btn btn-secondary" href={hrefForPage(filters, page + 1)}>
+          {PAGER_COPY.next}
+          <Icon name="chevron-right" size={18} />
+        </a>
+      ) : (
+        <span class="btn btn-secondary is-dead" aria-disabled="true">
+          {PAGER_COPY.next}
+          <Icon name="chevron-right" size={18} />
+        </span>
+      )}
+    </nav>
+  )
+}
+
+<style>
+  .pager {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    padding-top: var(--space-2);
+  }
+
+  .pager .btn {
+    text-decoration: none;
+  }
+
+  .is-dead {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .numbers {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-inline: auto;
+  }
+
+  .page-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--space-6);
+    height: var(--space-6);
+    padding-inline: var(--space-2);
+    border-radius: var(--radius-control);
+    text-decoration: none;
+    color: var(--tinta-media);
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  a.page-link:hover {
+    background-color: var(--pozo);
+    color: var(--tinta);
+  }
+
+  .is-current {
+    background-color: var(--cobalto-papel);
+    color: var(--cobalto);
+    font-weight: 700;
+  }
+
+  .gap {
+    color: var(--tinta-suave);
+    padding-inline: var(--space-1);
+  }
+</style>

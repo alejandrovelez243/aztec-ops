@@ -1,0 +1,240 @@
+---
+/**
+ * Who owns this, and the menu that changes it.
+ *
+ * The trigger *is* the owner badge: the thing that reports the fact is the thing
+ * that edits it, so there is no second affordance to discover. Unowned renders
+ * the ámbar "Sin responsable" of the Present-Absence Rule and is the same
+ * button — an absence you can act on rather than a blank you cannot.
+ *
+ * The roster is fetched when the menu opens (`roster.ts`), so the options are
+ * built at runtime and cloned from the templates below rather than created in
+ * TypeScript: an element built with `createElement` carries no scope id and
+ * would render unstyled. Templates are inert markup, which is why one per
+ * control is cheaper than the one shared copy it would take to avoid them.
+ *
+ * `disabledReason` is how a control that has no write behind it yet renders:
+ * visibly dead with the reason named, exactly as an illegal transition does
+ * (`docs/standards/FRONTEND.md` §8), never hidden.
+ */
+import Icon from "../ui/Icon.astro";
+import { avatarHue, initials } from "../../lib/auth/session";
+
+export interface Props {
+  /** Which aggregate this control edits; the delegated mount branches on it. */
+  scope: "project" | "task";
+  /** Business code of that aggregate — `PRJ-01`, `PRJ-01-T02`. */
+  code: string;
+  /** `accounts.User.code` of the current owner; `null` when nobody owns it. */
+  alias: string | null;
+  /** Display name of the current owner; `null` together with `alias`. */
+  label: string | null;
+  /** Hides the name and keeps the disk, for dense table rows. */
+  compact?: boolean;
+  /**
+   * Why the control cannot be used, in Spanish. Present means the trigger
+   * renders disabled with this as its tooltip and its description.
+   */
+  disabledReason?: string;
+}
+
+const {
+  scope,
+  code,
+  alias,
+  label,
+  compact = false,
+  disabledReason,
+} = Astro.props;
+
+const isOwned = alias !== null && label !== null;
+const shown = isOwned ? label : "Sin responsable";
+const isDisabled = disabledReason !== undefined;
+const reasonId = isDisabled ? `owner-off-${scope}-${code}` : undefined;
+---
+
+<div
+  class="owner-control"
+  data-owner-control
+  data-scope={scope}
+  data-code={code}
+  data-current={alias ?? ""}
+  data-owned={String(isOwned)}
+  data-compact={String(compact)}
+>
+  <button
+    class="btn btn-ghost trigger"
+    type="button"
+    data-menu-trigger
+    aria-haspopup="menu"
+    aria-expanded="false"
+    aria-label={`Cambiar responsable. Ahora: ${shown}`}
+    aria-describedby={reasonId}
+    disabled={isDisabled}
+    title={disabledReason}
+  >
+    <span
+      class="avatar"
+      data-owner-avatar
+      style={alias === null ? undefined : `--avatar-h: ${avatarHue(alias)}`}
+      aria-hidden="true">{label === null ? "" : initials(label)}</span
+    >
+    <span class="who small" data-field="owner-label">{shown}</span>
+    <Icon name="chevron-down" size={14} />
+  </button>
+
+  {
+    isDisabled && (
+      <span class="visually-hidden" id={reasonId} data-owner-reason>
+        {disabledReason}
+      </span>
+    )
+  }
+
+  <div
+    class="panel card"
+    role="menu"
+    data-menu-panel
+    aria-label="Elegir responsable"
+    hidden
+  >
+  </div>
+
+  {/* One home for an option's markup; the panel is built on every open. */}
+  <template data-template="owner-option">
+    <button class="item" type="button" role="menuitemradio" data-menu-item>
+      <span class="avatar" data-owner-avatar aria-hidden="true"></span>
+      <span class="text">
+        <span class="title" data-field="option-label"></span>
+        <span class="small meta" data-field="option-meta"></span>
+      </span>
+      <span class="tick" data-option-tick hidden>
+        <Icon name="check" size={16} />
+      </span>
+    </button>
+  </template>
+
+  {/* The loading, empty and error arms of the roster read, one line each. */}
+  <template data-template="owner-note">
+    <p class="note small" data-field="note-text"></p>
+  </template>
+</div>
+
+<style>
+  .owner-control {
+    position: relative;
+    display: inline-flex;
+    min-width: 0;
+  }
+
+  .trigger {
+    gap: var(--space-2);
+    max-width: 100%;
+    min-height: 40px;
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-chip);
+    font-weight: 400;
+  }
+
+  .trigger .avatar {
+    width: var(--space-5);
+    height: var(--space-5);
+    flex: none;
+  }
+
+  .owner-control[data-owned="false"] .trigger .avatar {
+    display: none;
+  }
+
+  .owner-control[data-owned="false"] .who {
+    color: var(--ambar-ink);
+  }
+
+  .who {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--tinta);
+  }
+
+  .owner-control[data-compact="true"] .who {
+    max-width: 11ch;
+  }
+
+  /* Anchored in viewport coordinates by `menu.ts`: the task table is a
+    horizontal scroller and an absolutely positioned panel would be clipped by
+    it. Everything but `top`/`left` is decided here. */
+  .panel {
+    position: fixed;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    width: max-content;
+    min-width: 240px;
+    max-width: min(320px, calc(100vw - var(--space-6)));
+    padding: var(--space-2);
+    box-shadow: var(--shadow-lifted);
+  }
+
+  .panel[hidden] {
+    display: none;
+  }
+
+  .item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: 40px;
+    padding: var(--space-2);
+    border-radius: var(--radius-chip);
+    text-align: left;
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .item:hover,
+  .item:focus-visible {
+    background-color: var(--pozo);
+  }
+
+  .item[aria-checked="true"] {
+    background-color: var(--cobalto-papel);
+  }
+
+  .item .avatar {
+    width: var(--space-6);
+    height: var(--space-6);
+    flex: none;
+  }
+
+  .item[data-owned="false"] .avatar {
+    display: none;
+  }
+
+  .item .text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .item .meta {
+    color: var(--tinta-media);
+  }
+
+  .tick {
+    margin-left: auto;
+    color: var(--cobalto);
+    line-height: 0;
+  }
+
+  .tick[hidden] {
+    display: none;
+  }
+
+  .note {
+    padding: var(--space-2);
+    color: var(--tinta-media);
+  }
+</style>

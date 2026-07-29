@@ -1,0 +1,77 @@
+---
+/**
+ * The engagement-type field: which portfolio the rail and the board are showing.
+ *
+ * One type at a time is a product decision, not a layout accident — two engagement types can
+ * be bound to different workflows, so a single rail for both would either mix two vocabularies
+ * or invent a union nobody works in. It is a real `<select>` rather than a row of pills
+ * because it is a *choice among named alternatives*, it grows with the taxonomy instead of
+ * with the toolbar, and it arrives on touch with the platform's own picker and hit target.
+ *
+ * The count travels inside each option's text: `<option>` may not own an element, so the
+ * runtime rewrites the whole label when the member filter changes what is on screen. The
+ * label alone lives in `data-label`, so rewriting the count can never eat the name.
+ */
+export interface Option {
+  readonly code: string;
+  readonly label: string;
+  /** Projects of this type on the rail; a count, never a badge of alarm. */
+  readonly count: number;
+}
+
+export interface Props {
+  options: readonly Option[];
+  /** Code rendered as chosen on the server; the browser may swap it to the stored choice. */
+  active: string;
+}
+
+const { options, active } = Astro.props;
+---
+
+<div class="eng">
+  <label class="label eng-label" for="board-engagement" lang="es">
+    Tipo de encargo
+  </label>
+  <select
+    class="input eng-select"
+    id="board-engagement"
+    data-engagement-select
+    lang="es"
+  >
+    {
+      options.map((option) => (
+        <option
+          value={option.code}
+          data-engagement-option
+          data-engagement-code={option.code}
+          data-label={option.label}
+          selected={option.code === active}
+        >
+          {`${option.label} · ${option.count}`}
+        </option>
+      ))
+    }
+  </select>
+</div>
+
+<style>
+  .eng {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .eng-select {
+    /* Wide enough for "Mantenimiento o recurrente · 12" without truncating, and
+       capped so the toolbar keeps room for the roster beside it. */
+    width: clamp(220px, 26vw, 320px);
+    /* The native arrow needs room the shared control padding does not leave. */
+    padding-right: var(--space-2);
+    cursor: pointer;
+  }
+
+  .eng-select:focus-visible {
+    border-color: var(--cobalto);
+  }
+</style>

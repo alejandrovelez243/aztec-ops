@@ -4,6 +4,12 @@ Each condition is one class deciding one thing from facts it is handed. Composit
 (``IsOverdue() & ~IsBlocked()``) replaces the nested ``if`` that would otherwise have to be
 edited every time a seventh criterion appears, and health is derived from the resulting flags —
 there is no editable health field anywhere in this system.
+
+Every ``label`` and every string ``detail`` returns is **Spanish on purpose**: the interface is
+Spanish (PRODUCT.md) and the frontend is forbidden from holding an object literal keyed by a flag
+code (`docs/standards/FRONTEND.md` §7), so the words have to arrive from here. That is the same
+exception the database's user-facing labels already have — identifiers, class names, docstrings,
+comments and tests stay English (CLAUDE.md §Language). Do not "fix" these back.
 """
 
 from abc import ABC, abstractmethod
@@ -16,13 +22,39 @@ from .types import Health, ProjectRiskInput, RiskFlag, Severity
 BLOCKED_CATEGORY = "BLOCKED"
 
 
+def _counted(quantity: int, singular: str, plural: str) -> str:
+    """Render a quantity with the noun agreeing in number.
+
+    Spanish inflects the adjective as well as the noun, so ``"1 bloqueos abiertos"`` — the shape a
+    naive f-string produces — is wrong twice. Both forms are written out by the caller rather than
+    derived by appending an ``s``, because "tarea pasó" / "tareas pasaron" is not a suffix rule.
+
+    Args:
+        quantity: The number to render.
+        singular: The noun phrase for exactly one, e.g. ``"bloqueo abierto"``.
+        plural: The noun phrase for anything else, e.g. ``"bloqueos abiertos"``.
+
+    Returns:
+        The quantity and the agreeing phrase, e.g. ``"3 bloqueos abiertos"``.
+    """
+    return f"{quantity} {singular if quantity == 1 else plural}"
+
+
 class Specification(ABC):
     """Base class for a pure, total risk condition.
 
     Total means it answers for any ``ProjectRiskInput`` — a subclass may not raise where its
     siblings return ``False``, narrow the accepted input, or need a database the others do not.
     That contract is what makes the operators below safe to compose in any order.
+
+    A specification also names itself: ``label`` travels with the flag onto the wire, so adding a
+    criterion stays one class plus one ``@register_risk`` line and the client needs no table of
+    codes to render the new chip (CLAUDE.md rule 8).
     """
+
+    #: Spanish name of the raised risk, rendered as the chip's text. Declared here rather than in a
+    #: mapping so a new specification cannot ship a code nobody can name.
+    label: str
 
     @abstractmethod
     def is_satisfied_by(self, data: ProjectRiskInput) -> bool:
@@ -30,7 +62,7 @@ class Specification(ABC):
 
     @abstractmethod
     def detail(self, data: ProjectRiskInput) -> str:
-        """The fact that satisfied the condition, in one English sentence."""
+        """The fact that satisfied the condition, in one Spanish sentence."""
 
     def __and__(self, other: "Specification") -> "Specification":
         """Both conditions must hold."""
@@ -51,6 +83,7 @@ class AndSpecification(Specification):
     def __init__(self, left: Specification, right: Specification) -> None:
         self.left = left
         self.right = right
+        self.label = f"{left.label} y {right.label}"
 
     def is_satisfied_by(self, data: ProjectRiskInput) -> bool:
         """Whether both operands hold."""
@@ -67,6 +100,7 @@ class OrSpecification(Specification):
     def __init__(self, left: Specification, right: Specification) -> None:
         self.left = left
         self.right = right
+        self.label = f"{left.label} o {right.label}"
 
     def is_satisfied_by(self, data: ProjectRiskInput) -> bool:
         """Whether either operand holds."""
@@ -84,6 +118,7 @@ class NotSpecification(Specification):
 
     def __init__(self, operand: Specification) -> None:
         self.operand = operand
+        self.label = f"No {operand.label.lower()}"
 
     def is_satisfied_by(self, data: ProjectRiskInput) -> bool:
         """Whether the operand does not hold."""
@@ -91,7 +126,7 @@ class NotSpecification(Specification):
 
     def detail(self, data: ProjectRiskInput) -> str:
         """Names the absence, which is what a negation actually asserts."""
-        return f"Not the case that: {self.operand.detail(data)}"
+        return f"No se cumple que: {self.operand.detail(data)}"
 
 
 @register_risk(flag_code="BLOCKED", severity=Severity.CRITICAL)
@@ -102,6 +137,8 @@ class IsBlocked(Specification):
     moving. The state test reads ``category``, so adding ``en_espera_cliente`` in the admin makes
     this specification correct on the next event with no code change.
     """
+
+    label = "Bloqueado"
 
     def is_satisfied_by(self, data: ProjectRiskInput) -> bool:
         """Whether anything is currently preventing work from moving."""
@@ -115,10 +152,12 @@ class IsBlocked(Specification):
         """Names which of the three sources is blocking, and for how long where known."""
         if data.open_blocker_count > 0:
             age = data.oldest_blocker_age_days or 0
-            return f"{data.open_blocker_count} open blocker(s); the oldest for {age} day(s)."
+            blockers = _counted(data.open_blocker_count, "bloqueo abierto", "bloqueos abiertos")
+            return f"{blockers}; el más antiguo lleva {_counted(age, 'día', 'días')}."
         if data.blocked_task_count > 0:
-            return f"{data.blocked_task_count} task(s) sit in a blocked state."
-        return "The project's own state is in the BLOCKED category."
+            tasks = _counted(data.blocked_task_count, "tarea está", "tareas están")
+            return f"{tasks} en un estado bloqueado."
+        return "El estado del proyecto es de categoría BLOCKED."
 
 
 @register_risk(flag_code="OVERDUE", severity=Severity.HIGH)
@@ -128,6 +167,8 @@ class IsOverdue(Specification):
     Task-level lateness counts even when the project date still holds: a project that will miss
     its date is worth surfacing before the date proves it.
     """
+
+    label = "Vencido"
 
     def is_satisfied_by(self, data: ProjectRiskInput) -> bool:
         """Whether the project or any of its open tasks has already slipped."""
@@ -139,8 +180,10 @@ class IsOverdue(Specification):
         """Names the days past target, or the count of late tasks."""
         if data.target_date is not None and data.target_date < data.now.date():
             days = (data.now.date() - data.target_date).days
-            return f"{days} day(s) past the target date {data.target_date.isoformat()}."
-        return f"{data.overdue_task_count} task(s) past their due date."
+            late = _counted(days, "día", "días")
+            return f"{late} de retraso sobre la fecha objetivo {data.target_date.isoformat()}."
+        tasks = _counted(data.overdue_task_count, "tarea pasó", "tareas pasaron")
+        return f"{tasks} su fecha de vencimiento."
 
 
 @register_risk(flag_code="NO_NEXT_STEP", severity=Severity.MEDIUM)
@@ -152,13 +195,15 @@ class HasNoNextStep(Specification):
     command center's "no clear next step" panel exists to show.
     """
 
+    label = "Sin próximo paso"
+
     def is_satisfied_by(self, data: ProjectRiskInput) -> bool:
         """Whether nobody can say what happens next on this project."""
         return not data.next_step.strip() and not data.has_in_progress_task
 
     def detail(self, data: ProjectRiskInput) -> str:  # noqa: ARG002
         """States the absence; there is no number to quote for a missing plan."""
-        return "No next step is recorded and no task is in progress."
+        return "No hay próximo paso registrado ni ninguna tarea en curso."
 
 
 @register_risk(flag_code="NO_TARGET_DATE", severity=Severity.MEDIUM)
@@ -170,13 +215,15 @@ class HasNoTargetDate(Specification):
     change ``deadline_pressure`` from 0.5 to something invented.
     """
 
+    label = "Sin fecha objetivo"
+
     def is_satisfied_by(self, data: ProjectRiskInput) -> bool:
         """Whether an active project has committed to no date at all."""
         return data.target_date is None
 
     def detail(self, data: ProjectRiskInput) -> str:  # noqa: ARG002
         """States the absence of a committed date."""
-        return "No target date is committed."
+        return "No hay fecha objetivo comprometida."
 
 
 @register_risk(flag_code="STALE", severity=Severity.MEDIUM)
@@ -188,6 +235,8 @@ class IsStale(Specification):
     threshold, and treating an empty history as fresh would silence exactly the abandoned work.
     """
 
+    label = "Inactivo"
+
     def is_satisfied_by(self, data: ProjectRiskInput) -> bool:
         """Whether the project has been silent for longer than the operation accepts."""
         if data.days_since_last_activity is None:
@@ -197,11 +246,10 @@ class IsStale(Specification):
     def detail(self, data: ProjectRiskInput) -> str:
         """Names the days of silence against the threshold."""
         if data.days_since_last_activity is None:
-            return "No activity has ever been recorded."
-        return (
-            f"No activity for {data.days_since_last_activity} day(s), threshold is "
-            f"{data.staleness_threshold_days} day(s)."
-        )
+            return "Nunca se registró actividad."
+        silence = _counted(data.days_since_last_activity, "día", "días")
+        threshold = _counted(data.staleness_threshold_days, "día", "días")
+        return f"Sin actividad desde hace {silence}; el umbral es de {threshold}."
 
 
 @register_risk(flag_code="OWNER_OVERLOADED", severity=Severity.HIGH)
@@ -214,6 +262,8 @@ class OwnerOverloaded(Specification):
     cannot satisfy this — that absence is the ``NO_NEXT_STEP`` and staffing conversation instead.
     """
 
+    label = "Responsable sobrecargado"
+
     def is_satisfied_by(self, data: ProjectRiskInput) -> bool:
         """Whether the owner is carrying more than their stated capacity."""
         if not data.owner_code:
@@ -222,10 +272,9 @@ class OwnerOverloaded(Specification):
 
     def detail(self, data: ProjectRiskInput) -> str:
         """Names the load, the capacity and who carries it."""
-        return (
-            f"Owner {data.owner_code} carries {data.owner_load_points} point(s) against a "
-            f"capacity of {data.owner_capacity_points}."
-        )
+        load = _counted(data.owner_load_points, "punto", "puntos")
+        capacity = _counted(data.owner_capacity_points, "punto", "puntos")
+        return f"{data.owner_code} acumula {load} frente a una capacidad de {capacity}."
 
 
 def evaluate_risk(data: ProjectRiskInput) -> tuple[RiskFlag, ...]:
@@ -240,7 +289,7 @@ def evaluate_risk(data: ProjectRiskInput) -> tuple[RiskFlag, ...]:
 
     Returns:
         The satisfied flags in registration order, each carrying the severity from its registry
-        entry and the detail its specification produced.
+        entry and the label and detail its specification produced.
     """
     if data.is_archived:
         return ()
@@ -249,6 +298,7 @@ def evaluate_risk(data: ProjectRiskInput) -> tuple[RiskFlag, ...]:
         RiskFlag(
             code=entry.flag_code,
             severity=entry.severity,
+            label=entry.specification.label,
             detail=entry.specification.detail(data),
         )
         for entry in registered_risk_specifications()

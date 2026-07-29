@@ -1,97 +1,259 @@
 ---
 /**
- * Actividad (`/activity`): the portfolio-wide feed, declared missing.
+ * Actividad (`/activity`) — the portfolio-wide audit trail.
  *
- * There is no global activity endpoint. The API exposes exactly one activity route —
- * `GET /api/v1/projects/{code}/activity` (`backend/apps/activity/api/routers.py`) — and the
- * typed client exposes exactly one function for it (`getProjectActivity`). A portfolio feed
- * would therefore have to be assembled by fanning out one request per project, which is a
- * different feed than the one the product promises: it could not paginate, could not order
- * across projects and would silently omit whatever page it did not fetch.
+ * The container (`docs/standards/PATTERNS_FRONTEND.md` §5): this frontmatter
+ * performs the three reads of the first paint — the feed, the portfolio (to turn
+ * `PRJ-22` into a name and a link) and the roster (to offer real people in the
+ * actor filter) — maps the feed onto the view-state union, and composes. It
+ * renders no row markup of its own.
  *
- * So this page states the gap instead of faking it, and routes the reader to the timelines
- * that do exist. It ships no JavaScript: there is no live region to hydrate, and an island
- * that only renders static text is a runtime shipped for nothing
- * (`docs/standards/FRONTEND.md` §4). Delete this page and build the feed the day
- * `PRODUCT.md`'s pending backend addition lands.
+ * **Filter state lives in the URL.** `GET /api/v1/activity` sends no next/prev
+ * links precisely so that paging and filtering are addressable
+ * (`backend/apps/shared/pagination.py`), and a feed narrowed to one decision or
+ * one week has to be a link somebody can paste into a thread. That is why the
+ * filters are a `GET` form and the pager is a list of `<a>`: both work with no
+ * JavaScript, both survive a reload, both restore on the back button.
+ *
+ * **Correlated records are one decision.** Records written in the same
+ * transaction share a `correlation_id`, and the feed frames a run of them as the
+ * single movement it was — "A bajó para que B subiera" — with a link that
+ * expands the whole decision through `?correlation_id=`.
+ *
+ * **Origin is the distinction that matters.** A `MANUAL` record is a person
+ * overruling the engine and carries a mandatory reason; a `POLICY` record is the
+ * engine recomputing and carries the signal and the delta that moved the score.
+ * They must not look alike, so they do not.
+ *
+ * The one live region is the feed itself, wrapped in `ActivityLive`: everything
+ * above it is static and ships no runtime.
  */
+import FeedList from "../components/activity/FeedList.astro";
+import FilterBar from "../components/activity/FilterBar.astro";
+import Pager from "../components/activity/Pager.astro";
+import { FEED_COPY, PAGE_COPY, ROW_COPY } from "../components/activity/copy";
+import RegionMessage from "../components/projects/RegionMessage.astro";
 import Icon from "../components/ui/Icon.astro";
+import ActivityLive from "../islands/ActivityLive.astro";
 import Shell from "../layouts/Shell.astro";
+import {
+  ACTIVITY_PAGE_SIZE,
+  activeFacetCount,
+  pageCount as pagesFor,
+  parseFilters,
+  toQuery,
+} from "../lib/activity/filters";
+import {
+  buildProjectIndex,
+  groupByCorrelation,
+  toRows,
+  type DecisionGroup,
+  type ProjectRef,
+} from "../lib/activity/model";
+import type { VocabularyOption } from "../lib/activity/vocabulary";
+import { getPortfolioActivity, getQueue, getTeamLoad } from "../lib/api/client";
+import { errorCopyByCode } from "../lib/api/error-copy";
+import type { ActivityPage } from "../lib/api/domain";
+import { assertNever, toViewState, type ViewState } from "../lib/view-state";
 
-const CRUMBS = [{ label: "Resumen", href: "/" }, { label: "Actividad" }];
+/** One reference instant for the whole render, so two rows cannot straddle a minute. */
+const now = new Date();
 
-/** The one activity route the API actually serves; rendered verbatim, not translated. */
-const PROJECT_ACTIVITY_PATH = "/api/v1/projects/{code}/activity";
+const filters = parseFilters(Astro.url.searchParams);
+const activeCount = activeFacetCount(filters);
+
+// The three reads are independent; serialising them would add two round trips
+// to the first paint for nothing.
+const [feedResult, queueResult, teamResult] = await Promise.all([
+  getPortfolioActivity(
+    toQuery(filters, { page: filters.page, pageSize: ACTIVITY_PAGE_SIZE }),
+  ),
+  getQueue({ page_size: 200 }),
+  getTeamLoad(),
+]);
+
+/**
+ * Codes the feed can resolve to a name and a link.
+ *
+ * Taken from the portfolio the app already serves rather than from a
+ * denormalized field on the record: the trail stores a business code because it
+ * outlives the row it describes, and asking the API to repeat a project's name
+ * on every one of its records would be a second source of truth for it.
+ */
+const projects: readonly ProjectRef[] = queueResult.ok
+  ? queueResult.data.items.map((item) => ({ code: item.code, name: item.name }))
+  : [];
+const index = buildProjectIndex(projects);
+
+/**
+ * Who the actor filter offers.
+ *
+ * An actor named in the URL but absent from the roster is added back, so a saved
+ * link keeps showing what it is filtering by instead of quietly resetting to
+ * "Todo" while the feed stays narrowed.
+ */
+const roster: VocabularyOption[] = teamResult.ok
+  ? teamResult.data.items.map((person) => ({
+      value: person.alias,
+      label: person.label,
+    }))
+  : [];
+if (
+  filters.actor !== null &&
+  !roster.some((person) => person.value === filters.actor)
+) {
+  roster.push({ value: filters.actor, label: filters.actor });
+}
+
+// SSR has no stream, so `"connecting"` is the only honest status: a successful
+// read is `ready` and a failed one is `error`. `disconnected` is the island's
+// arm — it is what learns the stream dropped.
+const state: ViewState<ActivityPage> = toViewState(feedResult, "connecting", {
+  isEmpty: (page) => page.items.length === 0,
+  emptyMessage:
+    activeCount > 0 ? FEED_COPY.emptyFilteredBody : FEED_COPY.emptyBody,
+  lastEventAt: null,
+});
+
+/**
+ * What the feed region renders, one arm at a time.
+ *
+ * `disconnected` collapses into `rows` here because on the server the read is
+ * fresh by construction; staleness is the island's banner, not a server fact.
+ * `empty` still carries the (empty) groups so the list, its templates and the
+ * island's contract exist on the page — a record arriving over the stream then
+ * lands in a real list instead of finding nothing to fill.
+ */
+type FeedPlan =
+  | { mode: "loading" }
+  | { mode: "rows"; groups: readonly DecisionGroup[]; count: number }
+  | { mode: "empty" }
+  | { mode: "error"; title: string; detail: string };
+
+function planFor(view: ViewState<ActivityPage>): FeedPlan {
+  switch (view.kind) {
+    case "ready":
+    case "disconnected":
+      return {
+        mode: "rows",
+        groups: groupByCorrelation(toRows(view.data.items, index, now)),
+        count: view.data.count,
+      };
+    case "empty":
+      return { mode: "empty" };
+    case "error":
+      return {
+        mode: "error",
+        title: FEED_COPY.errorTitle,
+        detail: errorCopyByCode(view.code).detail,
+      };
+    case "loading":
+      return { mode: "loading" };
+    default:
+      return assertNever(view);
+  }
+}
+
+const plan = planFor(state);
+const groups: readonly DecisionGroup[] =
+  plan.mode === "rows" ? plan.groups : [];
+const total = plan.mode === "rows" ? plan.count : 0;
+const pages = pagesFor(total, ACTIVITY_PAGE_SIZE);
+const hasRows = plan.mode === "rows";
+
+/** Copy of the empty arm, which is a different sentence once a facet is on. */
+const emptyTitle =
+  activeCount > 0 ? FEED_COPY.emptyFilteredTitle : FEED_COPY.emptyTitle;
+const emptyDetail =
+  activeCount > 0 ? FEED_COPY.emptyFilteredBody : FEED_COPY.emptyBody;
+
+const CRUMBS = [
+  { label: PAGE_COPY.crumbHome, href: "/" },
+  { label: PAGE_COPY.title },
+];
 ---
 
-<Shell title="Actividad" active="activity" crumbs={CRUMBS}>
+<Shell title={PAGE_COPY.title} active="activity" crumbs={CRUMBS}>
   <section class="activity">
     <header>
-      <h1 class="h1">Actividad</h1>
-      <p class="body-text lead">
-        Cada cambio queda registrado en una bitácora de solo anexión. Hoy esa
-        bitácora se lee proyecto por proyecto.
-      </p>
+      <h1 class="h1">{PAGE_COPY.title}</h1>
+      <p class="body-text lead">{PAGE_COPY.lead}</p>
     </header>
 
-    <article class="card pending">
-      <span class="state-icon tone-ambar" aria-hidden="true">
-        <Icon name="pulse" />
-      </span>
-      <p><span class="chip tone-ambar">Pendiente</span></p>
-      <h2 class="h2">El feed de toda la cartera todavía no existe</h2>
-      <p class="body-text">
-        La API publica la bitácora de cada proyecto en <code class="chip chip-code"
-          >{PROJECT_ACTIVITY_PATH}</code
-        >, pero no hay ninguna ruta que devuelva la actividad de la cartera
-        completa. Reunirla en un solo feed —ordenado, paginado y sin huecos—
-        necesita esa adición en el backend, que ya está anotada como pendiente
-        en PRODUCT.md.
-      </p>
-      <p class="small">
-        Con lo que hay hoy, esta pantalla solo podría mostrar un feed incompleto
-        o inventado. Preferimos decirlo.
-      </p>
-      <p class="actions">
-        <a class="btn btn-primary" href="/projects">
-          Ver proyectos
-          <Icon name="chevron-right" />
-        </a>
-      </p>
-    </article>
+    <FilterBar filters={filters} actors={roster} activeCount={activeCount} />
 
-    <article class="card meanwhile">
-      <h2 class="h2">Mientras tanto</h2>
-      <ul class="notes">
-        <li>
-          <span class="dot tone-cielo" aria-hidden="true"></span>
-          <p class="body-text">
-            Abre cualquier proyecto y ve a su pestaña de actividad: ahí está su
-            bitácora completa, de lo más reciente a lo más antiguo.
+    {
+      filters.correlationId !== null && (
+        <div class="card decision-banner tone-cielo" role="status">
+          <span class="dot" aria-hidden="true" />
+          <p class="small">
+            <strong>{ROW_COPY.viewingDecision}.</strong>{" "}
+            {ROW_COPY.viewingDecisionBody}
           </p>
-        </li>
-        <li>
-          <span class="dot tone-cielo" aria-hidden="true"></span>
-          <p class="body-text">
-            Las repriorizaciones comparten un identificador de correlación, así
-            que los registros de una misma decisión se leen juntos: cuando un
-            proyecto sube porque otro baja, las dos mitades están enlazadas.
-          </p>
-        </li>
-        <li>
-          <span class="dot tone-cielo" aria-hidden="true"></span>
-          <p class="body-text">
-            Nada se edita ni se borra. La bitácora solo admite anexar, y por eso
-            sirve como prueba de lo que pasó y de quién lo hizo.
-          </p>
-        </li>
-      </ul>
-      <p class="small">
-        Se registran altas, cambios de estado, de prioridad y de responsable,
-        próximos pasos, bloqueos levantados y resueltos, tareas añadidas y
-        notas.
-      </p>
-    </article>
+          <a class="btn btn-secondary" href="/activity">
+            <Icon name="close" size={18} />
+            {ROW_COPY.clearDecision}
+          </a>
+        </div>
+      )
+    }
+
+    <ActivityLive>
+      {
+        plan.mode === "error" && (
+          <RegionMessage
+            kind="error"
+            title={plan.title}
+            detail={plan.detail}
+            actionLabel={FEED_COPY.errorAction}
+          />
+        )
+      }
+
+      {
+        plan.mode === "loading" && (
+          <p
+            class="skeleton loading-block"
+            aria-label={FEED_COPY.loadingLabel}
+          />
+        )
+      }
+
+      {
+        (plan.mode === "rows" || plan.mode === "empty") && (
+          <div class="region">
+            <div data-activity-empty hidden={hasRows}>
+              <RegionMessage
+                kind="empty"
+                title={emptyTitle}
+                detail={emptyDetail}
+                actionLabel={null}
+              >
+                {activeCount > 0 && (
+                  <a class="btn btn-secondary" href="/activity">
+                    {FEED_COPY.emptyFilteredAction}
+                  </a>
+                )}
+              </RegionMessage>
+            </div>
+
+            <div class="body" data-activity-body hidden={!hasRows}>
+              <FeedList groups={groups} count={total} />
+              <Pager filters={filters} page={filters.page} pageCount={pages} />
+            </div>
+
+            {/* The code→name map the island hydrates from, so a record arriving
+                over the stream can name its project without a second read. */}
+            <script
+              is:inline
+              type="application/json"
+              data-activity-projects
+              set:html={JSON.stringify(projects)}
+            />
+          </div>
+        )
+      }
+    </ActivityLive>
   </section>
 </Shell>
 
@@ -99,7 +261,6 @@ const PROJECT_ACTIVITY_PATH = "/api/v1/projects/{code}/activity";
   .activity {
     display: grid;
     gap: var(--space-5);
-    max-width: 78ch;
   }
 
   .lead {
@@ -107,50 +268,39 @@ const PROJECT_ACTIVITY_PATH = "/api/v1/projects/{code}/activity";
     color: var(--tinta-media);
   }
 
-  .card {
-    display: grid;
-    justify-items: start;
+  .decision-banner {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
     gap: var(--space-3);
-    padding: var(--space-6);
-  }
-
-  .state-icon {
-    display: grid;
-    place-items: center;
-    width: var(--space-7);
-    height: var(--space-7);
-    border-radius: var(--radius-full);
+    padding: var(--space-3) var(--space-4);
     background-color: var(--tone-wash);
+    border-color: color-mix(in srgb, var(--tone-solid) 30%, var(--hairline));
     color: var(--tone-ink);
   }
 
-  .actions {
-    margin-top: var(--space-2);
+  .decision-banner p {
+    margin-right: auto;
+    color: var(--tone-ink);
   }
 
-  .notes {
-    display: grid;
-    gap: var(--space-3);
+  .region {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
   }
 
-  .notes li {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
-    align-items: start;
-    gap: var(--space-3);
+  .body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
   }
 
-  /* Centres the dot on the first line of text, derived from the type tokens rather than
-     nudged by hand, so it stays centred if the body scale ever moves. */
-  .notes .dot {
-    margin-top: calc(
-      (var(--text-body-size) * var(--text-body-line) - var(--space-2)) / 2
-    );
+  .region > [hidden] {
+    display: none;
   }
 
-  @media (max-width: 640px) {
-    .card {
-      padding: var(--space-5);
-    }
+  .loading-block {
+    height: var(--space-8);
   }
 </style>

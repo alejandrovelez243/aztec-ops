@@ -8,33 +8,39 @@
  * recalculated breakdown arriving over SSE cannot drift from the server-rendered
  * one — there is no second copy of this markup to forget to update.
  *
- * `code` renders verbatim: signal codes are registry identifiers (CLAUDE.md rule 8)
- * and a Spanish label map keyed by code would silently drop the seventh signal.
- * `reason` is the engine's own prose and is rendered as it arrived.
+ * The signal names itself: `label` and `reason` are both persisted with the
+ * contribution by the engine that computed it, so a signal registered tomorrow
+ * arrives already written (CLAUDE.md rule 8) and a historical breakdown keeps
+ * the wording that was true when it was scored. The `code` survives only as a
+ * styling and testing hook on `data-signal`, never as text a person reads.
  */
 export interface Props {
-  /** Registered signal code, e.g. `deadline_pressure`. */
+  /** Registered signal code — a hook, never rendered as text. */
   code: string;
+  /** The signal's own Spanish name, as the engine persisted it. */
+  label: string;
   /** Pre-formatted contribution, from `formatPoints`. */
   points: string;
-  /** The reason persisted with the score; English prose from the backend. */
+  /** The reason persisted with the score, in the operator's language. */
   reason: string;
   /** Bar width as a 0–1 ratio of the widest signal beside it. */
   ratio: number;
 }
 
-const { code, points, reason, ratio } = Astro.props;
+const { code, label, points, reason, ratio } = Astro.props;
 ---
 
 <li class="signal" data-signal={code}>
   <p class="signal-head">
-    <span class="chip chip-code" data-slot="code" lang="en">{code}</span>
-    <span class="figure points"><span data-slot="points">{points}</span> pts</span>
+    <span class="signal-name" data-slot="label">{label}</span>
+    <span class="figure points"
+      ><span data-slot="points">{points}</span> pts</span
+    >
   </p>
   <span class="track" aria-hidden="true">
     <span class="fill" data-slot="fill" style={`--bar: ${ratio}`}></span>
   </span>
-  <p class="small reason" data-slot="reason" lang="en">{reason}</p>
+  <p class="small reason" data-slot="reason">{reason}</p>
 </li>
 
 <style>
@@ -46,9 +52,22 @@ const { code, points, reason, ratio } = Astro.props;
 
   .signal-head {
     display: flex;
-    align-items: center;
+    align-items: baseline;
     justify-content: space-between;
     gap: var(--space-2);
+  }
+
+  /*
+   * The signal's name is prose a person reads, so it is set in the UI face in
+   * sentence case — not in the mono code chip it used to wear. Mono is reserved
+   * for what must align or count (DESIGN.md, One-Voice Two-Hands Rule), which
+   * here is the points beside it.
+   */
+  .signal-name {
+    font-size: var(--text-title-size);
+    font-weight: var(--text-title-weight);
+    line-height: var(--text-title-line);
+    color: var(--tinta);
   }
 
   .points {
