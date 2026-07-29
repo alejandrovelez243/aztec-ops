@@ -1,0 +1,134 @@
+---
+/**
+ * The project's running commentary: what somebody wanted the next reader to
+ * know.
+ *
+ * A note is not a substitute for a blocker — nothing parses this text, and the
+ * moment something greps it for "bloqueado" the typed row stops being written
+ * (`docs/API.md` §2.12). The form says so in as many words.
+ *
+ * The list starts empty by necessity, not by choice: the API exposes
+ * `POST /projects/{code}/notes` and no matching read, and the `NOTE_ADDED`
+ * activity record carries the note's id rather than its body. So this panel
+ * shows the notes that arrive while it is open — this operator's and, over the
+ * stream, their colleagues' — and says that plainly instead of pretending the
+ * project has none.
+ */
+import Icon from "../ui/Icon.astro";
+
+export interface Props {
+  projectCode: string;
+}
+
+const { projectCode } = Astro.props;
+---
+
+<section class="notes" data-notes data-project-code={projectCode}>
+  <form class="add card" data-note-form>
+    <label class="field">
+      <span class="label">Nueva nota</span>
+      <textarea
+        class="input"
+        name="body"
+        rows="3"
+        required
+        placeholder="Contexto, acuerdos, lo que el próximo lector necesita saber"></textarea>
+    </label>
+    <p class="small hint">
+      Para lo que está detenido, usa <strong>Bloqueos</strong>: eso sí pesa en la prioridad.
+    </p>
+    <p class="small error" data-field="note-error" hidden></p>
+    <div class="actions">
+      <button class="btn btn-primary" type="submit" data-action="add-note">
+        <Icon name="plus" size={18} />
+        Publicar nota
+      </button>
+    </div>
+  </form>
+
+  <p class="empty small" data-notes-empty>
+    Todavía no hay notas nuevas. Las que publiques aparecerán aquí, y también las de tus colegas
+    mientras esta página esté abierta.
+  </p>
+
+  <ul class="list" data-note-list></ul>
+
+  {/* One home for the row markup: every note on this panel arrives after the
+      first paint, from a write or from the stream. */}
+  <template data-template="note">
+    <li class="note card" data-note>
+      <p class="title">
+        <span data-field="note-author"></span>
+        <span class="small when" data-field="note-when"></span>
+      </p>
+      <p class="body-text" data-field="note-body"></p>
+    </li>
+  </template>
+</section>
+
+<script>
+  import { onPage } from "./island";
+  import { mountNotes } from "./notes";
+
+  onPage("[data-notes]", mountNotes);
+</script>
+
+<style>
+  .notes {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+
+  .add {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4);
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .hint {
+    color: var(--tinta-media);
+  }
+
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .error {
+    color: var(--rojo-ink);
+  }
+
+  .error[hidden] {
+    display: none;
+  }
+
+  .empty[hidden] {
+    display: none;
+  }
+
+  .list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .note {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4);
+  }
+
+  .when {
+    margin-left: var(--space-2);
+    font-weight: 400;
+  }
+</style>

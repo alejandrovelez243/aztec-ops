@@ -13,6 +13,7 @@
  */
 
 import type {
+  ActivityEntry,
   Blocker,
   Override,
   ProjectDetail,
@@ -147,6 +148,21 @@ export function overrideSummary(forced: Override | null): string {
       ? `Posición ${forced.position}`
       : `Impulso ${forced.boost ?? ""}`;
   return `${amount} · ${forced.actor} · ${formatInstant(forced.created_at) ?? ""}`;
+}
+
+/**
+ * What one audit record changed, as "antes → después".
+ *
+ * Both values are stored as strings by the audit trail and either may be empty
+ * — a creation has no "before". The empty string is returned when neither side
+ * says anything, and the caller hides the line rather than rendering an arrow
+ * between two blanks.
+ */
+export function activityChange(entry: ActivityEntry): string {
+  const from = entry.from_value;
+  const to = entry.to_value;
+  if (from !== "" && to !== "") return `${from} → ${to}`;
+  return to !== "" ? to : from;
 }
 
 /**

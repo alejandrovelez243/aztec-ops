@@ -182,3 +182,25 @@ them decide whether the glossary above survives contact with the code:
 - Naming a domain concept `data`, `info`, `prio` or `wf`, or parking a domain helper in a
   `utils.py`. The glossary words are the identifiers: `engagement_type`, `open_blocker_count`,
   `owner_load_points`.
+
+## Mermaid diagrams in the docs
+
+Cursor's markdown preview stops rendering at the first diagram it cannot parse, and everything
+below that point disappears — so one unsupported construct silently hides half a document. It is
+stricter than the official CLI, so `mermaid-cli` rendering a diagram proves nothing about the
+preview.
+
+Three constructs have each broken it once, and none of them bought anything:
+
+- **Stadium nodes** `NAME(["text"])` — use `NAME["text"]`.
+- **Apostrophes inside a label** — write "Operator browser", not "Operator's browser".
+- **`//` inside a label**, which arrives via URLs — write `host api port 8000`, not
+  `http://api:8000`.
+
+Keep diagrams to rectangles, cylinders `[( )]`, subgraphs, `-->`, `-.->` and plain quoted labels.
+Avoid `linkStyle`: it targets edges by index, so adding an arrow above silently restyles the wrong
+ones.
+
+To find which diagram breaks a preview, compare the constructs used by the first one that fails
+against the ones that rendered before it. The difference is the cause; that method found all three
+above.

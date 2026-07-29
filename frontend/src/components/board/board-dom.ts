@@ -23,6 +23,8 @@ export const SEL = {
   card: "[data-card]",
   cardState: "[data-card-state]",
   cardScore: "[data-card-score]",
+  cardScoreSlot: "[data-card-score-slot]",
+  cardScoreNote: "[data-card-score-note]",
   cardPending: "[data-card-pending]",
   moveTrigger: "[data-move-trigger]",
   moveMenu: "[data-move-menu]",

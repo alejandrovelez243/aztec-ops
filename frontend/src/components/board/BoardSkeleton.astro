@@ -46,7 +46,10 @@ const cards = Array.from({ length: CARDS_PER_COLUMN }, (_, index) => index);
   .skeleton-board {
     display: grid;
     grid-auto-flow: column;
-    grid-auto-columns: minmax(268px, 1fr);
+    /* Same resting column width as the loaded board (islands/BoardCanvas.astro): a
+       skeleton in a different shape is a promise the paint then breaks. */
+    --column-min: 268px;
+    grid-auto-columns: minmax(var(--column-min), 1fr);
     gap: var(--space-4);
     overflow-x: auto;
   }

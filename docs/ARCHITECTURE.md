@@ -72,7 +72,7 @@ product: everything else here exists to make step 4 arrive.
 
 ```mermaid
 flowchart TB
-  BROWSER["Operator's browser<br/>fetch for reads and writes<br/>EventSource for the live feed"]
+  BROWSER["Operator browser<br/>fetch for reads and writes<br/>EventSource for the live feed"]
 
   subgraph net["Docker Compose network"]
     FE["frontend - Astro 7<br/>published on 4321<br/>SSR for first paint, islands for the live parts"]
@@ -84,8 +84,8 @@ flowchart TB
   end
 
   BROWSER -->|"HTML on first load"| FE
-  FE -->|"SSR reads, INTERNAL_API_URL = http://api:8000"| API
-  BROWSER -->|"reads and writes, PUBLIC_API_URL = http://localhost:8000"| API
+  FE -->|"SSR reads via INTERNAL_API_URL, host api port 8000"| API
+  BROWSER -->|"reads and writes via PUBLIC_API_URL, host localhost port 8000"| API
   BROWSER -->|"EventSource with the cookie, held open"| API
 
   API -->|"1 - aggregate, ActivityRecord and OutboxEvent in ONE transaction"| PG

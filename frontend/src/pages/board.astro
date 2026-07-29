@@ -21,8 +21,15 @@ import type { ViewState } from "../lib/view-state";
  *
  * Why the queue and not a board endpoint: `GET /api/v1/queue` is the read model that already
  * carries state, engagement type, owner, due date and score per project — exactly the card —
- * in one request. The cost is that the board can only draw the states somebody is currently
- * in; see the unresolved note in the empty-column comment below.
+ * in one request.
+ *
+ * Its one cost, and the surface's known gap: the queue reports the state each project is in,
+ * so the board can only draw the states somebody currently occupies. A workflow state that
+ * exists in the admin but holds no project has no column, which means it cannot be dropped
+ * into either — and a project moved into one leaves the board with a toast instead of landing
+ * in an empty column. Closing this needs a workflow-states endpoint
+ * (`GET /api/v1/workflows/{code}/states`) so the columns come from the workflow rather than
+ * from the rows; until it exists the runtime says so out loud rather than pretending.
  */
 
 /**

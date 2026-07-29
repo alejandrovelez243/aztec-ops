@@ -1312,11 +1312,14 @@ const staleSentence =
 
       const previous = Number.parseFloat(figure.textContent ?? "");
       const description = describeScore(value, envelope.payload);
+      // A project scored for the first time stops being an absence chip and becomes a figure.
       figure.dataset["scoreState"] = "computed";
       figure.classList.remove("chip", "tone-ambar");
       figure.classList.add("figure");
-      figure.title = description;
-      figure.setAttribute("aria-label", description);
+      const slot = card.querySelector<HTMLElement>(SEL.cardScoreSlot);
+      if (slot !== null) slot.title = description;
+      const note = card.querySelector<HTMLElement>(SEL.cardScoreNote);
+      if (note !== null) note.textContent = description;
       countUp(figure, Number.isNaN(previous) ? value : previous, value);
     }
 
@@ -1521,6 +1524,10 @@ const staleSentence =
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
+    /* One column's resting width: wide enough for a project name plus its owner,
+       narrow enough that four fit a laptop. The skeleton mirrors it so the loaded
+       board never jumps out of the shape its skeleton promised. */
+    --column-min: 268px;
   }
 
   .board-bar {
@@ -1563,7 +1570,7 @@ const staleSentence =
   .columns {
     display: grid;
     grid-auto-flow: column;
-    grid-auto-columns: minmax(268px, 1fr);
+    grid-auto-columns: minmax(var(--column-min), 1fr);
     gap: var(--space-4);
     align-items: start;
     overflow-x: auto;

@@ -270,6 +270,28 @@ const appGuard = appGuardScript(
         }
       }
 
+      /**
+       * Re-marks the current destination in the sidebar.
+       *
+       * The sidebar is `transition:persist`ed, so it survives a navigation
+       * untouched — including the `aria-current` the server rendered for
+       * whatever page first drew it. Without this, the highlight stays on the
+       * entry the operator arrived through and the nav quietly lies about
+       * where they are.
+       */
+      function markActiveNav(): void {
+        const path = window.location.pathname;
+        for (const link of document.querySelectorAll<HTMLAnchorElement>(
+          ".nav-item",
+        )) {
+          const href = link.getAttribute("href") ?? "";
+          const isActive =
+            href === "/" ? path === "/" : path === href || path.startsWith(`${href}/`);
+          if (isActive) link.setAttribute("aria-current", "page");
+          else link.removeAttribute("aria-current");
+        }
+      }
+
       function fillOperatorCard(): void {
         const operator = getOperator();
         const card = document.querySelector<HTMLElement>("[data-operator]");
@@ -330,6 +352,7 @@ const appGuard = appGuardScript(
       document.addEventListener("astro:page-load", () => {
         if (!guardAppPage()) return;
         setDrawer(false);
+        markActiveNav();
         fillOperatorCard();
       });
 

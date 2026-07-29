@@ -17,6 +17,7 @@ import {
   clearSession,
   loadSession,
   saveSession,
+  SESSION_COOKIE_NAME,
   type SessionActor,
   type StoredSession,
 } from "./tokens";
@@ -79,15 +80,28 @@ export function getOperator(): Operator | null {
   return { ...session.actor, isOpsLead: session.isOpsLead };
 }
 
-/** Whether a session exists at all (fresh or refreshable). */
+/**
+ * Whether a session exists that the *server* would also honour.
+ *
+ * Both halves are checked, and the conjunction is the point: the stored
+ * session is what the client fetches with, and the mirror cookie is what the
+ * middleware reads. If they disagree, the two guards send the visitor in
+ * opposite directions and the tab ping-pongs between `/` and `/login` — a
+ * redirect loop that presents itself as a page that never loads. A session
+ * without its cookie is therefore reported as absent, and the login screen
+ * clears it (`lib/auth/guard-inline.ts`).
+ */
 export function hasSession(): boolean {
-  return loadSession() !== null;
+  if (loadSession() === null) return false;
+  return document.cookie.includes(`${SESSION_COOKIE_NAME}=`);
 }
 
 /**
- * Client-side route guard for app pages: without a session, replaces the
- * location with the login screen carrying a `next` back-reference. Returns
- * whether the visitor may stay.
+ * Client-side route guard for app pages, re-run after every view transition:
+ * without a session the location is replaced with the login screen carrying a
+ * `next` back-reference. The authoritative guard is the middleware; this one
+ * catches an expiry that happens while the tab is open, with no navigation to
+ * the server in between.
  */
 export function guardAppPage(): boolean {
   if (hasSession()) return true;

@@ -91,13 +91,13 @@ const blockerLabel =
     <span
       class:list={["chip", "card-due", card.due.toneClass]}
       title={card.due.description}
-      aria-label={card.due.description}
       lang="es"
     >
       <Icon name="calendar" size={13} />
-      <span class:list={[card.due.isAbsence ? null : "figure"]}
+      <span class:list={[card.due.isAbsence ? null : "figure"]} aria-hidden="true"
         >{card.due.text}</span
       >
+      <span class="visually-hidden">{card.due.description}</span>
     </span>
 
     {
@@ -113,29 +113,37 @@ const blockerLabel =
         <span
           class="chip tone-cielo"
           title={card.manualOverride.description}
-          aria-label={card.manualOverride.description}
           lang="es"
         >
           {card.manualOverride.label}
+          <span class="visually-hidden">{card.manualOverride.description}</span>
         </span>
       )
     }
 
     <span
-      class:list={[
-        "card-score",
-        card.score.kind === "computed" ? "figure" : "chip tone-ambar",
-      ]}
-      data-card-score
-      data-score-state={card.score.kind}
+      class="card-score-slot"
       title={card.score.description}
-      aria-label={card.score.description}
-      lang="es">{card.score.text}</span
+      data-card-score-slot
+      lang="es"
     >
+      <span
+        class:list={[
+          "card-score",
+          card.score.kind === "computed" ? "figure" : "chip tone-ambar",
+        ]}
+        data-card-score
+        data-score-state={card.score.kind}
+        aria-hidden="true">{card.score.text}</span
+      >
+      <span class="visually-hidden" data-card-score-note
+        >{card.score.description}</span
+      >
+    </span>
 
     <button
       type="button"
-      class="btn btn-ghost btn-icon pcard-move"
+      class="btn btn-ghost btn-icon"
       data-move-trigger
       aria-haspopup="menu"
       aria-expanded="false"
@@ -222,20 +230,17 @@ const blockerLabel =
     height: var(--space-5);
   }
 
-  .card-score {
+  .card-score-slot {
     margin-left: auto;
+  }
+
+  .card-score {
     font-size: var(--text-h2-size);
     color: var(--tinta);
   }
 
   .card-score[data-score-state="absent"] {
     font-size: var(--text-label-size);
-  }
-
-  .pcard-move {
-    /* The keyboard and touch twin of the drag; never smaller than the touch floor. */
-    width: 40px;
-    height: 40px;
   }
 
   /* --- Drag lifecycle (DESIGN.md §Motion, the card lifecycle) --- */
