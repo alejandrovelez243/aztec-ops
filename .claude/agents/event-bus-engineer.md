@@ -179,8 +179,8 @@ def recalculate_priority(envelope: EventEnvelope) -> None:
    behaviour — `class HandlerIdempotencyTests` for the same event twice with one effect,
    `class OutboxDeliveryTests` for outbox-to-delivery, `class DeadLetterTests` for the budget and
    the re-queue (`docs/ARCHITECTURE.md` §11).
-6. Run `make test` and `make lint`. When debugging delivery: `make outbox`,
-   `curl -s localhost:8000/api/v1/health/pipeline`, `make logs-worker`, and
+6. Run `make test` and `make lint`. When debugging delivery: the outbox admin (`/admin/events/outboxevent/`),
+   `curl -s localhost:8000/api/v1/health/pipeline`, `make logs s="worker beat"`, and
    `celery -A config inspect scheduled` for retries waiting on backoff.
 
 ## Definition of done

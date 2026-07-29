@@ -202,7 +202,8 @@ seeding, and after activating a new `PriorityPolicy` version, when every score m
 against new weights. It is never part of normal operation, and it is deliberately not a management
 command — a command run from a laptop against production is an accident waiting. It is the
 **"Recompute priority for selected projects"** admin action, or
-`POST /api/v1/projects/{code}/recompute` and `POST /api/v1/recompute`. `make seed` chains it.
+`POST /api/v1/projects/{code}/recompute` and `POST /api/v1/recompute`. The seeding step that runs
+during `make up` chains it, so a freshly started stack is already scored.
 
 There are two triggers, because there are two ways a score can go stale.
 
@@ -438,20 +439,23 @@ The spreadsheet is converted once into Django fixtures committed to the reposito
 `backend/scripts/xlsx_to_fixtures.py`, regenerates them from the original `.xlsx` when the source data
 changes; it is not part of the runtime path.
 
-```bash
-make seed     # python manage.py loaddata catalog workflows portfolio work activity
-```
+Seeding is not a separate step. The `api` container migrates and then runs `manage.py seed` —
+`loaddata catalog workflows portfolio work activity`, plus the code sequences, the scores and the
+credentials — before uvicorn binds, so `make up` is the whole bootstrap. It also means
+`DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_PASSWORD`, `DJANGO_SUPERUSER_EMAIL` and
+`SEED_USER_PASSWORD` must be set in `.env` before the first `make up`; they ship empty and an empty
+value seeds a database nobody can sign in to.
 
 Rules:
 
-- Fixtures use explicit stable primary keys, so `loaddata` is an upsert: running `make seed`
-  twice leaves the database identical.
+- Fixtures use explicit stable primary keys, so `loaddata` is an upsert: bringing the stack up
+  twice leaves the database identical. That is what makes seeding on every start safe.
 - Fixture generation resolves the dataset's rough edges up front: `'None'` strings become real
   nulls, the free-text `blockers` column becomes typed `Blocker` rows, and `dependency` text is
   matched against task titles within the same project, falling back to `raw_label`.
 - The `Team` sheet counters are not imported. They are a projection of the task data and are
   recomputed by the system.
-- After seeding, scores are computed by `recompute_active_portfolio()`, which `make seed` calls as
+- After seeding, scores are computed by `recompute_active_portfolio()`, which `seed` calls as
   its last step (§4.2). Risk flags need no such step: they are computed on read, so a freshly
   seeded portfolio is correctly flagged before anything has run (§5).
 

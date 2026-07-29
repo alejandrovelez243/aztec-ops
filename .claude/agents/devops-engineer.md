@@ -1,6 +1,6 @@
 ---
 name: devops-engineer
-description: Invoke for Docker, Docker Compose and developer experience work in Aztec Ops. Concrete triggers — creating or changing the Python or Astro Dockerfile, adding or wiring a compose service (postgres, redis, api, worker, beat, frontend), fixing healthchecks or startup ordering, SSE not streaming through a proxy or WSGI server, environment variables and .env.example, Makefile targets (up, down, seed, test, lint, relay, recompute, logs), the README "run it from a clean clone" section, or arm64/amd64 build failures. Do not invoke for models, services, API routers, consumers or frontend components.
+description: Invoke for Docker, Docker Compose and developer experience work in Aztec Ops. Concrete triggers — creating or changing the Python or Astro Dockerfile, adding or wiring a compose service (postgres, redis, api, worker, beat, frontend), fixing healthchecks or startup ordering, SSE not streaming through a proxy or WSGI server, environment variables and .env.example, Makefile targets (up, down, build, ps, logs, reset, clean, makemigrations, shell, dbshell, test, lint, format, outbox), the README "run it from a clean clone" section, or arm64/amd64 build failures. Do not invoke for models, services, API routers, consumers or frontend components.
 tools: Read, Write, Edit, Grep, Glob, Bash
 ---
 
@@ -29,9 +29,11 @@ is wrong, this agent diagnoses it, reports the exact file and error, and hands b
 
 ## Rules
 
-1. One command from a clean clone to a working system with data: `make up` builds, starts and
-   waits; `make seed` loads fixtures and recomputes. If a reviewer needs a third manual step,
-   the setup is wrong.
+1. One command from a clean clone to a working system with data: `make up` builds, starts, waits on
+   healthchecks, and the `api` container migrates and seeds before it binds the port. The reviewer's
+   only prior step is filling `SEED_USER_PASSWORD` and the three `DJANGO_SUPERUSER_*` variables into
+   `.env`, because `seed` creates the superuser and the team-member passwords from them. If anything
+   else is manual, the setup is wrong.
 2. The `api` service runs under an ASGI server (uvicorn) because `GET /api/stream` is an async
    SSE endpoint. Never gunicorn-sync, never `runserver` in the composed stack. Any proxy in
    front of it sets `proxy_buffering off` and `X-Accel-Buffering: no`.
@@ -71,8 +73,9 @@ is wrong, this agent diagnoses it, reports the exact file and error, and hands b
 12. No Makefile target hides a non-zero exit code. No leading `-` on a recipe line, no
     `|| true`, no `; exit 0`, no piping the real command into something whose status wins.
     Multi-step recipes run under `set -e` semantics — one command per line, or `&&` between
-    them, never `;`. `make lint` runs `ruff check`, `ruff format --check` and `mypy apps` from
-    BACKEND.md §8 and fails if any of the three fails; `make test` fails if pytest fails.
+    them, never `;`. `make lint` is the whole gate in one target — `manage.py check`, `ruff check`,
+    `ruff format --check` and `mypy` from BACKEND.md §8 — and fails if any of the four fails; there
+    is no separate typecheck or check target to fall back on. `make test` fails if pytest fails.
 13. `make lint` and `make test` run the same commands in the container that CI and the developer
     run, with no relaxed flags — no `--exit-zero`, no `--no-strict`, no ruff or mypy selection
     narrowed in the Makefile. Configuration for those tools lives in `backend/pyproject.toml`;
@@ -90,11 +93,16 @@ is wrong, this agent diagnoses it, reports the exact file and error, and hands b
 4. For compose: declare `postgres`, `redis`, `api`, `worker`, `beat`, `frontend`. Wire
    healthchecks and `depends_on` conditions. Pass configuration exclusively through environment
    variables read from `.env`.
-5. For the Makefile: implement `up`, `down`, `seed`, `test`, `lint`, `logs`, `logs-worker`,
-   `outbox`. `seed` runs `manage.py seed`, the only management command in the system. There is
-   deliberately **no `recompute` and no `relay` target**: recompute is an admin action or
-   `POST /api/v1/recompute`, and the relay no longer exists. `outbox` prints pending / dispatched /
-   dead-lettered counts — the replacement for `XPENDING`.
+5. For the Makefile: the target list is fixed at fifteen — `help`, `up`, `down`, `build`, `ps`,
+   `logs`, `reset`, `clean`, `makemigrations`, `shell`, `dbshell`, `test`, `lint`, `format`,
+   `outbox`. Do not add a sixteenth without a reason `make up` cannot already cover. Migration,
+   seeding and superuser creation are not targets: they are the `api` service's compose command
+   (`migrate --noinput && seed && exec uvicorn ...`), and `seed` — the only management command in
+   the system — is idempotent, so every `up` is a safe upsert. `logs` takes a service:
+   `make logs s=api`, `make logs s="worker beat"`. There is deliberately **no recompute and no relay
+   target**: recompute is an admin action or `POST /api/v1/recompute`, and the relay no longer
+   exists. `outbox` prints pending / dispatched / dead-lettered counts — the replacement for
+   `XPENDING`.
 6. Update `.env.example` in the same change as any new variable. Never add a variable that only
    exists in compose.
 7. Verify by running the commands. Prefer `docker compose config` for syntax, then a real
@@ -104,21 +112,24 @@ is wrong, this agent diagnoses it, reports the exact file and error, and hands b
 ## Definition of done
 
 - [ ] `docker compose config` parses with no warnings.
-- [ ] From a clean clone: `cp .env.example .env && make up && make seed` yields a browsable app
-      with seeded data, verified or explicitly reported as unverifiable and why.
+- [ ] From a clean clone: `cp .env.example .env`, fill in `SEED_USER_PASSWORD` and the three
+      `DJANGO_SUPERUSER_*` variables, then `make up` yields a browsable app with seeded data and a
+      superuser that can sign in — verified, or explicitly reported as unverifiable and why.
+- [ ] `make up` run twice on the same volumes leaves the data identical; seeding is an upsert.
 - [ ] `api` runs under uvicorn; SSE is not buffered anywhere in the path.
 - [ ] `api`, `worker` and `beat` share one image; there is exactly one worker.
 - [ ] Every `depends_on` uses `service_healthy`; no sleeps anywhere.
 - [ ] `.env` is gitignored, `.env.example` is complete, `grep` finds no real credential.
 - [ ] No `platform:` pin and no amd64-only base image.
-- [ ] Every documented Makefile target exists and runs; none of them is `relay` or `recompute`.
+- [ ] The Makefile holds exactly the fifteen documented targets, each one exists and runs, and
+      none of them is `relay`, `recompute`, `seed`, `migrate` or a separate typecheck.
 - [ ] No dependency was added by editing a manifest: `git diff` on `pyproject.toml`,
       `uv.lock`, `frontend/package.json` and `package-lock.json` shows only CLI-generated
       changes, and `uv lock --check` passes.
 - [ ] `grep -nE '^\t-|\|\| true|; *exit 0' Makefile` returns nothing; every recipe line is a
       single command or an `&&` chain.
-- [ ] `make lint` runs `ruff check`, `ruff format --check` and `mypy apps` with no relaxing
-      flags; forcing one of the three to fail makes `make lint` exit non-zero, verified.
+- [ ] `make lint` runs `manage.py check`, `ruff check`, `ruff format --check` and `mypy` with no
+      relaxing flags; forcing one of the four to fail makes `make lint` exit non-zero, verified.
 - [ ] A deliberately failing test makes `make test` exit non-zero, verified.
 - [ ] Only infrastructure and documentation files were modified.
 

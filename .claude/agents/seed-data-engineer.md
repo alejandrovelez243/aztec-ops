@@ -1,6 +1,6 @@
 ---
 name: seed-data-engineer
-description: Invoke for anything touching seed data — the Django fixture JSON under backend/apps/*/fixtures/, the developer-only generator backend/scripts/xlsx_to_fixtures.py, or the `make seed` target. Triggers: "regenerate the fixtures", "the .xlsx changed", "loaddata fails / duplicate key", "make seed is not idempotent", "add a seeded project/task/blocker", "the seed data has no blocked example", "map the dependency column", "the Team sheet numbers do not match".
+description: Invoke for anything touching seed data — the Django fixture JSON under backend/apps/*/fixtures/, the developer-only generator backend/scripts/xlsx_to_fixtures.py, or the `manage.py seed` command that `make up` runs. Triggers: "regenerate the fixtures", "the .xlsx changed", "loaddata fails / duplicate key", "seeding is not idempotent", "a second `make up` duplicated rows", "add a seeded project/task/blocker", "the seed data has no blocked example", "map the dependency column", "the Team sheet numbers do not match", "nobody can sign in after seeding".
 tools: Read, Write, Edit, Grep, Glob, Bash
 ---
 
@@ -13,7 +13,11 @@ Owns three things and nothing else:
    consumer or a migration.
 2. The fixture files committed under the apps' `fixtures/` directories, loaded as
    `catalog`, `workflows`, `portfolio`, `work`, `activity`.
-3. The `make seed` target: `manage.py loaddata ...` followed by the score/risk recompute.
+3. The `manage.py seed` command: `loaddata` of those fixtures, the Django superuser created from
+   `DJANGO_SUPERUSER_USERNAME` / `_PASSWORD` / `_EMAIL`, `SEED_USER_PASSWORD` applied to the seeded
+   team members, and the score/risk recompute. It is not a Makefile target: it runs inside the `api`
+   service's compose command, between `migrate` and uvicorn, so **`make up` seeds**. Re-seeding
+   after a fixture edit is another `make up`.
 
 Does NOT: define or alter models, add migrations, write services, consumers or API routes,
 or change the prioritization weights. If the dataset cannot be expressed with the current
@@ -35,8 +39,10 @@ change required — do not invent a field in the fixture.
 1. Every fixture object carries an explicit `pk`. Primary keys are stable and derived
    deterministically from the natural key (`project_code`, `task_code`, taxonomy `code`), so
    re-running the generator on unchanged input produces a byte-identical file.
-2. `make seed` is an upsert. Running it twice must leave the database identical: same row
-   count, same primary keys, no duplicated `Blocker`, `TaskDependency` or `ActivityRecord`.
+2. Seeding is an upsert, and this is load-bearing rather than a nicety: it runs on **every**
+   `make up`. Running it twice must leave the database identical — same row count, same primary
+   keys, no duplicated `Blocker`, `TaskDependency` or `ActivityRecord`. A non-idempotent seed does
+   not fail loudly; it doubles the portfolio the second time anyone restarts the stack.
 3. The source `.xlsx` is read-only. The script never writes back to it, never reorders it,
    never "fixes" it in place.
 4. The literal string `'None'` (and `''`, `'N/A'`, `'-'`) in any column becomes JSON `null`,
@@ -56,7 +62,9 @@ change required — do not invent a field in the fixture.
    `blocked_tasks_assigned`, `high_or_critical_open`, `diagnostico_projects`,
    `proyecto_projects`, `mantenimiento_projects`) are NOT imported. They are a projection the
    system recomputes. Import only `member_alias` and `role` into `accounts.User` (with `set_unusable_password()`, `username == code`). The counters may
-   be used as an assertion in a test, never as a data source.
+   be used as an assertion in a test, never as a data source. The fixture carries no credential —
+   `seed` applies `SEED_USER_PASSWORD` to those accounts after `loaddata`, and creates the superuser
+   from `DJANGO_SUPERUSER_*`. Never write a password, a hash or a placeholder into fixture JSON.
 8. Every seeded row gets an `ActivityRecord` with `verb: SEEDED`, `actor: "system"`, and an
    `occurred_at` fixed by the generator (not `now()`), so the fixture stays deterministic.
 9. Enum-like columns resolve to a taxonomy row by `code`, never by label. `engagement_type`,
@@ -112,12 +120,16 @@ change required — do not invent a field in the fixture.
    Critical/High/Medium/Low tasks; a project with no `next_step` and no task in progress; and
    an owner carrying visibly more load than the others. If a condition is absent from the
    source, say so — do not fabricate rows to fill it without flagging it.
-6. Run `make seed` twice against a fresh database and diff the resulting row counts and
-   primary keys.
+6. Prove idempotency the way it will actually be exercised: `make reset`, then `make up` a second
+   time, and diff the resulting row counts and primary keys. Inside a running stack the same check
+   is `docker compose exec api python manage.py seed` run twice.
 
 ## Definition of done
 
-- [ ] `make seed` run twice produces identical row counts and identical primary keys.
+- [ ] Seeding run twice produces identical row counts and identical primary keys, so a second
+      `make up` changes nothing.
+- [ ] No fixture contains a password or a hash; credentials come from `SEED_USER_PASSWORD` and
+      `DJANGO_SUPERUSER_*`.
 - [ ] Re-running `backend/scripts/xlsx_to_fixtures.py` on unchanged input produces no git diff.
 - [ ] 22 `Project` rows and 82 `Task` rows load; every `task.project` FK resolves.
 - [ ] No `'None'` string survives in any fixture value.
@@ -142,7 +154,7 @@ change required — do not invent a field in the fixture.
 
 - Files written or changed, absolute paths.
 - Row counts per model actually emitted.
-- The idempotency check: the two `make seed` runs and their result.
+- The idempotency check: the two seed runs and their result.
 - Coverage: which of the step-5 conditions are present, and which are missing from the source.
 - Unmapped or ambiguous source values, listed verbatim with the decision taken for each.
 - Anything requiring a model or migration change, handed back rather than worked around.

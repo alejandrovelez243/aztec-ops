@@ -1,6 +1,6 @@
 ---
 name: aztec-local-dev
-description: Operating Aztec Ops locally — docker compose up/down, migrations, make seed with Django fixtures, tests and lint, Django admin, inspecting the outbox backlog and dead-lettered events, forcing a drain, celery inspect, resetting the database. Load it when a command fails, when the outbox is not draining, when a handler keeps failing, when SSE never reaches the browser, or when loaddata breaks.
+description: Operating Aztec Ops locally — docker compose up/down, the migrate-and-seed that `make up` performs, Django fixtures, tests and lint, Django admin, inspecting the outbox backlog and dead-lettered events, forcing a drain, celery inspect, resetting the database. Load it when a command fails, when the outbox is not draining, when a handler keeps failing, when SSE never reaches the browser, or when loaddata breaks.
 ---
 
 # Operating Aztec Ops locally
@@ -18,21 +18,35 @@ apply here — the outbox table is the instrument.
 
 ## Command table
 
+Fifteen targets, and this is the complete list: `help`, `up`, `down`, `build`, `ps`, `logs`,
+`reset`, `clean`, `makemigrations`, `shell`, `dbshell`, `test`, `lint`, `format`, `outbox`.
+Anything not on it does not exist.
+
 | Command | What it does |
 |---|---|
-| `make up` | `docker compose up -d` for postgres, redis, api, worker, beat, frontend |
+| `make help` | every target with what it does |
+| `make up` | creates `.env` if missing, builds and starts postgres, redis, api, worker, beat, frontend, waits on healthchecks, prints the URLs. The `api` container **migrates and seeds** before it binds the port |
 | `make down` | `docker compose down` (keeps volumes) |
-| `make logs` | `docker compose logs -f` |
-| `make logs-worker` | `docker compose logs -f worker beat` — the whole event path |
-| `make outbox` | pending / dispatched / dead-lettered counts from `events_outboxevent` |
-| `make migrate` | `docker compose exec api python manage.py migrate` |
-| `make seed` | the **only** management command: fixtures + code sequences + recompute |
-| `make test` | `docker compose exec api pytest` — the runner is pytest via pytest-django, collecting Django `TestCase` classes natively |
-| `make lint` | `ruff check`, `ruff format --check`, and `make typecheck` for mypy |
+| `make build` | build the images without starting anything |
+| `make ps` | service status and health |
+| `make logs` | `docker compose logs -f` — one service with `make logs s=api`, several with `make logs s="worker beat"` |
+| `make reset` | DESTRUCTIVE — drops the volumes and brings the stack back up from empty |
+| `make clean` | removes containers, volumes and the built images |
+| `make makemigrations` | `docker compose exec api python manage.py makemigrations` |
 | `make shell` | `docker compose exec api python manage.py shell` |
-| `make reset` | drops volumes, migrates, seeds from scratch |
+| `make dbshell` | `psql` against the compose database |
+| `make test` | `docker compose exec api pytest` — the runner is pytest via pytest-django, collecting Django `TestCase` classes natively |
+| `make lint` | the full gate, on the host: `manage.py check`, `ruff check`, `ruff format --check`, `mypy` strict |
+| `make format` | applies `ruff check --fix` and `ruff format` |
 
-There is deliberately **no `make recompute` and no `make relay`**. Recompute is the
+There is no separate migrate, seed or superuser target. The `api` service's compose command is
+`migrate --noinput && seed && exec uvicorn ...`, so bringing the stack up migrates, seeds and only
+then serves. `seed` is idempotent — fixtures carry stable primary keys, so `loaddata` upserts —
+which is what makes it safe on every start. To re-seed after editing a fixture or filling in the
+credentials, run `make up` again. For a one-off migration without a restart:
+`docker compose exec api python manage.py migrate`.
+
+There is deliberately **no recompute target and no relay**. Recompute is the
 "Recompute priority for selected projects" admin action or `POST /api/v1/recompute`; a command that
 only works from a checkout is not an operation.
 
@@ -44,11 +58,16 @@ Always run management commands inside the `api` container so they see the compos
 ```bash
 cd /Users/alejandrovelezp/aztec-challenge
 cp .env.example .env
+# fill in DJANGO_SUPERUSER_USERNAME, DJANGO_SUPERUSER_PASSWORD, DJANGO_SUPERUSER_EMAIL
+# and SEED_USER_PASSWORD — all four ship empty on purpose
 make up
-docker compose exec api python manage.py migrate
-make seed
-docker compose exec api python manage.py createsuperuser
 ```
+
+Those four variables must be set **before** `make up`, not after. `seed` runs inside the `api`
+container's start command, and it is what creates the Django superuser and applies
+`SEED_USER_PASSWORD` to the seeded team members. Leaving them empty gives you a stack that comes up
+clean and that nobody can sign in to, with no error to explain it. If you find that out late, fill
+them in and run `make up` again — seeding is an upsert.
 
 Admin: http://localhost:8000/admin/ — taxonomies (`catalog`), workflows and transitions
 (`workflow`), `ProcessedEvent`, and `OutboxEvent` with its pending / dispatched / dead-lettered
@@ -91,7 +110,7 @@ curl -s -X POST localhost:8000/api/v1/projects/PRJ-01/transition \
   -H 'Content-Type: application/json' -H 'X-Actor: camila' \
   -d '{"to_state": "blocked", "reason": "waiting for client access"}'
 
-make logs-worker
+make logs s="worker beat"
 ```
 
 ## Inspecting the bus
@@ -100,7 +119,7 @@ The outbox table is the instrument. It replaced `XPENDING` and `XINFO GROUPS`, a
 it lives in PostgreSQL, it survives a Redis restart, and the admin renders it.
 
 ```bash
-make outbox                                      # pending / dispatched / dead_lettered
+the outbox admin at /admin/events/outboxevent/                                      # pending / dispatched / dead_lettered
 curl -s localhost:8000/api/v1/health/pipeline    # the same, plus oldest backlog age and last tick
 
 docker compose exec api celery -A config inspect ping        # is the worker alive
@@ -119,7 +138,7 @@ docker compose exec api python manage.py shell -c \
   "from apps.events.registry import registered_handlers; print(registered_handlers())"
 ```
 
-Anything more specific is SQL (`make dbshell`):
+Anything more specific is SQL — `make dbshell`:
 
 ```sql
 SELECT id, topic, occurred_at, published_at, attempts, dead_lettered_at
@@ -135,12 +154,11 @@ SELECT handler, processed_at FROM events_processedevent WHERE event_id = '<uuid>
 ## Resetting the database
 
 ```bash
-make down
-docker compose down -v            # drops the postgres and redis volumes
-make up
-docker compose exec api python manage.py migrate
-make seed
+make reset                        # drops the postgres and redis volumes, then `make up`
 ```
+
+`make up` migrates and seeds on its own, so that one target is the whole cycle. `make clean` goes
+further and removes the built images too.
 
 Redis only, keeping the database. There is no stream or consumer group to clear; the dedup table is
 what actually makes an already-processed event process again:
@@ -166,7 +184,7 @@ recomputing what was already computed.
 
 ## Usual failures
 
-**Events written but never dispatched.** `make outbox` first. If `pending` is climbing, the
+**Events written but never dispatched.** the outbox admin (`/admin/events/outboxevent/`) first. If `pending` is climbing, the
 `worker` is down or cannot reach the broker — `docker compose ps worker`,
 `docker compose logs worker`, `celery -A config inspect ping`. If every count is zero after a
 transition, the service never wrote to the outbox: that is a service bug, not a transport bug. A
@@ -230,7 +248,7 @@ Problem installing fixture ... matching query does not exist` means a fixture re
 its own dependency fixture does not define — fix the fixture, do not loosen the FK.
 
 **loaddata duplicating rows.** Fixtures must use explicit stable primary keys. A fixture with
-`"pk": null` inserts a new row on every run, so `make seed` twice gives you doubled projects.
+`"pk": null` inserts a new row on every run, so a second `make up` gives you doubled projects.
 Check with:
 
 ```bash
@@ -294,10 +312,12 @@ Three things to know when a run looks wrong:
 `docs/standards/BACKEND.md` §8 defines the gate; `docs/standards/PATTERNS_BACKEND.md` §11 lists the
 antipatterns review rejects. Three rules bite hardest when operating locally:
 
-- **`make lint` runs before the commit, not in CI.** It is `ruff check . && ruff format --check . &&
-  mypy` — three commands, all of which must pass. Outside the container the equivalents are
-  `uv run --project backend ruff check`, `... ruff format --check` and `... mypy apps`. A red
-  `make lint` is a broken build; do not push it and wait for CI to say so.
+- **`make lint` runs before the commit, not in CI.** It is the whole gate in one target and it runs
+  on the host: `manage.py check`, `ruff check`, `ruff format --check` and `mypy` — four commands, all
+  of which must pass. There is no separate typecheck or check target; mypy is inside `make lint`.
+  The individual equivalents are `uv run --project backend ruff check`, `... ruff format --check` and
+  `... mypy apps config`. A red `make lint` is a broken build; do not push it and wait for CI to say
+  so.
 - **mypy is strict over `domain/` and `services/`.** An explicit `Any` or a `# type: ignore` without
   an error code and a reason comment is a defect there, not a warning. If `mypy` passes only because
   a file is excluded, you have moved the problem, not fixed it.
@@ -321,7 +341,7 @@ git commit                                                     # hooks run; no -
   debugging a connection refused to `postgres:5432`.
 - Clearing `dead_lettered_at` or deleting `ProcessedEvent` rows before reading the worker
   traceback, which hides a handler bug that comes back on the next event.
-- Reaching for `XADD`, `XPENDING` or `XINFO GROUPS`. They no longer apply: `make outbox` and
+- Reaching for `XADD`, `XPENDING` or `XINFO GROUPS`. They no longer apply: the outbox admin (`/admin/events/outboxevent/`) and
   `/api/v1/health/pipeline` are the equivalents.
 - Using `runserver` to test `/api/stream`. It buffers; the stream looks broken when the code is
   fine.

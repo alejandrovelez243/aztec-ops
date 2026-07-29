@@ -55,8 +55,8 @@ DJANGO_SUPERUSER_EMAIL=<your email>
 ```
 
 Leave them empty and everything still starts — the seeded accounts simply keep an unusable
-password and no admin is created, so you cannot sign in to the API or the Django admin until you
-set them and run `make seed` again.
+password and no admin is created, so you cannot sign in to the API or the Django admin. Fill them
+in and run `make up` again; seeding is an upsert, so it applies them to the rows already there.
 
 ```bash
 make up
@@ -72,9 +72,11 @@ first.
 handler and executes the clock ticks), `beat` (Celery Beat: holds the schedule, executes nothing),
 `frontend` (Astro). There is deliberately one worker and one job system; see
 [ADR 0010](docs/adr/0010-celery-as-the-bus.md) for why there used to be a relay and three.
-`make seed` is the only management command: it loads the fixtures, realigns the business-code
-sequences and recomputes `PriorityScore`, risk flags and `ProjectSnapshot`. Fixtures use explicit
-stable primary keys, so running `make seed` twice leaves the database identical.
+`seed` is the only management command, and `up` runs it for you: it loads the fixtures, realigns
+the business-code sequences, creates the superuser from `DJANGO_SUPERUSER_*`, applies
+`SEED_USER_PASSWORD` to the seeded team members, and recomputes `PriorityScore`, risk flags and
+`ProjectSnapshot`. Fixtures use explicit stable primary keys, so bringing the stack up twice
+leaves the database identical.
 
 | URL | What it is |
 |---|---|
@@ -85,20 +87,23 @@ stable primary keys, so running `make seed` twice leaves the database identical.
 | http://localhost:8000/api/v1/health/ready | Readiness — PostgreSQL and Redis, 200 or 503 |
 | http://localhost:8000/api/v1/health/pipeline | Outbox backlog, dead letters and the last clock tick |
 
-The seed creates a local superuser: **`admin` / `aztec-ops`**. It exists only to make the admin
-reachable in a five-minute review; it is a fixture, not a credential to reuse anywhere.
+Sign in to the admin with the `DJANGO_SUPERUSER_*` values you put in `.env`; the seeded team
+members share `SEED_USER_PASSWORD`. Nothing is hardcoded, so there is no default account to
+forget about.
 
 Then:
 
 ```bash
-make logs         # docker compose logs -f
-make logs-worker  # worker + beat: the whole event path
-make outbox       # pending / dispatched / dead-lettered event counts
-make test         # pytest inside the api container
-make lint         # ruff check + ruff format --check + mypy
-make reset        # drop volumes, migrate, seed from scratch
-make down         # stop, keeping volumes
+make logs                  # docker compose logs -f
+make logs s="worker beat"  # the whole event path; `make logs s=api` for one service
+the outbox admin at /admin/events/outboxevent/                # pending / dispatched / dead-lettered event counts
+make test                  # pytest inside the api container
+make lint                  # manage.py check + ruff check + ruff format --check + mypy strict
+make reset                 # drop volumes, then up again: migrate and seed from scratch
+make down                  # stop, keeping volumes
 ```
+
+`make help` lists all fifteen targets.
 
 Management commands must run inside the `api` container (`docker compose exec api ...`) so they
 resolve `postgres:5432` and `redis:6379` on the compose network.

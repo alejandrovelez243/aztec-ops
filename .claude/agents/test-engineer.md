@@ -1,6 +1,6 @@
 ---
 name: test-engineer
-description: Invoke to write or fix tests. Triggers: a new prioritization signal or risk Specification was added, a factory_boy factory is missing or wrong, an integration test is needed for an illegal transition (TransitionNotAllowed), seed idempotency (make seed twice), handler idempotency (same event.id twice), or outbox → drain → handler delivery; also when `make test` fails and the failure is in test code, or when a reviewer asks "where does the coverage for this go?".
+description: Invoke to write or fix tests. Triggers: a new prioritization signal or risk Specification was added, a factory_boy factory is missing or wrong, an integration test is needed for an illegal transition (TransitionNotAllowed), seed idempotency (loaddata twice), handler idempotency (same event.id twice), or outbox → drain → handler delivery; also when `make test` fails and the failure is in test code, or when a reviewer asks "where does the coverage for this go?".
 tools: Read, Write, Edit, Grep, Glob, Bash
 ---
 

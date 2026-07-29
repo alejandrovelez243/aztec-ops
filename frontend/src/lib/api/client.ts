@@ -6,13 +6,30 @@
  * typed envelope (`docs/API.md` §1.5) and are mapped onto `ApiError` in `./errors.ts`,
  * network failures become `kind: "network"`, and a body that is not JSON becomes
  * `kind: "unknown"` rather than a `SyntaxError` in a component.
+ *
+ * Authentication: every request presents `Authorization: Bearer <access>` from the
+ * stored session and travels with `credentials: "include"` so the HttpOnly access
+ * cookie — the `EventSource`'s only possible credential — stays set. A stale access
+ * token is renewed through a single-flight `POST /auth/token/refresh`, plus one
+ * retry after an unexpected 401 (a token can expire in flight). When the refresh
+ * token itself is rejected, the session is cleared and `aztec:session-expired` is
+ * dispatched on `window`; the shell owns the redirect, this module never navigates.
  */
+import {
+  clearSession,
+  isAccessFresh,
+  loadSession,
+  saveSession,
+  type StoredSession,
+} from "../auth/tokens";
 import { errorFromNetwork, errorFromResponse, type ApiError } from "./errors";
 import type {
+  AccessGrant,
   ActivityPage,
   Blocker,
   BlockerCreateIn,
   BlockerResolveIn,
+  CredentialsIn,
   NoteIn,
   NoteView,
   OverrideResult,
@@ -29,6 +46,7 @@ import type {
   TeamLoad,
   TeamLoadQuery,
   TimelineQuery,
+  TokenPair,
 } from "./domain";
 
 /**
@@ -47,31 +65,62 @@ const BASE_URL: string =
   import.meta.env.PUBLIC_API_URL ??
   "http://localhost:8000";
 
-/**
- * The actor sent as `X-Actor` on every request.
- *
- * There is no real authentication in this scope (`docs/API.md` §1.2), so the actor is a
- * module-level setting: the default matches the local seed roster, and an actor picker
- * — or a deployment — overrides it through `setActor` or `PUBLIC_ACTOR`. A value that
- * names no `accounts.User.code` is answered `422 validation_error` with
- * `details.fields["X-Actor"]`, which surfaces here as a `validation` error rather than
- * being repaired silently.
- */
-let actor: string = import.meta.env.PUBLIC_ACTOR ?? "camila.torres";
+/** Event dispatched on `window` when the refresh token itself is rejected. */
+export const SESSION_EXPIRED_EVENT = "aztec:session-expired";
+
+/** The one in-flight refresh, so concurrent stale requests share it. */
+let refreshInFlight: Promise<string | null> | null = null;
 
 /**
- * Sets the actor slug sent as `X-Actor` from the next request on.
+ * Returns a presentable access token, refreshing it first when stale.
  *
- * The value must be an `accounts.User.code` slug; `system` is rejected from HTTP
- * clients and reserved to consumers (`docs/API.md` §1.2).
+ * Single-flight: concurrent callers await the same refresh, so a burst of
+ * requests at expiry produces one `POST /auth/token/refresh`, not one each.
+ * Returns `null` when signed out or when the refresh was refused — in which
+ * case the session has been cleared and {@link SESSION_EXPIRED_EVENT} fired.
+ *
+ * Exported for the stream store: an `EventSource` cannot carry a header, so
+ * the store calls this before connecting to arrive with a fresh access cookie
+ * (the refresh response re-sets it).
  */
-export function setActor(next: string): void {
-  actor = next;
+export async function ensureFreshAccess(): Promise<string | null> {
+  const session = loadSession();
+  if (session === null) return null;
+  if (isAccessFresh(session)) return session.access;
+  refreshInFlight ??= refreshAccess(session);
+  try {
+    return await refreshInFlight;
+  } finally {
+    refreshInFlight = null;
+  }
 }
 
-/** Returns the actor slug currently sent as `X-Actor`. */
-export function getActor(): string {
-  return actor;
+async function refreshAccess(session: StoredSession): Promise<string | null> {
+  const result = await postRefreshToken({ refresh: session.refresh });
+  if (!result.ok) {
+    // Only a rejected credential ends the session; a network blip must not
+    // sign the operator out of a tab that will reconnect on its own.
+    if (result.error.kind !== "network") {
+      clearSession();
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
+      }
+    }
+    return null;
+  }
+  const grant = result.data;
+  saveSession({
+    access: grant.access,
+    refresh: session.refresh,
+    expiresAt: Date.now() + grant.expires_in * 1000,
+    actor: {
+      alias: grant.actor.alias,
+      label: grant.actor.label,
+      role: grant.actor.role ?? null,
+    },
+    isOpsLead: grant.is_ops_lead,
+  });
+  return grant.access;
 }
 
 /**
@@ -96,6 +145,8 @@ interface RequestOptions {
   method: "GET" | "POST" | "PATCH" | "DELETE";
   query?: Record<string, QueryValue>;
   body?: unknown;
+  /** Skip the bearer token — only the token-obtain and refresh routes themselves. */
+  skipAuth?: boolean;
 }
 
 /**

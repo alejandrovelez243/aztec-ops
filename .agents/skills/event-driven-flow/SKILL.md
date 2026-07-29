@@ -288,11 +288,11 @@ Assertions are the unittest methods, never bare `assert`. Do not reach for
 
 ```bash
 # the first command, always: is anything stuck or dead?
-make outbox
+the outbox admin at /admin/events/outboxevent/
 curl -s localhost:8000/api/v1/health/pipeline
 
 # the whole event path in one log stream
-make logs-worker
+make logs s="worker beat"
 
 # is the worker alive, and what is retrying?
 docker compose exec api celery -A config inspect ping
@@ -311,7 +311,7 @@ docker compose exec api python manage.py shell -c \
 docker compose exec redis redis-cli SUBSCRIBE aztec.sse
 ```
 
-Read the symptom this way. `pending` climbing in `make outbox` → the worker is down or cannot reach
+Read the symptom this way. `pending` climbing in the outbox admin (`/admin/events/outboxevent/`) → the worker is down or cannot reach
 the broker. `dispatched` climbing but nothing reacts → the event was dispatched to nobody: the
 handler is not registered, or not subscribed to that topic. `dead_lettered > 0` → the handler raises
 deterministically on that payload; read `last_error` on the row. Everything zero and the UI still

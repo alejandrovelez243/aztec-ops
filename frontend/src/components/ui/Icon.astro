@@ -1,0 +1,71 @@
+---
+/**
+ * The icon set of "El Muro" — one coherent hand-drawn line family (24px grid,
+ * 1.75 stroke, round caps) instead of a mixed icon library. Decorative by
+ * default (`aria-hidden`); pass `label` when the icon is the only content of
+ * its control.
+ */
+export type IconName = keyof typeof PATHS;
+
+export interface Props {
+  name: IconName;
+  /** Rendered square size in px; the stroke scales with it. */
+  size?: number;
+  /** Accessible name; omit when a visible text label sits beside the icon. */
+  label?: string;
+}
+
+/** Inner SVG markup per icon, drawn on a 24×24 grid. */
+const PATHS = {
+  home: '<path d="M3 10.75 12 3.5l9 7.25"/><path d="M5.5 9.5V20a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V9.5"/>',
+  flag: '<path d="M5.5 21V4"/><path d="M5.5 4.5h11.2l-2.4 3.9 2.4 3.9H5.5"/>',
+  folder:
+    '<path d="M3.5 7A1.5 1.5 0 0 1 5 5.5h4l2 2.5h8A1.5 1.5 0 0 1 20.5 9.5V18A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18Z"/>',
+  board:
+    '<rect x="3.5" y="4.5" width="4.6" height="15" rx="1.2"/><rect x="9.7" y="4.5" width="4.6" height="10" rx="1.2"/><rect x="15.9" y="4.5" width="4.6" height="12.5" rx="1.2"/>',
+  users:
+    '<circle cx="9" cy="8" r="3.25"/><path d="M3.5 19.5c.7-3 2.9-4.5 5.5-4.5s4.8 1.5 5.5 4.5"/><path d="M15.5 5.4a3.25 3.25 0 0 1 0 5.2"/><path d="M17.6 15.4c1.6.7 2.6 2 3 4.1"/>',
+  pulse: '<path d="M3 12.5h3.5l2.6-7 4.2 13 2.6-6h5.1"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m20.5 20.5-4.9-4.9"/>',
+  back: '<path d="M19 12H5.5"/><path d="m11.5 18-6-6 6-6"/>',
+  "chevron-down": '<path d="m6 9.5 6 6 6-6"/>',
+  "chevron-right": '<path d="m9.5 6 6 6-6 6"/>',
+  logout:
+    '<path d="M9.5 21H6a1.5 1.5 0 0 1-1.5-1.5v-15A1.5 1.5 0 0 1 6 3h3.5"/><path d="m15.5 16.5 4.5-4.5-4.5-4.5"/><path d="M20 12H9.5"/>',
+  close: '<path d="m6 6 12 12"/><path d="m18 6-12 12"/>',
+  lock: '<rect x="4.5" y="10.5" width="15" height="10" rx="1.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>',
+  alert:
+    '<path d="M12 3.8 2.8 19.2a1 1 0 0 0 .9 1.5h16.6a1 1 0 0 0 .9-1.5Z"/><path d="M12 9.5v4.5"/><path d="M12 17.4v.2"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.2l3.4 2"/>',
+  calendar:
+    '<rect x="3.5" y="5" width="17" height="15.5" rx="1.5"/><path d="M3.5 9.5h17"/><path d="M8 3v4"/><path d="M16 3v4"/>',
+  check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
+  menu: '<path d="M4 7h16"/><path d="M4 12h16"/><path d="M4 17h16"/>',
+  panel:
+    '<rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><path d="M9.5 4.5v15"/>',
+  refresh:
+    '<path d="M20 11a8 8 0 0 0-14.9-3"/><path d="M4 5v4h4"/><path d="M4 13a8 8 0 0 0 14.9 3"/><path d="M20 19v-4h-4"/>',
+  eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/>',
+  "eye-off":
+    '<path d="M4 4l16 16"/><path d="M9.9 5.9A9.4 9.4 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17.6 17.6 0 0 1-3 3.9"/><path d="M6.2 6.9A17 17 0 0 0 2.5 12S6 18.5 12 18.5a9.3 9.3 0 0 0 4-.9"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
+} as const;
+
+const { name, size = 20, label } = Astro.props;
+const markup = PATHS[name];
+---
+
+<svg
+  width={size}
+  height={size}
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.75"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  aria-hidden={label === undefined ? "true" : undefined}
+  aria-label={label}
+  role={label === undefined ? undefined : "img"}
+  set:html={markup}
+/>

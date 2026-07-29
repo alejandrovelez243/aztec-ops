@@ -54,9 +54,9 @@ activity is surfaced as a risk rather than sitting quietly at the bottom of a li
   to an append-only activity record. Deprioritizing one project to prioritize another is stored
   as a single correlated decision.
 - Data updates arrive live over SSE; the screen is expected to be left open while others work.
-- Every session begins by identifying the operator: a login screen selects who is acting, the
-  choice persists as a session, and every write is attributed to it. Signing out returns to the
-  login screen.
+- Every session begins by signing in with username and password (JWT). The access token renews
+  itself silently; every write is attributed to the verified account, which is what makes the
+  activity trail a fact rather than a claim. Signing out returns to the login screen.
 
 ## Capabilities and Constraints
 
@@ -66,17 +66,19 @@ activity is surfaced as a risk rather than sitting quietly at the bottom of a li
 - Prioritized queue with an explainable score, plus manual override with a reason.
 - Configurable taxonomies and workflows, editable from the Django admin without a deploy.
 - Load per person, computed from tasks rather than stored.
-- Operator sessions: a login surface identifies the actor, a route guard keeps unidentified
-  visitors out of the app shell, and sign-out ends the session. This is identification and
-  attribution, not credential authentication.
+- Real authentication: `POST /auth/token` exchanges credentials for an access/refresh pair; the
+  access token also travels as an HttpOnly cookie so the SSE stream can authenticate. A route
+  guard keeps signed-out visitors on the login screen. Overriding the ranking and rebuilding the
+  portfolio require the ops-lead capability, which the API reports at sign-in — the frontend
+  renders those controls from that answer, never by decoding the token.
 - Direct manipulation on the board: work moves between states by dragging its card — always
   through the workflow's legal transitions; illegal targets are visibly locked, and every drag
   has a keyboard/menu equivalent.
 - A portfolio-wide activity feed alongside the per-project timeline (requires a small backend
   addition: a global activity endpoint).
-- Deliberately out of scope for this version: credential authentication (passwords, tokens) and
-  multi-tenancy, external notifications, historical burndown metrics. Board drag & drop and
-  operator identification are in scope as described above.
+- Deliberately out of scope for this version: self-registration and password reset (accounts are
+  seeded or admin-created), multi-tenancy, external notifications, historical burndown metrics.
+  Board drag & drop and credential authentication are in scope as described above.
 - Terminology is Spanish in the interface, because the source data is Spanish (Bloqueada, En
   progreso, Diagnostico, Mantenimiento o recurrente). Code, identifiers and documentation are
   English. UI language is Spanish; this is confirmed, not an open decision.

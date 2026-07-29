@@ -157,23 +157,42 @@ All code, comments, documentation, agents, skills, commit messages and identifie
 
 ## Commands
 
-```bash
-make up          # docker compose up: postgres, redis, api, worker, beat, frontend
-                 # worker = the one Celery worker: drains the outbox, runs every handler and the
-                 #          clock ticks. Celery is the bus (ADR 0010) — there is no relay.
-                 # beat = Celery Beat, holds the schedule (two ticks + the outbox sweep),
-                 #        executes nothing
-make seed        # the only management command: loaddata + sync code sequences + recompute
-make test        # pytest
-make lint        # ruff + mypy
-make outbox      # pending / dispatched / dead-lettered counts — replaces XPENDING
-make logs-worker # follow worker + beat, i.e. the whole event path
-make down        # stop everything
+Fifteen targets, and this is the complete list. Anything not here does not exist.
 
-# There is no `make recompute` and no `make relay`. Recompute is the admin action
-# "Recompute priority for selected projects" or POST /api/v1/recompute; a command run from a
-# laptop against a production database is an accident, not an operation.
+```bash
+make help            # list every target with what it does
+make up              # docker compose up: postgres, redis, api, worker, beat, frontend.
+                     # Migrates and runs `seed` inside the api container before the port is
+                     # bound, so one command takes a clean clone to a scored portfolio.
+                     # worker = the one Celery worker: drains the outbox, runs every handler and
+                     #          the clock ticks. Celery is the bus (ADR 0010) — there is no relay.
+                     # beat = Celery Beat, holds the schedule (two ticks + the outbox sweep),
+                     #        executes nothing
+make down            # stop everything, keeping the volumes
+make build           # build the images without starting anything
+make ps              # service status and health
+make logs            # follow logs — all services, or one with `make logs s=worker`
+make reset           # DESTRUCTIVE: drop the volumes and bring the stack back up from empty
+make clean           # remove containers, volumes and the built images
+make makemigrations  # generate migrations into the bind-mounted source tree
+make shell           # Django shell inside the api container
+make dbshell         # psql against the compose database
+make test            # pytest inside the api container
+make lint            # manage.py check + ruff check + ruff format --check + mypy strict
+make format          # apply ruff's fixes and formatting
+the outbox admin at /admin/events/outboxevent/          # pending / dispatched / dead-lettered counts — replaces XPENDING
 ```
+
+`.env` must carry `SEED_USER_PASSWORD` and the three `DJANGO_SUPERUSER_*` values **before** the
+first `make up`, because seeding happens during `up`: leave them empty and the stack starts fine
+but nobody can sign in. They are an upsert, so filling them in and running `make up` again fixes
+it — that is also how you re-seed after editing a fixture.
+
+There is deliberately no seed, migrate or superuser target: `up` does all three. There is no
+recompute target either — rebuilding scores is an operator action, through the admin action
+"Recompute priority for selected projects" or `POST /api/v1/recompute`; a command run from a
+laptop against a production database is an accident, not an operation. For a one-off migration
+outside `up`, use `docker compose exec api python manage.py migrate`.
 
 ## Conventions
 

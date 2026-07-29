@@ -79,9 +79,12 @@ make up      # postgres, redis, api, worker, beat, frontend
 ```
 
 `make up` runs `migrate` and then `seed` inside the api container before the port is bound, so one
-command takes a clean clone to a scored 22-project portfolio. `seed` is idempotent — fixtures carry
-stable primary keys, so `loaddata` upserts — which is why it is safe on every restart. Re-run it by
-hand with `make seed` after changing a fixture or after filling in the credentials.
+command takes a clean clone to a scored 22-project portfolio. There is no separate migrate, seed or
+createsuperuser step: `seed` also creates the admin account from `DJANGO_SUPERUSER_*` and applies
+`SEED_USER_PASSWORD` to the seeded team members, which is why those four values have to be in `.env`
+before the first `up`. `seed` is idempotent — fixtures carry stable primary keys, so `loaddata`
+upserts — which is why it is safe on every restart, and why `make up` again is how you re-seed after
+changing a fixture or after filling in the credentials.
 
 Seeding lives in the compose command rather than the Dockerfile `CMD`: the production image must
 never seed itself on boot.
@@ -120,10 +123,10 @@ docs/        Architecture, data model, API, events, runbook, ADRs
 data/raw/    Normalized source dataset (gitignored; fixtures are the committed form)
 ```
 
-`make seed` is idempotent — fixtures carry stable primary keys, so `loaddata` upserts. Run it
-twice and the database is identical. If it is not, that is a bug for `seed-data-engineer`.
+Seeding is idempotent — fixtures carry stable primary keys, so `loaddata` upserts. Bring the stack
+up twice and the database is identical. If it is not, that is a bug for `seed-data-engineer`.
 
-Operating the system day to day (`make outbox`, forcing a drain, dead-lettered events, resets) is
+Operating the system day to day (the outbox admin (`/admin/events/outboxevent/`), forcing a drain, dead-lettered events, resets) is
 in the `aztec-local-dev` skill and `docs/RUNBOOK.md`, not here.
 
 ## 3. Dependency policy — CLI only
@@ -172,8 +175,9 @@ Run the full pass over the repository without committing:
 uv run --project backend pre-commit run --all-files
 ```
 
-`make lint` (ruff + mypy strict over `domain/` and `services/`) is the wider gate and runs in the
-container. Pre-commit is the fast subset, not a replacement for it.
+`make lint` is the wider gate — `manage.py check`, `ruff check`, `ruff format --check` and mypy
+strict over `domain/` and `services/`, all in one target. Pre-commit is the fast subset, not a
+replacement for it.
 
 ## 5. Git Flow
 
@@ -394,7 +398,7 @@ A new state is data. It must not require a deploy. Owning skill: `.agents/skills
 3. Check `WorkflowBinding`: if the state belongs to only one engagement type's lifecycle, it
    lives in that workflow, not in the default one.
 4. Mirror the rows into the fixtures under `backend/apps/workflow/fixtures/` with stable primary keys, so
-   a fresh `make seed` reproduces the state. A state that only exists in someone's local admin
+   a fresh `make up` reproduces the state. A state that only exists in someone's local admin
    does not exist.
 5. Confirm nothing branched on a state `code` or a label:
    `rg -n 'label ==|\.code == "' backend/apps/` should return nothing about states. If it does, that
@@ -555,7 +559,7 @@ conversation. Each one hands work back rather than crossing into another's files
 | `event-bus-engineer` | Anything between a committed transaction and a byte on the wire: `OutboxEvent`, the drain and delivery tasks, the handler registry, `ProcessedEvent`, retries, dead-lettering, SSE fan-out. "The event never arrived." |
 | `prioritization-engineer` | A signal strategy, `PriorityPolicy` weights or version, the `breakdown`, `PriorityOverride`, a risk specification's severity, derived health. "Why is this project ranked first?" |
 | `astro-frontend-engineer` | Anything under `frontend/`: pages, islands, the shared `EventSource` store, the typed API client, loading/empty/error/disconnected states. "The frontend does not update." |
-| `seed-data-engineer` | Fixtures under `backend/apps/*/fixtures/`, `backend/scripts/xlsx_to_fixtures.py`, the `make seed` target. "loaddata fails", "seed is not idempotent", "the spreadsheet changed." |
+| `seed-data-engineer` | Fixtures under `backend/apps/*/fixtures/`, `backend/scripts/xlsx_to_fixtures.py`, the `seed` management command that `up` runs. "loaddata fails", "seed is not idempotent", "the spreadsheet changed." |
 | `test-engineer` | New coverage, `factory_boy` factories, the four integration tests (illegal transition and seed idempotency on `TestCase`; handler idempotency and outbox delivery on `TransactionTestCase`), the choice of test base class, or a `make test` failure that lives in test code. |
 | `devops-engineer` | Dockerfiles, Compose services, healthchecks, startup ordering, `.env.example`, `Makefile` targets, the README bring-up section, SSE not streaming through the server. |
 
@@ -571,7 +575,8 @@ A change is done when all of these hold. Not four out of five.
       policy maths), `TestCase` for queryset methods, services, routes, transitions and seed
       idempotency, `TransactionTestCase` for anything touching the outbox, `on_commit` or the
       drain. No module-level `def test_...`, no `pytest.mark.django_db`, no bare `assert`.
-- [ ] `make lint` passes: ruff check, ruff format, mypy strict over `domain/` and `services/`.
+- [ ] `make lint` passes: `manage.py check`, ruff check, ruff format --check, mypy strict over
+      `domain/` and `services/`.
 - [ ] Pre-commit ran on every commit, including `uv lock --check`. No `--no-verify` anywhere in
       the branch.
 - [ ] Docs updated in the same commit when the change touched a documented topic: a model or
@@ -580,6 +585,7 @@ A change is done when all of these hold. Not four out of five.
 - [ ] Every dependency added through `uv add` / `uv add --project backend --dev` / `npx astro add` /
       `npm install`. `git diff` shows no hand-written version string in `pyproject.toml`,
       `package.json` or a lockfile.
-- [ ] `make seed` still runs twice with an identical result, if fixtures or models changed.
+- [ ] Seeding still runs twice with an identical result, if fixtures or models changed — `make up`
+      on an already-seeded stack leaves the database unchanged.
 - [ ] No new business enum in Python, no logic branching on a label, no direct `workflow_state`
       assignment, no Redis import under `services/`.

@@ -54,19 +54,22 @@ http://localhost:8000/admin/ · outbox http://localhost:8000/admin/events/outbox
 
 | Command | What it runs |
 |---|---|
-| `make up` | `docker compose up -d --build`, waits on healthchecks; `api` migrates on start |
+| `make up` | `docker compose up -d --build`, waits on healthchecks; `api` migrates **and seeds** before uvicorn binds |
 | `make down` | `docker compose down` — stops everything, keeps volumes |
-| `make logs` | `docker compose logs -f` |
-| `make logs-api` | follow just the API |
-| `make logs-worker` | `docker compose logs -f worker beat` — the whole event path |
-| `make outbox` | pending / dispatched / dead-lettered counts straight out of `events_outboxevent` |
-| `make migrate` | `docker compose exec api python manage.py migrate` |
-| `make seed` | `manage.py seed`: `loaddata`, sync the code sequences, recompute the portfolio |
-| `make test` | `pytest -q` inside the `api` container |
-| `make test-local` | `pytest -q` on the host, against the published PostgreSQL port |
-| `make lint` / `make typecheck` / `make check` | ruff, mypy, and the full pre-push gate |
-| `make shell` / `make dbshell` / `make superuser` | Django shell, `psql`, admin user |
-| `make reset` | **destructive** — `docker compose down -v`, then up, migrate, seed |
+| `make build` / `make ps` | rebuild the images; show the service table |
+| `make logs` | `docker compose logs -f`. One service: `make logs s=api`. Several: `make logs s="worker beat"` |
+| `make makemigrations` | `manage.py makemigrations` inside the `api` container |
+| `make test` | `pytest -q` inside the `api` container. On the host, run `pytest` from `backend/` with `uv` |
+| `make lint` | `manage.py check`, `ruff check`, `ruff format --check`, `mypy` strict — the full pre-push gate |
+| `make format` | `ruff format` |
+| `make shell` / `make dbshell` | Django shell, `psql` |
+| `make reset` | **destructive** — `docker compose down -v`, then `up` (which migrates and seeds again) |
+| `make clean` | remove built images and dangling artifacts |
+
+There is no separate migrate, seed or superuser target: `make up` runs `manage.py migrate` and then
+`manage.py seed` inside the `api` container before the port is bound. Re-running `make up` after
+editing a fixture re-seeds — `seed` is an upsert. For a one-off migration without a restart:
+`docker compose exec api python manage.py migrate`.
 
 `seed` is the **only** management command in the system, and that is deliberate: a command someone
 runs from a laptop against a production database is not an operation, it is an accident. Seeding is
@@ -75,29 +78,32 @@ be a command is now either automatic or an operator action with an audit trail:
 
 | Gone | Use instead |
 |---|---|
-| `manage.py recompute` / `make recompute` | the **"Recompute priority for selected projects"** admin action, or `POST /api/v1/projects/{code}/recompute` / `POST /api/v1/recompute` |
+| `manage.py recompute` | the **"Recompute priority for selected projects"** admin action, or `POST /api/v1/projects/{code}/recompute` / `POST /api/v1/recompute` |
 | `manage.py sync_code_sequences` | runs automatically as a step inside `seed`, where nobody can forget it |
+| `manage.py createsuperuser` | runs automatically as a step inside `seed`, from `DJANGO_SUPERUSER_USERNAME` / `_PASSWORD` / `_EMAIL` |
 | `manage.py run_relay` / `make relay` | deleted with the Streams machinery — the drain is a Celery task |
 | `manage.py run_consumer` | deleted with the Streams machinery — handlers are Celery tasks |
-| `make events` / `make dlq` / `make logs-bus` | `make outbox`, `GET /api/v1/health/pipeline`, `make logs-worker` |
+| `make events` / `make dlq` / `make logs-bus` | the outbox admin (`/admin/events/outboxevent/`), `GET /api/v1/health/pipeline`, `make logs s="worker beat"` |
 
 ## 3. From a clean clone
 
 ```bash
 git clone <repo> aztec-challenge && cd aztec-challenge
-cp .env.example .env && make up && make seed
+cp .env.example .env
+# edit .env: fill in the four credential variables before going further
+make up
 ```
 
-`make up` builds the images, starts the six services, waits for health, and the `api` container
-applies migrations before uvicorn binds. `make seed` loads the fixtures and recomputes scores.
-There is no third step; if you need one, the setup is broken and belongs to the `devops-engineer`
-agent.
+`.env.example` ships `DJANGO_SUPERUSER_USERNAME`, `DJANGO_SUPERUSER_PASSWORD`,
+`DJANGO_SUPERUSER_EMAIL` and `SEED_USER_PASSWORD` **empty, on purpose**. Fill all four *before* the
+first `make up`: seeding happens during `up`, it is what creates the superuser and sets the password
+on the seeded team members, and an empty value leaves you with a database nobody can sign in to —
+with no error to tell you so. If you find that out late, fill them in and run `make up` again.
 
-Optional, for the admin:
-
-```bash
-docker compose exec api python manage.py createsuperuser
-```
+`make up` builds the images, starts the six services and waits for health; the `api` container
+applies migrations, runs `manage.py seed` — fixtures, code sequences, scores, credentials — and only
+then binds the port. That is the whole setup. There is no second step; if you need one, the setup is
+broken and belongs to the `devops-engineer` agent.
 
 Verify before doing anything else:
 
@@ -118,27 +124,30 @@ Install the hooks once with `uv run pre-commit install`; never commit with `--no
 
 ## 4. Seeding and reseeding
 
+Seeding is not something you run; `make up` runs it. The `api` container's start command is
+
 ```bash
-make seed
+python manage.py migrate --noinput && python manage.py seed && exec uvicorn ...
 ```
 
-which is:
+so the port opens only on a migrated, seeded database. For a one-off outside a restart:
 
 ```bash
 docker compose exec api python manage.py seed
 ```
 
-which loads the fixtures in foreign-key dependency order, realigns the business-code sequences and
-rebuilds every score. All three steps live in `apps/portfolio/management/commands/seed.py`; the
-sequence sync is *inside* the command rather than beside it, because a step an operator can forget
-is a step that will be forgotten.
+`seed` loads the fixtures in foreign-key dependency order, realigns the business-code sequences,
+rebuilds every score, creates the superuser from `DJANGO_SUPERUSER_*` and applies
+`SEED_USER_PASSWORD` to the seeded team members. All of it lives in
+`apps/portfolio/management/commands/seed.py`; each step is *inside* the command rather than beside
+it, because a step an operator can forget is a step that will be forgotten.
 
 Order matters: `catalog` and `workflows` carry the rows every later fixture points at. Never load
 with a glob.
 
-Reseeding is just running it again. Fixtures use explicit stable primary keys, so `loaddata` is an
-upsert: after a second `make seed` the row counts and the primary keys are identical. That is a
-tested property:
+Reseeding is just `make up` again. Fixtures use explicit stable primary keys, so `loaddata` is an
+upsert: after a second run the row counts and the primary keys are identical. That is what makes it
+safe on every start, and it is a tested property:
 
 ```bash
 docker compose exec api pytest -k seed_idempotency
@@ -164,8 +173,7 @@ Full reset, database and Redis:
 make reset
 # equivalent to:
 docker compose down -v
-make up
-make seed
+make up          # migrates and seeds on the way up
 ```
 
 Redis only, keeping the seeded database. There is no stream and no consumer group to clear any
@@ -204,7 +212,7 @@ and `XINFO GROUPS` and got a queryable, durable, admin-rendered table in exchang
 Backlog and dead letters — the first command in almost every investigation:
 
 ```bash
-make outbox
+the outbox admin at /admin/events/outboxevent/
 ```
 
 ```
@@ -310,7 +318,7 @@ curl -s -X POST localhost:8000/api/v1/projects/PRJ-01/transition \
   -H 'Content-Type: application/json' -H "Authorization: Bearer $TOKEN" \
   -d '{"to_state": "blocked", "reason": "waiting for client access"}'
 
-make logs-worker
+make logs s=worker
 ```
 
 Apply one handler to one event by hand, which is the fastest reproduction of a handler bug — note
@@ -346,12 +354,12 @@ worker is down.
 ## 8. Events are written but never dispatched
 
 **Symptom.** A transition returns 200, the state changed in the API, but nothing reacts: no score
-moves, no snapshot rebuilds, nothing reaches the UI. `make outbox` shows `pending` climbing.
+moves, no snapshot rebuilds, nothing reaches the UI. the outbox admin (`/admin/events/outboxevent/`) shows `pending` climbing.
 
 **Checks.**
 
 ```bash
-make outbox
+the outbox admin at /admin/events/outboxevent/
 docker compose ps worker
 docker compose logs --tail=100 worker
 docker compose exec api celery -A config inspect ping
@@ -381,7 +389,7 @@ docker compose exec api python -c "import redis, os; print(redis.from_url(os.env
 
 ## 9. A handler keeps failing
 
-**Symptom.** `make outbox` shows `dispatched` climbing normally, but one concern stops updating —
+**Symptom.** the outbox admin (`/admin/events/outboxevent/`) shows `dispatched` climbing normally, but one concern stops updating —
 scores freeze while snapshots keep rebuilding, or the reverse. The worker log has a repeating
 traceback.
 
@@ -426,14 +434,14 @@ relevant produces no error, only silence.
 
 ## 10. An event was dead-lettered
 
-**Symptom.** `make outbox` shows a non-zero `dead_lettered`. The admin's delivery-state filter
+**Symptom.** the outbox admin (`/admin/events/outboxevent/`) shows a non-zero `dead_lettered`. The admin's delivery-state filter
 lists the rows. The worker log carries one ERROR per dead letter, with the event id, topic and
 handler.
 
 **Checks.**
 
 ```bash
-make outbox
+the outbox admin at /admin/events/outboxevent/
 docker compose logs worker | grep -i "dead lettered"
 ```
 
@@ -564,7 +572,8 @@ and `workflows` define the taxonomy and workflow-state rows every later fixture 
 a primary key that its dependency fixture does not define: fix the fixture (regenerate with
 `backend/scripts/xlsx_to_fixtures.py`), never loosen the FK or `--ignorenonexistent` past it.
 
-**Symptom B.** `make seed` twice gives doubled projects, tasks, blockers or activity records.
+**Symptom B.** A second `make up` — which re-seeds — gives doubled projects, tasks, blockers or
+activity records.
 
 **Checks.**
 
@@ -627,7 +636,7 @@ docker compose exec api python manage.py shell -c \
   "from apps.events.models import OutboxEvent; print(OutboxEvent.objects.order_by('-occurred_at')[:3].values('topic','published_at','dead_lettered_at'))"
 
 # 2. did the drain dispatch it?
-make outbox
+the outbox admin at /admin/events/outboxevent/
 
 # 3. did the handlers apply it?
 docker compose exec api python manage.py shell -c \
@@ -701,7 +710,7 @@ docker compose exec api python manage.py shell -c \
    print(OutboxEvent.objects.filter(topic='clock.ticked').order_by('-id')[:3].values('id','published_at'))"
 
 # 4. did the drain dispatch it, and did anything die?
-make outbox
+the outbox admin at /admin/events/outboxevent/
 curl -s localhost:8000/api/v1/health/pipeline
 ```
 

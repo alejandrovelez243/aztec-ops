@@ -793,11 +793,11 @@ FOR UPDATE SKIP LOCKED;
 - `events_outboxevent (topic, occurred_at DESC)` and `(entity_type, entity_id)` — admin
   investigation only ("what did we dispatch for PRJ-01"), not on the drain's hot path.
 - `events_outboxevent (correlation_id)` — joins a dispatched event back to its `ActivityRecord`.
-- `events_outbox_deadletter_idx` on `dead_lettered_at` — the admin filter and `make outbox`.
+- `events_outbox_deadletter_idx` on `dead_lettered_at` — the admin filter and the outbox admin (`/admin/events/outboxevent/`).
 
 Diagnostic that depends on this index: a growing count of rows matching `published_at IS NULL`
 means the worker is down or behind. Zero such rows with a stale UI means the service never wrote the
-outbox row, which is a service bug, not a transport bug. `make outbox` is exactly these counts.
+outbox row, which is a service bug, not a transport bug. the outbox admin (`/admin/events/outboxevent/`) is exactly these counts.
 
 ### 10.4 Handler deduplication
 
@@ -889,7 +889,7 @@ Python.
 - A new priority signal ships as a new `PriorityPolicy` row with a new `version`, not as an edit to
   the active one. Then recompute the portfolio — the admin action or `POST /api/v1/recompute`.
 - Fixture load order is fixed by the FK graph: `catalog workflows portfolio work activity`. Never a
-  glob. Every fixture object carries an explicit `pk`, which is what makes `make seed` an upsert and
-  what `make test -k seed_idempotency` verifies.
+  glob. Every fixture object carries an explicit `pk`, which is what makes the seeding step of
+  `make up` an upsert and what the `seed_idempotency` test verifies.
 - Never edit an applied migration. Conflicting leaves get `makemigrations --merge`, not a deleted
   file.

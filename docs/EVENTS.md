@@ -696,7 +696,7 @@ silently is worse than a loud error.
 
 **What we gave up, and the replacement.** There is no `XPENDING`, no per-group lag figure and no
 stream replay. The outbox table is the instrument instead — see [ADR 0010](adr/0010-celery-as-the-bus.md).
-`make outbox` prints pending / dispatched / dead-lettered counts, `GET /api/v1/health/pipeline`
+the outbox admin (`/admin/events/outboxevent/`) prints pending / dispatched / dead-lettered counts, `GET /api/v1/health/pipeline`
 serves the same numbers plus the oldest unpublished age and the last tick, and the whole history is
 one `SELECT` away in PostgreSQL rather than behind a purpose-built inspection command.
 
@@ -738,6 +738,6 @@ from `envelope.occurred_at` (or `payload.tick_at`) and never from `timezone.now(
    and reports `duplicate` the second time. Narrow the registry with `only_handlers(...)` from
    `apps/events/tests/registry_support.py` so a committed row does not fan out to `sse-fanout` and
    reach Redis.
-10. `make test` and `make lint`. When an event does not arrive, `make outbox` and
-    `/api/v1/health/pipeline` say whether it was ever dispatched; `make logs-worker` says what the
+10. `make test` and `make lint`. When an event does not arrive, the outbox admin (`/admin/events/outboxevent/`) and
+    `/api/v1/health/pipeline` say whether it was ever dispatched; `make logs s=worker` says what the
     handler did with it.
