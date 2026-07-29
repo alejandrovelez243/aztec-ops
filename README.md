@@ -41,10 +41,31 @@ Docker Compose.
 git clone git@github.com:alejandrovelez243/aztec-ops.git
 cd aztec-ops
 cp .env.example .env
-make up
-docker compose exec api python manage.py migrate
-make seed
 ```
+
+**Now open `.env` and set four values before bringing anything up.** They are empty in the
+template on purpose: a default that works is still a hardcoded credential, only one that everybody
+who reads this public repository already knows.
+
+```bash
+SEED_USER_PASSWORD=<a password for the five seeded team members>
+DJANGO_SUPERUSER_USERNAME=<your admin username>
+DJANGO_SUPERUSER_PASSWORD=<your admin password>
+DJANGO_SUPERUSER_EMAIL=<your email>
+```
+
+Leave them empty and everything still starts — the seeded accounts simply keep an unusable
+password and no admin is created, so you cannot sign in to the API or the Django admin until you
+set them and run `make seed` again.
+
+```bash
+make up
+```
+
+That is the whole setup. `make up` migrates and seeds before it binds the port, so the API comes
+up with the 22-project portfolio already loaded and scored. Seeding is idempotent — fixtures carry
+stable primary keys, so `loaddata` upserts — which is why it runs on every start and not only the
+first.
 
 `make up` starts six services — three of them application processes: `postgres`, `redis`, `api`
 (Django on ASGI), `worker` (the single Celery worker: it drains the outbox, runs every event

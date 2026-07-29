@@ -72,12 +72,19 @@ Then bring the system up:
 
 ```bash
 cp .env.example .env
+# Set SEED_USER_PASSWORD and the three DJANGO_SUPERUSER_* values before continuing. They are
+# empty in the template deliberately; leave them empty and nobody can sign in.
 
-make up                                             # postgres, redis, api, worker, beat, frontend
-docker compose exec api python manage.py migrate
-make seed                                           # the only management command
-docker compose exec api python manage.py createsuperuser
+make up      # postgres, redis, api, worker, beat, frontend
 ```
+
+`make up` runs `migrate` and then `seed` inside the api container before the port is bound, so one
+command takes a clean clone to a scored 22-project portfolio. `seed` is idempotent — fixtures carry
+stable primary keys, so `loaddata` upserts — which is why it is safe on every restart. Re-run it by
+hand with `make seed` after changing a fixture or after filling in the credentials.
+
+Seeding lives in the compose command rather than the Dockerfile `CMD`: the production image must
+never seed itself on boot.
 
 Three application processes, one job system:
 

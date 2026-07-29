@@ -135,8 +135,17 @@ services:
     # and a WSGI worker holds a whole thread for each one. Ten open tabs would exhaust the pool.
     # Migrations run here, once, before the port is bound — so `make up` leaves a schema that is
     # ready and `&&` means a failed migration stops the container instead of serving a broken one.
+    # Migrate then seed, both before the port is bound, so `make up` leaves a schema that is ready
+    # AND a portfolio that is scored — one command from a clean clone to a usable board. `seed` is
+    # idempotent (fixtures carry stable primary keys, so loaddata upserts), which is what makes it
+    # safe on every restart rather than only the first.
+    # This lives in the compose command and NOT in the Dockerfile CMD on purpose: the production
+    # image must never seed itself on boot.
+    # `&&` means a failed migration or a failed seed stops the container instead of serving a
+    # half-loaded database.
     command: >
       sh -c "python manage.py migrate --noinput &&
+             python manage.py seed &&
              exec uvicorn config.asgi:application --host 0.0.0.0 --port 8000 --reload"
     ports:
       - "${API_PORT:-8000}:8000"
