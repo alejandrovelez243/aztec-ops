@@ -1,0 +1,160 @@
+---
+/**
+ * A task row's overflow: the two acts that are not already a control in the row.
+ *
+ * **Abrir** and **Eliminar**, and deliberately nothing else. The state, the
+ * priority, the responsable and the due date are live controls in the same row —
+ * the badge that reports each fact is the thing that edits it
+ * (`docs/standards/FRONTEND.md` §10) — so repeating them here would be two
+ * affordances for one fact, and the operator would have to learn which of the two
+ * is authoritative.
+ *
+ * It is a component rather than markup inlined in `TasksTable.astro` for the same
+ * reason `TaskMoveMenu` is: the table renders every row's controls twice, once
+ * server-side and once into the `<template>` the island clones, and a control
+ * written out twice is a control that drifts.
+ *
+ * Both items are `<button>`s, which is what `lib/ui/menu.ts` walks with the arrow
+ * keys and what `role="menuitem"` expects. "Abrir" therefore navigates in the
+ * island's `choose` hook, through `navigate()` from the client router — an `<a>`
+ * inside a menu panel would be a second, unreachable-by-keyboard grammar, and a
+ * `window.location` assignment would throw away the router this app is built on.
+ */
+import Icon from "../ui/Icon.astro";
+
+export interface Props {
+  /** The task these acts apply to; empty in the row template. */
+  code: string;
+  /**
+   * The task's title, so the trigger's accessible name distinguishes this row
+   * from the twenty identical ones above it. Empty in the row template, where
+   * the island fills it in from the same read that fills the rest of the row.
+   */
+  title?: string;
+}
+
+const { code, title = "" } = Astro.props;
+
+/** Falls back to the generic name while the row has no title yet. */
+const triggerLabel =
+  title === "" ? "Acciones de la tarea" : `Acciones de ${title}`;
+---
+
+<div class="row-menu" data-row-menu data-code={code}>
+  <button
+    class="trigger"
+    type="button"
+    data-menu-trigger
+    aria-haspopup="menu"
+    aria-expanded="false"
+    aria-label={triggerLabel}
+  >
+    <Icon name="more-vertical" size={18} />
+  </button>
+
+  <div
+    class="panel card"
+    role="menu"
+    data-menu-panel
+    aria-label="Acciones de la tarea"
+    hidden
+  >
+    <button
+      class="item"
+      type="button"
+      role="menuitem"
+      data-menu-item
+      data-row-action="open"
+    >
+      <Icon name="eye" size={16} />
+      <span>Abrir</span>
+    </button>
+    <button
+      class="item item-destructive"
+      type="button"
+      role="menuitem"
+      data-menu-item
+      data-row-action="remove"
+    >
+      <Icon name="trash" size={16} />
+      <span>Eliminar</span>
+    </button>
+  </div>
+</div>
+
+<style>
+  .row-menu {
+    position: relative;
+    display: inline-flex;
+  }
+
+  .trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    min-height: 32px;
+    border-radius: var(--radius-chip);
+    color: var(--tinta-suave);
+    transition:
+      background-color var(--motion-micro-duration) var(--motion-micro-ease),
+      color var(--motion-micro-duration) var(--motion-micro-ease),
+      transform var(--motion-firme-duration) var(--motion-firme-ease);
+  }
+
+  .trigger:hover:not(:disabled) {
+    background-color: var(--pozo);
+    color: var(--tinta);
+  }
+
+  .trigger:active:not(:disabled) {
+    transform: scale(0.94);
+  }
+
+  /* Anchored in viewport coordinates by `menu.ts`, like every other panel here:
+     the table is a horizontal scroller and would clip an absolute one. */
+  .panel {
+    position: fixed;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    width: max-content;
+    min-width: 180px;
+    padding: var(--space-2);
+    box-shadow: var(--shadow-lifted);
+  }
+
+  .panel[hidden] {
+    display: none;
+  }
+
+  .item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: 40px;
+    padding: var(--space-2);
+    border-radius: var(--radius-chip);
+    text-align: left;
+    transition: background-color var(--motion-micro-duration)
+      var(--motion-micro-ease);
+  }
+
+  .item:hover,
+  .item:focus-visible {
+    background-color: var(--pozo);
+  }
+
+  /* Tinted, not filled: inside a list of choices the destructive one has to be
+     recognisable before it is pressed, without shouting over its neighbour. */
+  .item-destructive {
+    color: var(--rojo-ink);
+  }
+
+  .item-destructive:hover,
+  .item-destructive:focus-visible {
+    background-color: var(--rojo-wash);
+  }
+</style>

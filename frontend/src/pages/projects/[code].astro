@@ -9,11 +9,14 @@
  *
  * Layering, in one sentence each. `transitions` from the project read is the
  * only source of transition buttons, so a workflow state added in the admin
- * needs no frontend change. The score is never rendered without the breakdown
- * that defends it. A manual override is shown beside the computed score, never
- * instead of it. And nothing repaints a state change until the stream confirms
- * it — the server owns legality, and a rollback the operator has already read
- * past is worse than a wait.
+ * needs no frontend change. `workflow` from the same read says which graph
+ * those buttons came from and whether an ops lead chose it for this project,
+ * which is the only way the screen can explain why two projects of one
+ * engagement type offer different moves. The score is never rendered without
+ * the breakdown that defends it. A manual override is shown beside the computed
+ * score, never instead of it. And nothing repaints a state change until the
+ * stream confirms it — the server owns legality, and a rollback the operator has
+ * already read past is worse than a wait.
  *
  * There is no SSR adapter, so the route is pre-rendered once per project in the
  * queue; a code the build did not know still renders the error arm rather than
@@ -36,6 +39,10 @@ import {
   regionFailureCopy,
   type FailureCopy,
 } from "../../components/projects/messages";
+import {
+  buildConversions,
+  engagementWeights,
+} from "../../components/projects/convert-engagement";
 import { emptyAggregateFields } from "../../components/projects/presentation";
 import {
   getCatalog,
@@ -44,6 +51,7 @@ import {
   getProjectTasks,
   getQueue,
   getTeamLoad,
+  getWorkflows,
   type Result,
 } from "../../lib/api/client";
 import type { ApiError } from "../../lib/api/errors";
@@ -55,6 +63,7 @@ import type {
   TaxonomyRef,
   TeamLoad,
   TeamLoadEntry,
+  WorkflowCatalog,
 } from "../../lib/api/domain";
 import { assertNever, toViewState, type ViewState } from "../../lib/view-state";
 
@@ -77,15 +86,24 @@ const MISSING_CODE: ApiError = {
   details: {},
 };
 
-const [projectResult, tasksResult, activityResult, catalogResult, teamResult]: [
+const [
+  projectResult,
+  tasksResult,
+  activityResult,
+  catalogResult,
+  teamResult,
+  workflowsResult,
+]: [
   Result<ProjectDetail>,
   Result<TaskPage>,
   Result<ActivityPage>,
   Result<Catalog>,
   Result<TeamLoad>,
+  Result<WorkflowCatalog>,
 ] =
   code === undefined
     ? [
+        { ok: false, error: MISSING_CODE },
         { ok: false, error: MISSING_CODE },
         { ok: false, error: MISSING_CODE },
         { ok: false, error: MISSING_CODE },
@@ -98,6 +116,7 @@ const [projectResult, tasksResult, activityResult, catalogResult, teamResult]: [
         getProjectActivity(code, { page_size: ACTIVITY_PAGE_SIZE }),
         getCatalog(),
         getTeamLoad(),
+        getWorkflows(),
       ]);
 
 /**
@@ -183,6 +202,35 @@ const activityPlan = planFor(
 const project = projectResult.ok ? projectResult.data : null;
 const projectFailure = projectResult.ok ? null : projectResult.error;
 
+/**
+ * What converting this project into each other engagement type would do.
+ *
+ * Composed on the server from three reads the page already performs — the project, the catalog's
+ * engagement types and the workflow shapes — so the confirmation dialog opens with its whole
+ * explanation written and has no loading arm. A failed catalog or workflow read degrades: the
+ * chip renders visibly dead, or the dialog says plainly that it cannot tell whether the lifecycle
+ * changes. Neither is allowed to take the project screen down.
+ *
+ * The weight lookup is bound to the catalog's own entries, so the dialog can say out loud that a
+ * conversion moves the project in the queue. When the catalog read fails there are no weights for
+ * anybody and the sentence goes unsaid rather than guessed.
+ */
+const conversions =
+  project === null || !catalogResult.ok
+    ? []
+    : buildConversions(
+        {
+          projectName: project.name,
+          current: project.engagement_type,
+          engagementTypes: catalogResult.data.engagement_types,
+          workflow: project.workflow,
+          stateCode: project.state.code,
+          stateLabel: project.state.label,
+          catalog: workflowsResult.ok ? workflowsResult.data : null,
+        },
+        engagementWeights(catalogResult.data.engagement_types),
+      );
+
 const openBlockers =
   project?.blockers.filter(
     (blocker) => (blocker.resolved_at ?? null) === null,
@@ -228,9 +276,12 @@ const failureCopyForProject: FailureCopy =
           ownerLabel={project.owner?.label ?? null}
           engagementLabel={project.engagement_type.label}
           engagementColor={project.engagement_type.color ?? null}
+          engagementCode={project.engagement_type.code}
           stateLabel={project.state.label}
           stateCategory={project.state.category}
+          stateCode={project.state.code}
           stateColor={project.state.color ?? null}
+          workflow={project.workflow}
           healthCode={project.health.code}
           healthLabel={project.health.label}
           targetDate={project.target_date ?? null}
@@ -239,6 +290,7 @@ const failureCopyForProject: FailureCopy =
           updatedAt={project.updated_at}
           transitions={project.transitions}
           emptyFields={emptyAggregateFields(project)}
+          conversions={conversions}
         />
 
         <div class="card">
@@ -262,14 +314,12 @@ const failureCopyForProject: FailureCopy =
           </div>
         </div>
 
-        {
-          /* Notes sit beside the risks rather than behind a tab: they are the
+        {/* Notes sit beside the risks rather than behind a tab: they are the
             written half of the same question the flags ask, and a tab hides
             them from the operator who is reading why a project is at risk —
-            which is exactly when somebody's note explains it. */
-        }
+            which is exactly when somebody's note explains it. */}
         <div class="card notes-card">
-          <NotesPanel projectCode={project.code} />
+          <NotesPanel projectCode={project.code} notes={project.notes} />
         </div>
 
         <DetailTabs

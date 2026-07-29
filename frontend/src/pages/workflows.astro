@@ -1,37 +1,65 @@
 ---
 /**
- * `/workflows` — "Flujos de trabajo": how the operation is currently configured.
+ * `/workflows` — "Flujos de trabajo": where the operation's lifecycles are shaped.
  *
- * **Why this surface exists.** States and the moves between them are data an
- * operator edits in the admin (`CLAUDE.md` rule 1), which means no screen can
- * hardcode them and no reader can be expected to know them. When a move is
- * refused, the refusal is correct and unexplained — this is where the
- * explanation lives: the arrow the operator never drew is visibly absent.
+ * **Why this surface exists.** States and the moves between them are data
+ * (`CLAUDE.md` rule 1), and data the operation owns has to be reshapeable *by*
+ * the operation: a lifecycle only editable by somebody holding a Django admin
+ * account is configurable by engineering, not by the people running the week.
+ * So authoring lives here, on the product surface, gated on the ops-lead
+ * capability (`docs/API.md` §2.19). The admin stays as a second door, never as
+ * the only one.
  *
- * Read-only, and deliberately so. Nothing here writes, nothing here is legal
- * advice about a *record*: the graph says which arrows exist, while whether the
- * project on your screen may take one is computed per record against its own
- * state, the transition's guard and its `requires_fields`, and stays on the
- * detail's `transitions` (`docs/API.md` §2.2). Acting on an edge published here
- * without asking earns a typed 409, which is the same failure mode as a stale
+ * **Authoring a graph and obeying it are separate concerns, and stay that way.**
+ * The diagram says which arrows exist; whether the project on your screen may
+ * take one is computed per record against its own state, the transition's guard
+ * and its `requires_fields`, and stays on the detail's `transitions`
+ * (`docs/API.md` §2.2). Drawing an edge here grants nothing — acting on one
+ * without asking still earns a typed 409, the same failure mode as a stale
  * button.
  *
- * A container and nothing else (`PATTERNS_FRONTEND.md` §5): one read, one view
- * model, then composition. There is no island beyond the retry, because there is
- * nothing to patch — configuration does not arrive over the stream, so this
- * surface has four view states and not five, and `disconnected` would be a
+ * **The header carries a title, a purpose and the primary action, and nothing
+ * else.** It used to carry two grey paragraphs that restated each other and
+ * both sent the reader to the Django admin to create a flow, which stopped
+ * being true the day authoring moved here. How to read the diagram is the
+ * legend's job, beside the drawing it explains
+ * (`components/workflows/GraphLegend.astro`) — an explanation above the page is
+ * documentation apologising for the screen. "Nuevo flujo" is rendered for
+ * everybody and revealed in the browser for the ops lead, because the server
+ * renders from a mirror cookie carrying a token rather than a capability; the
+ * editor island binds its click through `[data-workflow-new]`.
+ *
+ * A container and nothing else (`PATTERNS_FRONTEND.md` §5): two reads, one view
+ * model, then composition — the graphs are the page, and the catalog is what the
+ * "nuevo flujo" form binds engagement types from. Every *write* belongs to
+ * `components/workflows/editor.ts`, which repaints each section from the graph
+ * the API answers with. Configuration does not arrive over the stream, so this
+ * surface has four view states and not five — `disconnected` would be a
  * staleness marker on data no envelope can make stale.
  */
+import ConfirmDialog from "../components/workflows/ConfirmDialog.astro";
 import EmptyState from "../components/ui/EmptyState.astro";
 import Icon from "../components/ui/Icon.astro";
+import StateDialog from "../components/workflows/StateDialog.astro";
+import TransitionDialog from "../components/workflows/TransitionDialog.astro";
+import WorkflowDialog from "../components/workflows/WorkflowDialog.astro";
 import WorkflowSection from "../components/workflows/WorkflowSection.astro";
-import { buildWorkflowViews } from "../components/workflows/graph";
+import {
+  buildWorkflowViews,
+  emptyWorkflowView,
+} from "../components/workflows/graph";
 import Shell from "../layouts/Shell.astro";
-import { getWorkflows } from "../lib/api/client";
+import { getCatalog, getWorkflows } from "../lib/api/client";
 import { errorCopyByCode } from "../lib/api/error-copy";
 import { toViewState } from "../lib/view-state";
 
-const result = await getWorkflows();
+/**
+ * Both reads at once: neither depends on the other, so sequential would cost a
+ * round trip for nothing. A failed catalog is **not** a failed page — the
+ * creation form then says it has no engagement types to offer, and a graph is
+ * still creatable as the default of its class.
+ */
+const [result, catalog] = await Promise.all([getWorkflows(), getCatalog()]);
 
 /**
  * `"connecting"` because the stream has no bearing on this answer: there is no
@@ -41,7 +69,7 @@ const result = await getWorkflows();
 const state = toViewState(result, "connecting", {
   isEmpty: (data) => data.workflows.length === 0,
   emptyMessage:
-    "Nadie ha configurado todavía un flujo de trabajo, así que ningún proyecto ni ninguna tarea puede cambiar de estado.",
+    "Nadie ha configurado todavía un flujo de trabajo, así que ningún proyecto ni ninguna tarea puede cambiar de estado. Crea el primero desde «Nuevo flujo».",
   lastEventAt: null,
 });
 
@@ -49,6 +77,9 @@ const workflows =
   state.kind === "ready" || state.kind === "disconnected"
     ? buildWorkflowViews(state.data)
     : [];
+
+/** What a new lifecycle may be bound to; empty is a legitimate first paint. */
+const engagementTypes = catalog.ok ? catalog.data.engagement_types : [];
 
 /** Filled even while its arm is hidden, so the card is never blank when it appears. */
 const failure = errorCopyByCode(
@@ -63,24 +94,12 @@ const failure = errorCopyByCode(
 const emptyDescription =
   state.kind === "empty"
     ? state.message
-    : "Los estados y sus transiciones se crean en el panel de administración.";
+    : "Crea el primero desde «Nuevo flujo» y define los estados por los que pasará el trabajo.";
 
 const CRUMBS = [
   { label: "Resumen", href: "/" },
   { label: "Flujos de trabajo" },
 ];
-
-/**
- * Where the graph is actually edited.
- *
- * Creating a workflow is deliberately not a product surface: states and
- * transitions are configuration an operator changes rarely and carefully, and
- * CLAUDE.md rule 1 keeps that vocabulary in the database, edited from the
- * admin, so the operation can change without a deploy. This screen is the
- * read-only view of that configuration — naming where to go is what keeps it
- * from being a dead end.
- */
-const adminUrl = `${import.meta.env.PUBLIC_API_URL ?? "http://localhost:8000"}/admin/workflow/workflow/`;
 
 /** Skeleton rows shown while a retry is in flight. */
 const SKELETON_ROWS = [0, 1, 2, 3, 4];
@@ -89,19 +108,25 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
 <Shell title="Flujos de trabajo" active="workflows" crumbs={CRUMBS}>
   <section class="workflows" data-workflows-region data-view={state.kind}>
     <header class="head">
-      <h1 class="h1">Flujos de trabajo</h1>
-      <p class="body-text lead">
-        Los estados y los movimientos entre ellos son datos que se editan en el
-        panel de administración: esto es cómo están configurados ahora mismo. Si
-        un movimiento fue rechazado, la razón se ve aquí — entre dos estados sin
-        flecha no hay paso posible.
-      </p>
-      <p class="small edit-note">
-        Para crear un flujo, añadir un estado o abrir un movimiento nuevo, ve al
-        <a class="edit-link" href={adminUrl} target="_blank" rel="noreferrer"
-          >panel de administración</a
-        >. Los cambios aparecen aquí en cuanto se guardan, sin desplegar nada.
-      </p>
+      <div class="titles">
+        <h1 class="h1">Flujos de trabajo</h1>
+        <p class="body-text lead">
+          Decide por dónde pasa el trabajo: los estados de cada flujo y los
+          movimientos permitidos entre ellos.
+        </p>
+      </div>
+
+      <button
+        class="btn btn-primary"
+        type="button"
+        data-workflow-new
+        data-ops-lead
+        data-focus-key="workflows:create"
+        hidden
+      >
+        <Icon name="plus" size={16} />
+        Nuevo flujo
+      </button>
     </header>
 
     <div class="graphs" data-graphs-arm>
@@ -121,15 +146,33 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
         scene="quiet"
         title="No hay ningún flujo configurado"
         description={emptyDescription}
-      />
+      >
+        {
+          /* The way out of the empty state is the act that fills it, right here — the header's
+             copy of the button is hidden on this arm so the same offer is not made twice. */
+        }
+        <span data-ops-lead hidden>
+          <button
+            class="btn btn-primary"
+            type="button"
+            data-workflow-new
+            data-focus-key="workflows:create-first"
+          >
+            <Icon name="plus" size={16} />
+            Crear el primer flujo
+          </button>
+        </span>
+      </EmptyState>
     </div>
 
     <div class="card state" data-error-arm>
       <span class="state-icon tone-rojo" aria-hidden="true">
         <Icon name="alert" />
       </span>
-      <h2 class="h2">{failure.title}</h2>
-      <p class="body-text">{failure.detail}</p>
+      <h2 class="h2" data-field="wf-read-error-title">{failure.title}</h2>
+      <p class="body-text" data-field="wf-read-error-detail">
+        {failure.detail}
+      </p>
       <p>
         <button class="btn btn-secondary" type="button" data-workflows-retry>
           <Icon name="refresh" />
@@ -137,36 +180,32 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
         </button>
       </p>
     </div>
+
+    {
+      /* The four modals of the surface, rendered once and outside every arm: a dialog that
+         lived inside the ready arm would be unreachable from the empty one, which is exactly
+         where the first lifecycle is created. */
+    }
+    <WorkflowDialog engagementTypes={engagementTypes} />
+    <StateDialog />
+    <TransitionDialog />
+    <ConfirmDialog />
+
+    {
+      /* The blank section the editor clones when a lifecycle is created, rendered by the same
+         component that renders the real ones — so a section that appears without a reload is
+         the same markup, with the same styles and the same hooks, as the ones the server drew. */
+    }
+    <template data-template="workflow-section">
+      <WorkflowSection workflow={emptyWorkflowView()} />
+    </template>
   </section>
 
   <script>
     import { onPage } from "../components/projects/island";
+    import { mountWorkflowEditor } from "../components/workflows/editor";
 
-    /**
-     * The only interaction on this surface: re-read the document.
-     *
-     * A reload rather than a refetch, because every arm of this page is
-     * server-rendered — re-rendering the graph in the browser would mean a
-     * second copy of the layout, in TypeScript, free to disagree with the one
-     * that drew the page. Flipping the region to `loading` first is what makes
-     * that arm real: the skeleton paints in the geometry of the answer while
-     * the document is fetched again.
-     */
-    onPage("[data-workflows-region]", (root) => {
-      const retry = root.querySelector<HTMLButtonElement>(
-        "[data-workflows-retry]",
-      );
-
-      const reload = (): void => {
-        root.dataset.view = "loading";
-        window.requestAnimationFrame(() => {
-          window.location.reload();
-        });
-      };
-
-      retry?.addEventListener("click", reload);
-      return () => retry?.removeEventListener("click", reload);
-    });
+    onPage("[data-workflows-region]", mountWorkflowEditor);
   </script>
 </Shell>
 
@@ -194,22 +233,29 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
   }
 
   .head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: var(--space-4);
+  }
+
+  .titles {
     display: grid;
     gap: var(--space-2);
   }
 
-  .edit-note {
-    color: var(--tinta-media);
-    max-width: var(--text-body-max);
-  }
-
-  .edit-link {
-    color: var(--cobalto);
-    font-weight: var(--text-title-weight);
-  }
-
   .lead {
     color: var(--tinta-media);
+  }
+
+  /* `.btn` sets `display: inline-flex`, and an author rule beats the user
+     agent's `[hidden]` whatever its specificity: without this the action would
+     be visible to every member until the island ran, and stay visible to a
+     member who is not an ops lead. */
+  .head [hidden],
+  [data-empty-arm] [hidden] {
+    display: none;
   }
 
   .graphs {
@@ -282,6 +328,14 @@ const SKELETON_ROWS = [0, 1, 2, 3, 4];
   [data-view="empty"] [data-empty-arm],
   [data-view="error"] [data-error-arm] {
     display: grid;
+  }
+
+  /* One offer per screen: the empty arm makes it inside the card, and a page that could not
+     even be read has no business inviting a write. */
+  [data-view="empty"] .head [data-workflow-new],
+  [data-view="error"] .head [data-workflow-new],
+  [data-view="loading"] .head [data-workflow-new] {
+    display: none;
   }
 
   @media (max-width: 640px) {

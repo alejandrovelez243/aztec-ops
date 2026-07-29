@@ -2,15 +2,21 @@
 /**
  * The question the roster answers: search, three facets, and the way in for a new person.
  *
- * Every control is a real form field with a `name` matching the API's own query parameter, and
- * the island copies them straight into the URL. That is what keeps the toolbar, the address bar
- * and the request describing the same thing — a toolbar with its own vocabulary would need a
- * translation table, and the table is where the three drift apart.
+ * Each facet is named after the API's own query parameter — the search input by its `name`, the
+ * three pickers by their `facet` — and the island copies them straight into the URL. That is what
+ * keeps the toolbar, the address bar and the request describing the same thing; a toolbar with
+ * its own vocabulary would need a translation table, and the table is where the three drift apart.
+ *
+ * The pickers are `MenuSelect`, never a `<select>` (`FRONTEND.md` §10): the native popup is drawn
+ * by the operating system, so it lands as a grey system list on a surface that is otherwise all
+ * paper and ink, and no token reaches inside it. A `MenuSelect` carries no hidden input either —
+ * its `data-value` *is* the field, which is what the island reads.
  *
  * The controls are rendered with the current query already selected, so a shared link opens on
  * the view it promises rather than on the default one.
  */
 import Icon from "../ui/Icon.astro";
+import MenuSelect from "../ui/MenuSelect.astro";
 import type { RosterQuery } from "./table";
 import type { TaxonomyRef } from "../../lib/api/domain";
 
@@ -22,9 +28,27 @@ export interface Props {
 
 const { query, roles } = Astro.props;
 
-/** `overloaded` is tri-state on the wire; the select carries the three as strings. */
+/** `overloaded` is tri-state on the wire; the picker carries the three as strings. */
 const overloadedValue =
   query.overloaded === null ? "" : String(query.overloaded);
+
+const roleOptions = [
+  { value: "", label: "Todos" },
+  ...roles.map((role) => ({ value: role.code, label: role.label })),
+];
+
+const statusOptions = [
+  { value: "active", label: "Activas" },
+  { value: "inactive", label: "Retiradas" },
+  { value: "all", label: "Todas" },
+];
+
+const overloadedOptions = [
+  { value: "", label: "Cualquiera" },
+  { value: "true", label: "Con sobrecarga" },
+  /* The third answer a boolean could not give: who still has room to take work. */
+  { value: "false", label: "Con margen" },
+];
 ---
 
 <form class="toolbar card" data-roster-toolbar role="search" novalidate>
@@ -43,48 +67,26 @@ const overloadedValue =
     />
   </label>
 
-  <label class="facet">
-    <span class="label">Rol</span>
-    <select class="input" name="role">
-      <option value="" selected={query.role === null}>Todos</option>
-      {
-        roles.map((role) => (
-          <option value={role.code} selected={query.role === role.code}>
-            {role.label}
-          </option>
-        ))
-      }
-    </select>
-  </label>
+  <MenuSelect
+    facet="role"
+    label="Rol"
+    options={roleOptions}
+    value={query.role ?? ""}
+  />
 
-  <label class="facet">
-    <span class="label">Estado</span>
-    <select class="input" name="status">
-      <option value="active" selected={query.status === "active"}
-        >Activas</option
-      >
-      <option value="inactive" selected={query.status === "inactive"}>
-        Retiradas
-      </option>
-      <option value="all" selected={query.status === "all"}>Todas</option>
-    </select>
-  </label>
+  <MenuSelect
+    facet="status"
+    label="Estado"
+    options={statusOptions}
+    value={query.status}
+  />
 
-  <label class="facet">
-    <span class="label">Carga</span>
-    <select class="input" name="overloaded">
-      <option value="" selected={overloadedValue === ""}>Cualquiera</option>
-      <option value="true" selected={overloadedValue === "true"}>
-        Con sobrecarga
-      </option>
-      {
-        /* The third answer a boolean could not give: who still has room to take work. */
-      }
-      <option value="false" selected={overloadedValue === "false"}>
-        Con margen
-      </option>
-    </select>
-  </label>
+  <MenuSelect
+    facet="overloaded"
+    label="Carga"
+    options={overloadedOptions}
+    value={overloadedValue}
+  />
 
   <div class="tools">
     <button class="btn btn-secondary" type="button" data-roster-action="clear">
@@ -148,12 +150,9 @@ const overloadedValue =
     padding-left: calc(var(--space-3) * 2 + 16px);
   }
 
-  .facet {
-    display: grid;
-    gap: var(--space-1);
-  }
-
-  .facet .input {
+  /* The pickers are a child component's markup, so the toolbar reaches them
+     with `:global`; it decides how wide they sit, never how they look. */
+  .toolbar :global(.menu-select) {
     min-width: 9rem;
   }
 
@@ -171,8 +170,7 @@ const overloadedValue =
   }
 
   @media (max-width: 767px) {
-    .facet,
-    .facet .input {
+    .toolbar :global(.menu-select) {
       flex: 1 1 100%;
       min-width: 0;
       width: 100%;

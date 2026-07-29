@@ -10,20 +10,36 @@
  * Absences are named, never blank: no deadline is an ámbar "Sin fecha", and an
  * unowned project says so instead of leaving the cell empty.
  *
- * Two of those facts are also *editable here*, because naming an absence and
+ * Three of those facts are also *editable here*, because naming an absence and
  * offering no cure is only half the job. The responsable is a menu over the
  * team, and the próximo paso — the one field a risk flag actively asks for — is
  * written in place. Both go through `PATCH /api/v1/projects/{code}` and both
  * repaint the whole header, the transition bar and the risk list from the
  * response, which is the project re-read after the write.
+ *
+ * The third is the tipo de encargo, and its chip *is* its own trigger
+ * (`ConvertEngagementDialog`): converting a project is the one edit here whose
+ * consequences reach past this card — the lifecycle that governs it and the
+ * weight the queue gives it — so it is confirmed with a sentence first and the
+ * page is re-read afterwards rather than patched.
+ *
+ * Between the facts and the moves sits the lifecycle: which graph this project
+ * follows and whether somebody chose it for this project or it came from the
+ * engagement type. It is the sentence that explains the transition bar — two
+ * projects of the same type may legitimately be running different lifecycles,
+ * and "why does that one have a button this one has not" has to be answerable
+ * from the screen. Changing it is an ops lead's, on its own route.
  */
+import ConvertEngagementDialog from "./ConvertEngagementDialog.astro";
 import DateField from "../ui/DateField.astro";
+import LifecyclePlate from "../lifecycle/LifecyclePlate.astro";
 import NextStepField from "./NextStepField.astro";
 import OwnerMenu from "./OwnerMenu.astro";
 import StateChip from "./StateChip.astro";
 import TransitionBar from "./TransitionBar.astro";
-import { healthTone, taxonomyTone, toneStyle } from "./tone";
-import type { Transition } from "../../lib/api/domain";
+import { NO_CONVERSIONS, type ConversionPlan } from "./convert-engagement";
+import { healthTone } from "./tone";
+import type { Transition, WorkflowRef } from "../../lib/api/domain";
 
 export interface Props {
   code: string;
@@ -35,9 +51,15 @@ export interface Props {
   ownerLabel: string | null;
   engagementLabel: string;
   engagementColor: string | null;
+  /** `EngagementType.code`; what the lifecycle plate names the inherited graph from. */
+  engagementCode: string;
   stateLabel: string;
   stateCategory: string;
+  /** The state's `code`, which is what a lifecycle may or may not have a column for. */
+  stateCode: string;
   stateColor: string | null;
+  /** The graph `state` and `transitions` come from, and whether somebody chose it. */
+  workflow: WorkflowRef;
   healthCode: string;
   healthLabel: string;
   targetDate: string | null;
@@ -50,6 +72,12 @@ export interface Props {
   transitions: readonly Transition[];
   /** Aggregate attributes that are currently empty, from the same read. */
   emptyFields: readonly string[];
+  /**
+   * What converting this project into each other engagement type would do, composed by
+   * `buildConversions` from the catalog and the workflow shapes the page read. Empty leaves
+   * the chip visibly dead rather than absent.
+   */
+  conversions: readonly ConversionPlan[];
 }
 
 const {
@@ -61,9 +89,12 @@ const {
   ownerLabel,
   engagementLabel,
   engagementColor,
+  engagementCode,
   stateLabel,
   stateCategory,
+  stateCode,
   stateColor,
+  workflow,
   healthCode,
   healthLabel,
   targetDate,
@@ -72,9 +103,9 @@ const {
   updatedAt,
   transitions,
   emptyFields,
+  conversions,
 } = Astro.props;
 
-const engagement = taxonomyTone(engagementColor);
 const health = healthTone(healthCode);
 ---
 
@@ -110,14 +141,15 @@ const health = healthTone(healthCode);
       </dd>
     </div>
     <div class="fact">
-      <dt class="label">Tipo de contrato</dt>
+      <dt class="label">Tipo de encargo</dt>
       <dd>
-        <span
-          class:list={["chip", engagement.className]}
-          style={toneStyle(engagement)}
-        >
-          {engagementLabel}
-        </span>
+        <ConvertEngagementDialog
+          projectCode={code}
+          label={engagementLabel}
+          color={engagementColor}
+          conversions={conversions}
+          disabledReason={NO_CONVERSIONS}
+        />
       </dd>
     </div>
     <div class="fact">
@@ -138,6 +170,20 @@ const health = healthTone(healthCode);
       </dd>
     </div>
   </dl>
+
+  {
+    /* Between the facts and the moves, because it is what explains the moves:
+      the chip above says where the project stands, the buttons below say where
+      it may go, and this names the graph both of them come from. */
+  }
+  <LifecyclePlate
+    scope="project"
+    code={code}
+    workflow={workflow}
+    stateCode={stateCode}
+    stateLabel={stateLabel}
+    engagementType={engagementCode}
+  />
 
   <TransitionBar
     projectCode={code}

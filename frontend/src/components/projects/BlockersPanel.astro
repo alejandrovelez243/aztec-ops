@@ -10,10 +10,15 @@
  * `resolved_at === null` *is* the definition of open — there is no second
  * boolean, because two representations of one fact are how a panel and a score
  * come to disagree.
+ *
+ * Raising happens in `RaiseBlockerDialog`, opened from the button beside the
+ * open list: the form used to sit under the cards, where four open blockers put
+ * it below the fold on the one screen where it is most needed.
  */
 import Icon from "../ui/Icon.astro";
+import RaiseBlockerDialog from "./RaiseBlockerDialog.astro";
 import { formatInstant } from "./format";
-import { BLOCKER_KINDS, blockerKindLabel } from "./messages";
+import { blockerKindLabel } from "./messages";
 import { blockerMeta, resolvedBlockerMeta } from "./presentation";
 import type { Blocker } from "../../lib/api/domain";
 
@@ -39,6 +44,18 @@ const resolved = blockers.filter(
       <span class="chip tone-verde" data-open-empty hidden={open.length > 0}>
         Nada bloquea este proyecto
       </span>
+      {
+        /* Beside the list, not under it: with four open blockers the operator
+          would have had to scroll past all of them to find the form. */
+      }
+      <button
+        class="btn btn-primary raise"
+        type="button"
+        data-action="open-raise"
+      >
+        <Icon name="plus" size={18} />
+        Registrar bloqueo
+      </button>
     </div>
 
     <ul class="list" data-open-blockers>
@@ -78,39 +95,6 @@ const resolved = blockers.filter(
       }
     </ul>
   </div>
-
-  <form class="raise card" data-raise-form>
-    <h3 class="h2">Registrar bloqueo</h3>
-    <div class="fields">
-      <label class="field">
-        <span class="label">Tipo</span>
-        <select class="input" name="kind" required>
-          {
-            BLOCKER_KINDS.map((kind) => (
-              <option value={kind}>{blockerKindLabel(kind)}</option>
-            ))
-          }
-        </select>
-      </label>
-      <label class="field wide">
-        <span class="label">Qué está detenido y por qué</span>
-        <textarea
-          class="input"
-          name="description"
-          rows="2"
-          required
-          placeholder="Ej.: esperamos las credenciales del cliente para el ambiente de pruebas"
-        ></textarea>
-      </label>
-    </div>
-    <p class="small error" data-field="raise-error" hidden></p>
-    <div class="actions">
-      <button class="btn btn-primary" type="submit" data-action="raise">
-        <Icon name="plus" size={18} />
-        Registrar
-      </button>
-    </div>
-  </form>
 
   <details class="resolved">
     <summary class="title">
@@ -181,6 +165,8 @@ const resolved = blockers.filter(
       <p class="small" data-field="blocker-resolution"></p>
     </li>
   </template>
+
+  <RaiseBlockerDialog projectCode={projectCode} />
 
   <dialog class="dialog" data-resolve-dialog aria-labelledby="resolve-title">
     <form method="dialog" data-resolve-form>
@@ -267,32 +253,8 @@ const resolved = blockers.filter(
     margin-left: auto;
   }
 
-  .raise {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-    padding: var(--space-4);
-  }
-
-  .fields {
-    display: grid;
-    grid-template-columns: minmax(180px, 220px) 1fr;
-    gap: var(--space-3);
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  .field.wide {
-    grid-column: span 1;
-  }
-
-  .actions {
-    display: flex;
-    justify-content: flex-end;
+  .head .raise {
+    margin-left: auto;
   }
 
   .error {
@@ -337,11 +299,5 @@ const resolved = blockers.filter(
     justify-content: flex-end;
     gap: var(--space-2);
     margin-top: var(--space-2);
-  }
-
-  @media (max-width: 767px) {
-    .fields {
-      grid-template-columns: 1fr;
-    }
   }
 </style>

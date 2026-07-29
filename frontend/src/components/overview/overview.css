@@ -120,6 +120,12 @@
 .ov-zone--radar .ov-zone-list {
   grid-template-columns: minmax(0, 1fr);
   gap: var(--space-2);
+  /* The radar's columns are sized by the *card*, so the card is what has to be
+     measured. A viewport breakpoint cannot answer this: the drawer collapses,
+     so one viewport width yields two different card widths, and the wider of
+     the two is the only one the four-column template fits in. */
+  container-type: inline-size;
+  container-name: radar;
 }
 
 /* --- The card: one DOM, three densities ---------------------------------- */
@@ -456,10 +462,20 @@
  * them too, and would throw away the card's border, hover and flash — the
  * frame that makes a remote move visible).
  *
- * Below 1200px there is no room for four columns and the row falls back to the
- * wrapping flex layout above.
+ * Measured on the list, not on the window: `@container` asks how wide the cards
+ * actually are, which is the question. The previous rule fired at a 1200px
+ * *viewport*, but the queue takes 2.4fr of a two-column page, so the card was
+ * 803px wide when it triggered: the `1fr` column collapsed to zero, the score
+ * landed on top of the signal bar, and the foot ran ~100px past the card's own
+ * edge.
+ *
+ * 1040px is what the template actually costs: 168 + 176 for the fixed tracks,
+ * three gaps, ~500 of min-content in the foot (an owner, up to three absence
+ * chips and the button) and enough left for the name to still be a name. Below
+ * that the row falls back to the wrapping flex layout above, which is the right
+ * answer rather than a degraded one.
  */
-@media (min-width: 1200px) {
+@container radar (min-width: 1040px) {
   .ov-zone--radar .ov-card {
     display: grid;
     grid-template-columns:
@@ -474,8 +490,13 @@
     width: 100%;
   }
 
+  /* The foot may wrap inside its own track. Its chips are `nowrap`, so without
+     this the column's min-content wins over the track's max and the row grows
+     past the card — the overflow this breakpoint exists to prevent, arriving by
+     a second route. */
   .ov-zone--radar .ov-foot {
     min-width: 0;
+    flex-wrap: wrap;
   }
 }
 

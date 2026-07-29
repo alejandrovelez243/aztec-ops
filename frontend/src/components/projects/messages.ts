@@ -65,6 +65,31 @@ export const CREATE_NO_PRIORITIES =
   "No pudimos leer el catálogo de prioridades, así que ahora no se pueden crear tareas. Vuelve a cargar la página.";
 
 /**
+ * Why the priority chip cannot be used as a picker.
+ *
+ * The options are the catalog's, so a failed catalog read leaves nothing legal
+ * to offer. The chip still reports the priority the task has — that fact came
+ * from the task read and is unaffected — and goes visibly dead with this
+ * sentence rather than disappearing: a control that vanishes teaches the
+ * operator that the capability does not exist (FRONTEND.md §8).
+ */
+export const PRIORITY_UNAVAILABLE =
+  "No pudimos leer el catálogo de prioridades, así que ahora no se puede cambiar. Vuelve a cargar la página.";
+
+/**
+ * Why the task header shows its prerequisites without letting them be edited.
+ *
+ * The only thing a task may depend on is another task of its own project, so the
+ * picker's options are a second read — and that read is not allowed to take the
+ * task screen down. When it fails the chips stay on screen, because they are part
+ * of the task and came from the task's own read, and this sentence says why they
+ * cannot be touched (FRONTEND.md §8): a control that vanishes teaches the
+ * operator that the capability does not exist.
+ */
+export const DEPENDENCIES_UNAVAILABLE =
+  "No pudimos leer las demás tareas del proyecto, así que ahora no se pueden cambiar las dependencias. Vuelve a cargar la página.";
+
+/**
  * Aggregate attributes a transition's `requires_fields` can name, and request
  * fields a `validation_error` can blame. Both are attribute names, never
  * labels, so one map serves both.
@@ -74,7 +99,7 @@ const FIELD_LABEL: Readonly<Record<string, string>> = {
   summary: "resumen",
   client: "cliente",
   owner: "responsable",
-  engagement_type: "tipo de contrato",
+  engagement_type: "tipo de encargo",
   project_type: "tipo de proyecto",
   stage: "etapa",
   start_date: "fecha de inicio",
@@ -157,6 +182,23 @@ export function blockerKindLabel(kind: string): string {
   return BLOCKER_KIND_LOOKUP[kind] ?? kind;
 }
 
+/** The request field a rejected prerequisite is blamed on, on both sides of the wire. */
+const DEPENDENCY_FIELD = "depends_on";
+
+/**
+ * The task codes of a refused dependency loop, in the order they close it.
+ *
+ * `[]` for every other `conflicting_state`, which is what keeps the generic
+ * sentence reachable: a caller cannot tell the two apart from the code alone.
+ * Non-string entries are dropped rather than rendered, because the chain is
+ * shown to the operator as the links to break.
+ */
+function readCycle(details: Record<string, unknown>): readonly string[] {
+  const cycle = details["cycle"];
+  if (!Array.isArray(cycle)) return [];
+  return cycle.filter((entry): entry is string => typeof entry === "string");
+}
+
 /** Joins field names into a readable Spanish enumeration. */
 export function joinFields(fields: readonly string[]): string {
   const labels = fields.map(fieldLabel);
@@ -184,6 +226,17 @@ export function failureCopy(error: ApiError): FailureCopy {
       };
     case "validation": {
       const fields = Object.keys(error.fields);
+      // A rejected prerequisite is not a missing field, and telling the operator
+      // to fill something in would send them looking for a blank that is not
+      // there: the server refuses `depends_on` when it names a task of another
+      // project, which is a rule about the graph, not about completeness.
+      if (fields.length === 1 && fields[0] === DEPENDENCY_FIELD) {
+        return {
+          title: "Esa dependencia no es válida",
+          detail:
+            "Una tarea solo puede depender de otras tareas de su mismo proyecto.",
+        };
+      }
       return {
         title: "Faltan datos obligatorios",
         detail:
@@ -203,7 +256,7 @@ export function failureCopy(error: ApiError): FailureCopy {
         detail: "Revisa tu red y vuelve a intentarlo.",
       };
     case "unknown":
-      return unknownCopy(error.backendCode);
+      return unknownCopy(error.backendCode, error.details);
     case "auth":
     case "permission_denied":
     default:
@@ -215,7 +268,10 @@ export function failureCopy(error: ApiError): FailureCopy {
 }
 
 /** Copy for the `unknown` arm, split out so `failureCopy` stays flat. */
-function unknownCopy(backendCode: string | null): FailureCopy {
+function unknownCopy(
+  backendCode: string | null,
+  details: Record<string, unknown>,
+): FailureCopy {
   // `docs/API.md` §1.2.4 documents `permission_denied` with
   // `details.required = "ops_lead"`; `ops_lead_required` is accepted beside it
   // so a rename on the server surfaces as the right sentence rather than as
@@ -231,6 +287,18 @@ function unknownCopy(backendCode: string | null): FailureCopy {
     };
   }
   if (backendCode === "conflicting_state") {
+    // One 409 carries a second meaning, and it is the opposite of "somebody got
+    // there first": a `depends_on` that would close a loop is refused with the
+    // chain that would have closed (`config/errors.py`, `_cycle_details`).
+    // Naming the chain is the whole point — it is the only thing that tells the
+    // operator which link to break.
+    const cycle = readCycle(details);
+    if (cycle.length > 0) {
+      return {
+        title: "Esa dependencia haría un círculo",
+        detail: `${cycle.join(" → ")} acabaría esperándose a sí misma. Quita uno de esos enlaces y vuelve a intentarlo.`,
+      };
+    }
     return {
       title: "Ese cambio ya estaba aplicado",
       detail: "Alguien más lo hizo primero; recarga para ver el estado actual.",

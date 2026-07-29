@@ -1,16 +1,21 @@
 /**
  * Publishing notes, and receiving the ones colleagues publish.
  *
- * This is the one region on the detail where the *payload is the entity*:
- * `note.added` carries the body and the author (`docs/EVENTS.md` §4), a note is
- * immutable once written, and there is no read endpoint to reconcile against.
- * So a remote note is rendered straight from the envelope — with the envelope's
- * `occurred_at` as its timestamp, never the browser's clock, which would date a
- * colleague's note by when this tab happened to receive it.
+ * The panel's existing notes are rendered by the server from the project
+ * detail's `notes`; this island only ever *adds* to that list. It never clears
+ * it and never re-reads it, so nothing here can make a persisted note vanish.
  *
- * Deduplication is by note code: delivery is at-least-once, and the operator's
- * own note arrives twice — once as the POST's response, once as the envelope
- * their own write produced.
+ * This is the one region on the detail where the *payload is the entity*:
+ * `note.added` carries the body and the author (`docs/EVENTS.md` §4) and a note
+ * is immutable once written, so a remote note is rendered straight from the
+ * envelope — with the envelope's `occurred_at` as its timestamp, never the
+ * browser's clock, which would date a colleague's note by when this tab
+ * happened to receive it.
+ *
+ * Deduplication is by note code: delivery is at-least-once, the operator's own
+ * note arrives twice — once as the POST's response, once as the envelope their
+ * own write produced — and a colleague's note may already be on the page,
+ * because the server rendered it before this tab subscribed.
  */
 
 import { postProjectNote } from "../../lib/api/client";
@@ -40,6 +45,8 @@ export function mountNotes(root: HTMLElement): () => void {
   const controller = new AbortController();
   const form = root.querySelector<HTMLFormElement>("[data-note-form]");
 
+  refreshRelativeTimes(root);
+
   form?.addEventListener(
     "submit",
     (event) => {
@@ -64,6 +71,21 @@ export function mountNotes(root: HTMLElement): () => void {
     controller.abort();
     off();
   };
+}
+
+/**
+ * Rewrites every server-rendered relative time against the current clock.
+ *
+ * The route is pre-rendered, so "hace 2 horas" was true when the build ran and
+ * would otherwise be read as true now. The absolute instant in `title` is
+ * already correct and is left alone.
+ */
+function refreshRelativeTimes(root: HTMLElement): void {
+  for (const node of root.querySelectorAll<HTMLElement>("[data-occurred-at]")) {
+    const occurredAt = node.dataset.occurredAt;
+    if (occurredAt === undefined) continue;
+    node.textContent = relativeTime(occurredAt) ?? "";
+  }
 }
 
 /** Sends one note and renders the row the server answered with. */
@@ -133,8 +155,13 @@ function prepend(root: HTMLElement, note: NoteRow): void {
   setField(item, "note-when", relativeTime(note.occurredAt) ?? "");
 
   const when = item.querySelector<HTMLElement>("[data-field='note-when']");
-  const absolute = formatInstant(note.occurredAt);
-  if (when !== null && absolute !== null) when.title = absolute;
+  if (when !== null) {
+    // The same hook the server-rendered rows carry, so a clone is refreshed by
+    // the next pass over the panel exactly like the rows it sits among.
+    when.dataset.occurredAt = note.occurredAt;
+    const absolute = formatInstant(note.occurredAt);
+    if (absolute !== null) when.title = absolute;
+  }
 
   list.prepend(item);
 

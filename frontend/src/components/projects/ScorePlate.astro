@@ -16,8 +16,14 @@
  *
  * `score: null` means "never scored yet", which is not zero: a project between
  * its creation and the recalculator's first pass says so in words.
+ *
+ * The override dialog's kind is a `MenuSelect`, never a `<select>`
+ * (`FRONTEND.md` §10): the native popup is the operating system's and lands as a
+ * grey system list inside a paper dialog. It carries no hidden input, so the
+ * island reads its `data-value` rather than the form's `FormData`.
  */
 import Icon from "../ui/Icon.astro";
+import MenuSelect from "../ui/MenuSelect.astro";
 import {
   barWidth,
   formatContribution,
@@ -50,6 +56,12 @@ const computedAt = formatInstant(score?.computed_at ?? null);
 
 const overrideLine = overrideSummary(override);
 const overrideReason = override?.reason ?? "";
+
+/** The two shapes a forced rank can take; the first is the one the form opens on. */
+const overrideModes = [
+  { value: "position", label: "Posición fija en la cola" },
+  { value: "boost", label: "Impulso sobre el puntaje" },
+];
 ---
 
 <section
@@ -161,13 +173,12 @@ const overrideReason = override?.reason ?? "";
         cambia: queda a la vista junto a tu decisión.
       </p>
 
-      <label class="field">
-        <span class="label">Tipo de ajuste</span>
-        <select class="input" name="mode" data-override-mode>
-          <option value="position">Posición fija en la cola</option>
-          <option value="boost">Impulso sobre el puntaje</option>
-        </select>
-      </label>
+      <MenuSelect
+        facet="override-mode"
+        label="Tipo de ajuste"
+        options={overrideModes}
+        value="position"
+      />
 
       <label class="field">
         <span class="label" data-field="amount-label">Posición</span>
@@ -331,12 +342,6 @@ const overrideReason = override?.reason ?? "";
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
   }
 
   .error {

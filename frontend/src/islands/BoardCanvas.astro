@@ -5,7 +5,10 @@ import Icon from "../components/ui/Icon.astro";
 import MemberBar from "../components/board/MemberBar.astro";
 import ProjectRail from "../components/board/ProjectRail.astro";
 import TaskBoard from "../components/board/TaskBoard.astro";
-import { BOARD_ENGAGEMENT_KEY } from "../components/board/board-dom";
+import {
+  BOARD_ENGAGEMENT_KEY,
+  ENGAGEMENT_FACET,
+} from "../components/board/board-dom";
 import type {
   BoardSurfaceModel,
   MemberChipModel,
@@ -42,7 +45,9 @@ import type {
  *   land where the operator was.
  * - **The engagement field and the member filter.** The select swaps which portfolio — and
  *   therefore which workflow's bands and columns — is on screen; pressing a face narrows the
- *   rail to that person's projects.
+ *   rail to that person's projects. The field is a `MenuSelect` on the shared popup grammar
+ *   (`FRONTEND.md` §10), so the choice is read and written through `lib/ui/menu-select.ts`
+ *   rather than off a `value` this island would have to keep in step by hand.
  * - **The stream.** `project.state_changed` and `task.state_changed` from another operator
  *   travel the card across its own surface with an attribution chip riding on it — the moment
  *   the product's multiplayer nature is shown instead of implied.
@@ -220,7 +225,10 @@ const staleSentence =
   </dialog>
 </div>
 
-<script is:inline define:vars={{ key: BOARD_ENGAGEMENT_KEY }}>
+<script
+  is:inline
+  define:vars={{ key: BOARD_ENGAGEMENT_KEY, facet: ENGAGEMENT_FACET }}
+>
   // Applied before paint so the operator's portfolio does not flash the alphabetically
   // first engagement type on every navigation. The module below re-applies it (and
   // owns every later switch); this is only the anti-flash pass. It steps aside when
@@ -247,13 +255,27 @@ const staleSentence =
           candidate.setAttribute("hidden", "");
         }
       }
-      // The field follows through its options' `selected` attribute: nothing has been
-      // scripted or typed into it yet, so its selectedness still tracks the markup.
-      for (const option of board.querySelectorAll("[data-engagement-option]")) {
-        if (option.getAttribute("data-engagement-code") === stored) {
-          option.setAttribute("selected", "");
-        } else {
-          option.removeAttribute("selected");
+      // The field follows too, or the wall and the word above it would disagree for the
+      // whole hydration gap. This is `applyMenuChoice` written out by hand rather than
+      // imported: an `is:inline` script cannot import, and the alternative — a module that
+      // can — runs after parse, which is the flash this script exists to prevent. The three
+      // writes it mirrors are the control's `data-value`, the trigger's word and the ticks.
+      const control = board.querySelector(
+        `[data-menu-select][data-facet="${CSS.escape(facet)}"]`,
+      );
+      if (control !== null) {
+        control.setAttribute("data-value", stored);
+        for (const item of control.querySelectorAll("[data-menu-item]")) {
+          const chosen = item.getAttribute("data-value") === stored;
+          item.setAttribute("aria-checked", String(chosen));
+          const tick = item.querySelector("[data-option-tick]");
+          if (tick !== null) {
+            if (chosen) tick.removeAttribute("hidden");
+            else tick.setAttribute("hidden", "");
+          }
+          if (!chosen) continue;
+          const current = control.querySelector("[data-field='menu-current']");
+          if (current !== null) current.textContent = item.textContent.trim();
         }
       }
     }
@@ -277,9 +299,18 @@ const staleSentence =
   import { onReset, onStatus, retry, subscribe } from "../lib/stream/store";
   import type { Envelope } from "../lib/stream/store";
   import { toast } from "../lib/toast";
+  import { mountMenus } from "../lib/ui/menu";
+  import {
+    applyMenuChoice,
+    findMenuSelect,
+    menuOptions,
+    setMenuOptions,
+    setMenuValue,
+  } from "../lib/ui/menu-select";
   import {
     BOARD_ENGAGEMENT_KEY,
     BOARD_PROJECT_PARAM,
+    ENGAGEMENT_FACET,
     SEL,
     activePanel,
     applyStateChip,
@@ -302,6 +333,8 @@ const staleSentence =
     surfaceOf,
     visibleCardsOf,
   } from "../components/board/board-dom";
+  import { mountCreateTask } from "../components/projects/create-task";
+  import type { MultiOption } from "../components/ui/multi-select";
   import { fieldList } from "../components/board/board-model";
   import type { TaskCardModel } from "../components/board/board-model";
   import {
@@ -562,7 +595,7 @@ const staleSentence =
     const rail: HTMLElement = foundRail;
     const taskBoard: HTMLElement = foundTaskBoard;
 
-    const field = board.querySelector<HTMLSelectElement>(SEL.engagementSelect);
+    const field = findMenuSelect(board, ENGAGEMENT_FACET);
     const menu = board.querySelector<HTMLElement>(SEL.moveMenu);
     const menuList = board.querySelector<HTMLElement>(SEL.moveMenuList);
     const menuTitle = board.querySelector<HTMLElement>(SEL.moveMenuTitle);
@@ -681,7 +714,12 @@ const staleSentence =
       for (const panel of board.querySelectorAll<HTMLElement>(SEL.panel)) {
         panel.hidden = panel.dataset["engagementCode"] !== code;
       }
-      if (field !== null && field.value !== code) field.value = code;
+      // The field has no `value` and no hidden input: `data-value` on the control is the
+      // field, and the trigger's word and the ticks have to move with it or the control
+      // would announce a portfolio that is not the one on screen (`lib/ui/menu-select.ts`).
+      if (field !== null && field.dataset["value"] !== code) {
+        setMenuValue(field, code);
+      }
       // A selection that lives on another portfolio is no longer on screen, and a board
       // showing one project's tasks beside a rail that does not contain it is a lie.
       if (selectedCode !== null) {
@@ -926,6 +964,27 @@ const staleSentence =
       return unplaced;
     }
 
+    /**
+     * The tasks the create dialog may offer as dependencies: the ones this board is showing.
+     *
+     * Read from the painted cards rather than fetched, so the list cannot disagree with what
+     * the operator is looking at and a task created a minute ago is already offerable. Scoped
+     * to the active panel, because the columns of another engagement type belong to another
+     * project's portfolio.
+     */
+    function taskDependencyOptions(): readonly MultiOption[] {
+      const panel = activePanel(taskBoard);
+      if (panel === null) return [];
+      return cardsOf(panel).flatMap((card) => {
+        const value = codeOf(card);
+        const label = (
+          card.querySelector<HTMLElement>("[data-tb-task-link]")?.textContent ??
+          ""
+        ).trim();
+        return value === "" ? [] : [{ value, label }];
+      });
+    }
+
     /** Empties every task column of every panel; selection changes must not leave residue. */
     function clearTaskCards(): void {
       for (const column of columnsOf(taskBoard)) {
@@ -1144,15 +1203,18 @@ const staleSentence =
 
     /**
      * The field's counts follow the filter: a count that ignores it names a portfolio nobody
-     * sees. The label lives in `data-label`, so rewriting the count can never eat the name.
+     * sees.
+     *
+     * The whole list is rewritten through `setMenuOptions`, which also repaints the trigger
+     * and keeps the current choice — the control has no hidden input, so a count written into
+     * the panel while the trigger still carried the old one would be two answers to one
+     * question. Each entry is rebuilt from the rail panel's own label rather than from the
+     * text about to be replaced, so rewriting the count can never eat the name.
      */
     function refreshEngagementCounts(): void {
       if (field === null) return;
-      for (const option of field.querySelectorAll<HTMLOptionElement>(
-        SEL.engagementOption,
-      )) {
-        const code = option.dataset["engagementCode"] ?? "";
-        const panel = findPanel(rail, code);
+      const entries = menuOptions(field).map((option) => {
+        const panel = findPanel(rail, option.value);
         const total =
           panel === null
             ? 0
@@ -1160,8 +1222,12 @@ const staleSentence =
                 (sum, zone) => sum + visibleCardsOf(zone).length,
                 0,
               );
-        option.textContent = `${option.dataset["label"] ?? ""} · ${total}`;
-      }
+        return {
+          value: option.value,
+          label: `${engagementLabel(option.value)} · ${total}`,
+        };
+      });
+      setMenuOptions(field, entries);
     }
 
     function toggleMemberOverflow(trigger: HTMLElement): void {
@@ -2399,6 +2465,112 @@ const staleSentence =
     }
 
     /**
+     * A project was edited somewhere. The one edit this board cannot survive silently is a
+     * conversion: the rail shows one engagement type at a time, so a project that changed type
+     * belongs to another wall and its card here is now a lie.
+     *
+     * Every other field of `project.updated` is left alone on purpose — the card carries a name,
+     * a client, an owner and a due date, and repainting them from a `changes` map is a second
+     * copy of the projection `board-model.ts` owns. The card evaporating is the only failure the
+     * operator cannot recover from on their own, so it is the only one handled here.
+     */
+    function onProjectUpdated(envelope: Envelope): void {
+      lastEventAt = envelope.occurred_at;
+      const changes = envelope.payload["changes"];
+      if (!isRecord(changes)) return;
+      const moved = changes["engagement_type"];
+      if (!isRecord(moved)) return;
+      const to = readString(moved, "to");
+      if (to === null) return;
+
+      const code = envelope.entity.id;
+      const card = findCard(rail, code);
+      if (card === null) return;
+      // The same stale-patch guard every other patch obeys: at-least-once delivery means this
+      // envelope can arrive after a newer read already put the card where it belongs.
+      if (!isNewer(card, envelope.occurred_at)) return;
+      markUpdatedAt(card, envelope.occurred_at);
+
+      const panel = panelOf(card);
+      if (panel === null) return;
+      if ((panel.dataset["engagementCode"] ?? "") === to) return;
+      dropForEngagement(card, code, to, !panel.hidden);
+    }
+
+    /**
+     * The project left this wall: the card goes, on the `carta` spring, and says where it went.
+     *
+     * It is animated out rather than removed — a card that evaporates is exactly what the motion
+     * system exists to prevent — and the notice carries the way back, because the operator who
+     * was looking at that project still needs to reach it. Silent when the card was sitting on a
+     * hidden panel: a toast about a wall nobody is looking at is noise.
+     */
+    function dropForEngagement(
+      card: HTMLElement,
+      code: string,
+      engagementCode: string,
+      announceIt: boolean,
+    ): void {
+      const name = card.querySelector<HTMLElement>(SEL.cardTitle)?.textContent;
+      const label = engagementLabel(engagementCode);
+      const zone = columnOf(card);
+      const siblings =
+        zone === null
+          ? []
+          : cardsOf(zone).filter((candidate) => candidate !== card);
+
+      void leave(card).then(() => {
+        void flip(siblings, () => {
+          card.remove();
+        });
+        if (zone !== null) refreshColumn(zone);
+        refreshEngagementCounts();
+        refreshRoving();
+      });
+
+      if (code === selectedCode) clearSelection({ push: false, focus: false });
+      if (!announceIt) return;
+      toast({
+        kind: "info",
+        title: `«${name ?? code}» pasó a ${label}`,
+        detail: "Ya no está en este tablero.",
+        action: {
+          label: "Ver",
+          onSelect: () => {
+            void navigate(`/projects/${encodeURIComponent(code)}`);
+          },
+        },
+      });
+    }
+
+    /**
+     * How the taxonomy names one engagement type; its bare code when nothing on screen does.
+     *
+     * Read from the rail panel, not from the field: the field's entries carry a count that is
+     * rewritten on every filter change, and a name recovered from text this code also writes
+     * would drift the first time the two disagree.
+     */
+    function engagementLabel(code: string): string {
+      const label = findPanel(rail, code)?.dataset["engagementLabel"] ?? "";
+      return label === "" ? code : label;
+    }
+
+    /** Plays a card out of the wall it no longer belongs to; instant under reduced motion. */
+    async function leave(card: HTMLElement): Promise<void> {
+      if (prefersReducedMotion()) return;
+      const { duration, easing } = sampleSpring("carta");
+      await card
+        .animate(
+          [
+            { opacity: 1, transform: "none" },
+            { opacity: 0, transform: "translateX(-16px) scale(0.96)" },
+          ],
+          { duration, easing, fill: "forwards" },
+        )
+        .finished.catch(() => undefined);
+    }
+
+    /**
      * A task changed state somewhere.
      *
      * Only the selected project's tasks are on screen, and every task payload names its
@@ -2629,11 +2801,6 @@ const staleSentence =
 
     // --- Wiring -------------------------------------------------------------
 
-    function onEngagementChange(): void {
-      if (field === null) return;
-      selectEngagement(field.value, true);
-    }
-
     function onBoardClick(event: MouseEvent): void {
       const target = event.target;
       if (!(target instanceof Element)) return;
@@ -2647,18 +2814,6 @@ const staleSentence =
         const alias = member.dataset["alias"] ?? "";
         applyMemberFilter(
           alias === memberFilter || alias === "" ? null : alias,
-        );
-        return;
-      }
-      if (target.closest("[data-tb-create]") !== null) {
-        // One creation flow, reached from two places. The dialog lives on the project detail
-        // and this button walks the operator to it with `#nueva-tarea`, rather than the board
-        // carrying a second copy: two dialogs would mean two sets of fields, of copy and of
-        // failure handling for the same act, drifting apart the first time either is edited.
-        // Client-side, so the board's selection and scroll survive the trip back.
-        if (selectedCode === null) return;
-        void navigate(
-          `/projects/${encodeURIComponent(selectedCode)}#nueva-tarea`,
         );
         return;
       }
@@ -2703,6 +2858,20 @@ const staleSentence =
 
     function onKeyDown(event: KeyboardEvent): void {
       if (event.key !== "Escape") return;
+      // A modal answers its own Escape. Without this the key that closes the create dialog
+      // would also drop the selection behind it, and the operator would come out of a
+      // cancelled form onto an empty board.
+      const target = event.target;
+      if (target instanceof Element && target.closest("dialog") !== null)
+        return;
+      // So does an open popup. The native `<select>` this field replaced swallowed `Escape`
+      // in the OS layer; now that the panel is ours, `lib/ui/menu.ts` closes it and the same
+      // key must not also drop the project selection behind it.
+      if (
+        target instanceof Element &&
+        target.closest(SEL.engagementControl) !== null
+      )
+        return;
       if (drag !== null) {
         event.preventDefault();
         concludeDrag(drag, { kind: "released" });
@@ -2730,7 +2899,6 @@ const staleSentence =
     board.addEventListener("click", onBoardClick);
     board.addEventListener("click", onCaptureClick, true);
     board.addEventListener("keydown", onBoardKeyDown);
-    if (field !== null) field.addEventListener("change", onEngagementChange);
     document.addEventListener("click", onDocumentClick);
     document.addEventListener("keydown", onKeyDown);
     window.addEventListener("popstate", onPopState);
@@ -2746,7 +2914,51 @@ const staleSentence =
     if (staleAction !== null)
       staleAction.addEventListener("click", onStaleAction);
 
+    /**
+     * The engagement field, on the shared popup grammar.
+     *
+     * `fill` resolves immediately: the entries were server-rendered from the same surfaces the
+     * walls were, so there is nothing to fetch and nothing to wait for. `choose` paints the
+     * choice first and then acts on it, which is also the order `selectEngagement` expects —
+     * it only rewrites the control when the two have drifted.
+     */
+    const offEngagement = mountMenus(board, SEL.engagementControl, {
+      fill: () => Promise.resolve(),
+      choose: (control, item) => {
+        applyMenuChoice(control, item);
+        selectEngagement(item.dataset["value"] ?? "", true);
+        return Promise.resolve();
+      },
+    });
+
+    /**
+     * "Crear tarea", in place: the same dialog the project's task table opens, mounted against
+     * the board's own button and its own selection.
+     *
+     * One implementation, two surfaces (`components/projects/create-task.ts`). The project and
+     * the dependency options are read when the dialog opens, because both are runtime facts
+     * here: the operator picks the project on this screen and can change it without navigating.
+     * On success the board re-reads its tasks rather than reloading — the new card has to land
+     * in its column beside the ones the operator was already moving.
+     */
+    const offCreate =
+      tb.create instanceof HTMLButtonElement
+        ? mountCreateTask({
+            opener: tb.create,
+            projectCode: () => selectedCode ?? "",
+            dependencies: taskDependencyOptions,
+            onCreated: async (code) => {
+              // Guarded: the operator can select another project while the POST is in flight,
+              // and repainting this board with the answer for the one they left is the bug
+              // `claimBoard` exists to prevent.
+              if (selectedCode !== code) return;
+              await refreshTasks(code);
+            },
+          })
+        : (): void => {};
+
     const offState = subscribe("project.state_changed", onProjectStateChanged);
+    const offUpdated = subscribe("project.updated", onProjectUpdated);
     const offPriority = subscribe(
       "project.priority.recalculated",
       onPriorityRecalculated,
@@ -2769,8 +2981,6 @@ const staleSentence =
       board.removeEventListener("click", onBoardClick);
       board.removeEventListener("click", onCaptureClick, true);
       board.removeEventListener("keydown", onBoardKeyDown);
-      if (field !== null)
-        field.removeEventListener("change", onEngagementChange);
       document.removeEventListener("click", onDocumentClick);
       document.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("popstate", onPopState);
@@ -2786,7 +2996,10 @@ const staleSentence =
       if (taskRefreshTimer !== null) window.clearTimeout(taskRefreshTimer);
       claimBoard(null);
       if (drag !== null) concludeDrag(drag, { kind: "released" });
+      offEngagement();
+      offCreate();
       offState();
+      offUpdated();
       offPriority();
       offTaskCreated();
       offTaskUpdated();

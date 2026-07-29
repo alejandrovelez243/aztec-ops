@@ -48,6 +48,15 @@ import {
 } from "../../lib/stream/store";
 import type { Topic } from "../../lib/stream/topics";
 import { toast } from "../../lib/toast";
+import { mountMenus } from "../../lib/ui/menu";
+import {
+  applyMenuChoice,
+  findMenuSelect,
+  menuOptions,
+  menuSelectValue,
+  setMenuOptions,
+  setMenuValue,
+} from "../../lib/ui/menu-select";
 import { assertNever, toViewState, type ViewState } from "../../lib/view-state";
 import {
   alertTone,
@@ -485,6 +494,9 @@ export function mountRoster(root: HTMLElement): () => void {
 
     dialogMode = mode;
     form.reset();
+    // `form.reset()` cannot reach the role picker — it is a button and a panel, not a form
+    // control — so a second open would otherwise start on the previous person's role.
+    setFacet(form, "member-role", "");
     clearFormErrors(form);
 
     const title = form.querySelector<HTMLElement>(
@@ -530,9 +542,9 @@ export function mountRoster(root: HTMLElement): () => void {
     if (label instanceof HTMLInputElement) {
       label.value = row?.dataset.label ?? "";
     }
-    const role = form.elements.namedItem("role");
-    if (role instanceof HTMLSelectElement)
-      role.value = row?.dataset.roleCode ?? "";
+    // A role retired since this page was rendered is not in the picker; `setFacet` leaves it on
+    // "Sin rol" rather than showing a value no option ticks and the server would now reject.
+    setFacet(form, "member-role", row?.dataset.roleCode ?? "");
     const capacity = form.elements.namedItem("weekly_capacity_points");
     if (capacity instanceof HTMLInputElement) {
       capacity.value = row?.dataset.capacity ?? "";
@@ -551,7 +563,8 @@ export function mountRoster(root: HTMLElement): () => void {
     clearFormErrors(form);
     const data = new FormData(form);
     const label = String(data.get("label") ?? "").trim();
-    const role = String(data.get("role") ?? "");
+    // Not in the `FormData`: the role picker is a `MenuSelect`, whose `data-value` is the field.
+    const role = menuSelectValue(form, "member-role");
     const capacity = Number(data.get("weekly_capacity_points"));
 
     const submit = form.querySelector<HTMLButtonElement>(
@@ -701,6 +714,18 @@ export function mountRoster(root: HTMLElement): () => void {
    * the next page load. It also keeps the toolbar facet, the member dialog's select and the
    * dialog's own list from ever showing three different vocabularies.
    */
+  /**
+   * Which arm the roles list is showing.
+   *
+   * A list that is merely slow and a list that is genuinely empty render the
+   * same empty `<ul>`, and an operator reads that as "my roles are gone" — which
+   * is exactly what happened. The flag is what separates the two.
+   */
+  function setRolesState(state: "loading" | "ready" | "empty" | "error"): void {
+    const region = find("[data-roles-region]");
+    if (region !== null) region.dataset.rolesState = state;
+  }
+
   async function refreshRoles(): Promise<void> {
     // Two reads, because they answer two questions: the catalog is what may be *picked* and
     // never contains a retired row, while the editor's list is what exists — and a screen that
@@ -716,7 +741,15 @@ export function mountRoster(root: HTMLElement): () => void {
     if (editor.ok) {
       editable = editor.data;
       renderRoleList();
+      setRolesState(editable.length === 0 ? "empty" : "ready");
+      return;
     }
+    // A failure is not a slow success: leaving the loading arm up would spin
+    // forever and say nothing, which is the same ambiguity this state exists to
+    // remove. The arm goes quiet and `showRolesError` is the only thing left
+    // speaking.
+    setRolesState("error");
+    showRolesError(editor.error);
   }
 
   function renderRoleList(): void {
@@ -759,28 +792,27 @@ export function mountRoster(root: HTMLElement): () => void {
     list.replaceChildren(fragment);
   }
 
-  /** Keeps the toolbar facet and the member form's picker showing the same vocabulary. */
+  /**
+   * Keeps the toolbar facet and the member form's picker showing the same vocabulary.
+   *
+   * Each keeps its own leading entry — "Todos" narrows nothing, "Sin rol" stores nothing — so the
+   * blank option is read back off the control rather than named here, where one word would have
+   * to serve two different questions. A role that was just retired is gone from the list, and
+   * `setMenuOptions` falls the control back to that entry instead of keeping a value the server
+   * would now reject.
+   */
   function renderRolePickers(): void {
-    for (const select of root.querySelectorAll<HTMLSelectElement>(
-      'select[name="role"]',
-    )) {
-      const chosen = select.value;
-      const first = select.options.item(0);
-      const blank = first?.value === "" ? first.textContent : "";
-      select.replaceChildren();
-      const empty = document.createElement("option");
-      empty.value = "";
-      empty.textContent = blank ?? "";
-      select.append(empty);
-      for (const role of roles) {
-        const option = document.createElement("option");
-        option.value = role.code;
-        option.textContent = role.label;
-        select.append(option);
-      }
-      // A role that was just retired is gone from the list, and the select falls back to its
-      // blank option rather than keeping a value the server would now reject.
-      select.value = roles.some((role) => role.code === chosen) ? chosen : "";
+    const controls = [
+      findMenuSelect(root, "role"),
+      findMenuSelect(root, "member-role"),
+    ];
+    for (const control of controls) {
+      if (control === null) continue;
+      const blank = menuOptions(control).find((option) => option.value === "");
+      setMenuOptions(control, [
+        ...(blank === undefined ? [] : [blank]),
+        ...roles.map((role) => ({ value: role.code, label: role.label })),
+      ]);
     }
   }
 
@@ -969,24 +1001,33 @@ export function mountRoster(root: HTMLElement): () => void {
     }, SEARCH_DEBOUNCE_MS);
   }
 
-  function onToolbarChange(event: Event): void {
-    const target = event.target;
-    if (!(target instanceof HTMLSelectElement)) return;
-    if (target.name === "role") {
-      applyQuery({ ...query, role: target.value === "" ? null : target.value });
+  /**
+   * A choice in any picker on the surface: the three toolbar facets narrow the roster, the
+   * dialog's role is only painted.
+   *
+   * The paint comes first and unconditionally, because a `MenuSelect` has no hidden input: its
+   * `data-value` is the field, so a control left unpainted holds the previous answer while
+   * displaying the new one.
+   */
+  function chooseMenu(control: HTMLElement, item: HTMLElement): void {
+    applyMenuChoice(control, item);
+    const value = item.dataset["value"] ?? "";
+
+    if (control.dataset["facet"] === "role") {
+      applyQuery({ ...query, role: value === "" ? null : value });
       return;
     }
-    if (target.name === "status") {
-      const next = queryFromParams(
-        new URLSearchParams(`status=${target.value}`),
-      );
+    if (control.dataset["facet"] === "status") {
+      // Narrowed by the same parser the URL goes through, so an unknown value falls back to the
+      // default status here exactly as it would on a shared link.
+      const next = queryFromParams(new URLSearchParams(`status=${value}`));
       applyQuery({ ...query, status: next.status });
       return;
     }
-    if (target.name !== "overloaded") return;
+    if (control.dataset["facet"] !== "overloaded") return;
     applyQuery({
       ...query,
-      overloaded: target.value === "" ? null : target.value === "true",
+      overloaded: value === "" ? null : value === "true",
     });
   }
 
@@ -1030,6 +1071,10 @@ export function mountRoster(root: HTMLElement): () => void {
     }
     if (action === "roles") {
       showRolesError(null);
+      // Reset to loading on every open: the previous answer belongs to the
+      // previous open, and showing it while a new read is in flight would date
+      // the list without saying so.
+      setRolesState("loading");
       find<HTMLDialogElement>("[data-roles-dialog]")?.showModal();
       // Opened first, filled second: the dialog appears immediately and the list arrives, rather
       // than the button doing nothing visible while a request is in flight.
@@ -1078,14 +1123,17 @@ export function mountRoster(root: HTMLElement): () => void {
     if (toolbar === null) return;
     const search = toolbar.elements.namedItem("q");
     if (search instanceof HTMLInputElement) search.value = "";
-    const role = toolbar.elements.namedItem("role");
-    if (role instanceof HTMLSelectElement) role.value = "";
-    const statusField = toolbar.elements.namedItem("status");
-    if (statusField instanceof HTMLSelectElement) {
-      statusField.value = DEFAULT_QUERY.status;
-    }
-    const overloaded = toolbar.elements.namedItem("overloaded");
-    if (overloaded instanceof HTMLSelectElement) overloaded.value = "";
+    // The pickers are not form controls, so `elements` does not carry them and a `reset()` would
+    // not reach them: each is put back by writing its value.
+    setFacet(toolbar, "role", "");
+    setFacet(toolbar, "status", DEFAULT_QUERY.status);
+    setFacet(toolbar, "overloaded", "");
+  }
+
+  /** Puts one picker back to `value`, if the surface renders it. */
+  function setFacet(scope: ParentNode, facet: string, value: string): void {
+    const control = findMenuSelect(scope, facet);
+    if (control !== null) setMenuValue(control, value);
   }
 
   function onSubmit(event: SubmitEvent): void {
@@ -1155,7 +1203,17 @@ export function mountRoster(root: HTMLElement): () => void {
   root.addEventListener("keydown", onRoleKeydown);
   const toolbar = find("[data-roster-toolbar]");
   toolbar?.addEventListener("input", onToolbarInput);
-  toolbar?.addEventListener("change", onToolbarChange);
+  // One popup grammar for every picker on the surface — the three facets and the member form's
+  // role — mounted on the region so a dialog opened later is operable without a second mount.
+  cleanups.push(
+    mountMenus(root, "[data-menu-select]", {
+      fill: () => Promise.resolve(),
+      choose: (control, item) => {
+        chooseMenu(control, item);
+        return Promise.resolve();
+      },
+    }),
+  );
 
   for (const dialog of root.querySelectorAll<HTMLDialogElement>("dialog")) {
     dialog.addEventListener("click", (event) => {
@@ -1191,7 +1249,6 @@ export function mountRoster(root: HTMLElement): () => void {
     root.removeEventListener("input", onRoleInput);
     root.removeEventListener("keydown", onRoleKeydown);
     toolbar?.removeEventListener("input", onToolbarInput);
-    toolbar?.removeEventListener("change", onToolbarChange);
     if (refreshTimer !== null) window.clearTimeout(refreshTimer);
     if (searchTimer !== null) window.clearTimeout(searchTimer);
     // Invalidates any response still in flight: it must not render into the next page.
@@ -1207,15 +1264,15 @@ export function mountRoster(root: HTMLElement): () => void {
  * only possible outcome is the same answer.
  */
 function readRenderedRoles(root: HTMLElement): readonly TaxonomyRef[] {
-  const select = root.querySelector<HTMLSelectElement>(
-    '[data-roster-toolbar] select[name="role"]',
-  );
-  if (select === null) return [];
-  return [...select.options]
+  const toolbar = root.querySelector<HTMLElement>("[data-roster-toolbar]");
+  const control = toolbar === null ? null : findMenuSelect(toolbar, "role");
+  if (control === null) return [];
+  // The leading "Todos" is the absence of a filter, not a role somebody can hold.
+  return menuOptions(control)
     .filter((option) => option.value !== "")
     .map((option) => ({
       code: option.value,
-      label: option.textContent ?? option.value,
+      label: option.label,
       color: null,
     }));
 }

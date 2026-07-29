@@ -1,0 +1,236 @@
+---
+/**
+ * The form that creates a lifecycle and the form that renames one — the same dialog, because
+ * they ask about the same object.
+ *
+ * The difference is *editability*, not fields: `code` and `applies_to` are the graph's address
+ * and the kind of record it governs, and neither is writable afterwards — the first is what every
+ * binding names it by, the second would leave the records already inside governed by a lifecycle
+ * claiming to govern something else. On a rename those two are simply not asked for.
+ *
+ * A modal, and one of the three cases `DESIGN.md` grants: a short self-contained act started
+ * deliberately from a button, on a surface with no room to carry a four-field form permanently.
+ * A real `<dialog>` opened with `showModal()`, so modality, `Escape`, the focus trap and the
+ * backdrop are the platform's.
+ *
+ * Field-level failures are rendered from what the API returned, never guessed here: the server
+ * decides that a code is taken or an engagement type already bound, and a second opinion in the
+ * browser is a rule that goes stale the day the backend's changes.
+ */
+import Icon from "../ui/Icon.astro";
+import GraphPicker from "./GraphPicker.astro";
+import { APPLIES_TO_CHOICES } from "./authoring";
+import type { TaxonomyRef } from "../../lib/api/domain";
+
+export interface Props {
+  /**
+   * The engagement types a new graph may be bound to.
+   *
+   * From the catalog the page already read; empty is a legitimate first paint — the fieldset
+   * then says so rather than rendering an empty box, and the graph is still creatable as the
+   * per-kind default.
+   */
+  engagementTypes: readonly TaxonomyRef[];
+}
+
+const { engagementTypes } = Astro.props;
+---
+
+<dialog
+  class="dialog"
+  data-workflow-dialog
+  aria-labelledby="workflow-dialog-title"
+>
+  <form data-workflow-form novalidate>
+    <h2 class="h2" id="workflow-dialog-title" data-field="wf-dialog-title">
+      Nuevo flujo
+    </h2>
+    <p class="small lead" data-field="wf-dialog-lead">
+      Un flujo nace vacío: primero se crea, después se le añaden los estados y
+      los movimientos, uno a uno.
+    </p>
+
+    <label class="field" data-field="wf-code-field">
+      <span class="label">Código</span>
+      <input
+        class="input"
+        name="code"
+        maxlength="32"
+        required
+        autocomplete="off"
+        placeholder="Ej.: entrega_cliente"
+      />
+      <span class="small hint">
+        Es la dirección permanente del flujo: no se puede cambiar después.
+      </span>
+    </label>
+
+    <p class="field" data-field="wf-code-line" hidden>
+      <span class="label">Código</span>
+      <code class="chip chip-code" data-field="wf-code-value"></code>
+    </p>
+
+    <label class="field">
+      <span class="label">Nombre</span>
+      <input
+        class="input"
+        name="name"
+        maxlength="96"
+        required
+        autocomplete="off"
+        placeholder="Ej.: Entrega a cliente"
+      />
+      <span class="small hint"
+        >Lo que se lee en pantalla; se puede corregir cuando quieras.</span
+      >
+    </label>
+
+    <div class="field" data-field="wf-applies-field">
+      <GraphPicker
+        facet="wf-applies"
+        label="Aplica a"
+        options={APPLIES_TO_CHOICES}
+        value="PROJECT"
+        placeholder="Proyectos"
+        hint="Qué clase de registro gobierna este ciclo de vida. Tampoco cambia después."
+      />
+    </div>
+
+    <fieldset class="field types" data-field="wf-types-field">
+      <legend class="label">Tipos de encargo</legend>
+      {
+        engagementTypes.length === 0 ? (
+          <p class="small hint">
+            Todavía no hay tipos de encargo en el catálogo. El flujo se crea
+            igual y queda disponible como el predeterminado de su clase.
+          </p>
+        ) : (
+          <>
+            <p class="small hint">
+              El trabajo de estos tipos seguirá este flujo. Un tipo solo puede
+              nombrar un flujo por clase de registro.
+            </p>
+            <ul class="type-list">
+              {engagementTypes.map((type) => (
+                <li>
+                  <label class="check">
+                    <input
+                      type="checkbox"
+                      name="engagement_types"
+                      value={type.code}
+                    />
+                    {/* The label and not the code: this is a person choosing a kind of work,
+                        and a slug beside every line is the payload leaking into the form. */}
+                    <span lang="es">{type.label}</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </>
+        )
+      }
+    </fieldset>
+
+    <p class="small error" data-field="wf-error" hidden></p>
+
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" type="button" data-action="close-dialog">
+        Cancelar
+      </button>
+      <button
+        class="btn btn-primary"
+        type="submit"
+        data-action="submit-workflow"
+      >
+        <Icon name="check" size={16} />
+        <span data-field="wf-submit">Crear flujo</span>
+      </button>
+    </div>
+  </form>
+</dialog>
+
+<style>
+  .dialog {
+    width: min(560px, calc(100vw - var(--space-6)));
+    padding: var(--space-5);
+    border: var(--border-width) solid var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--carta);
+    box-shadow: var(--shadow-lifted);
+    color: var(--tinta);
+  }
+
+  .dialog::backdrop {
+    background-color: var(--scrim);
+  }
+
+  .dialog form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .lead {
+    color: var(--tinta-media);
+  }
+
+  /* `.field` sets `display: flex`, and an author rule beats the user agent's
+     `[hidden] { display: none }` — without this the fields hidden on a rename would render
+     anyway. */
+  .field[hidden],
+  .error[hidden] {
+    display: none;
+  }
+
+  .types {
+    border: 0;
+    padding: 0;
+    margin: 0;
+  }
+
+  .type-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: var(--space-1) var(--space-3);
+    margin-top: var(--space-2);
+    padding: 0;
+    list-style: none;
+  }
+
+  /* Both `min-width: 0`s are load-bearing: a grid item and a flex item are each floored by
+     their own min-content, so one long taxonomy label made the dialog scroll sideways. */
+  .type-list li {
+    min-width: 0;
+  }
+
+  .check {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    min-height: 32px;
+    font-size: var(--text-small-size);
+  }
+
+  .check input {
+    accent-color: var(--cobalto);
+    width: 16px;
+    height: 16px;
+    flex: none;
+  }
+
+  .hint {
+    color: var(--tinta-media);
+  }
+
+  .error {
+    color: var(--rojo-ink);
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+</style>

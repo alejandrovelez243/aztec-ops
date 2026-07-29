@@ -16,6 +16,15 @@
  * Nothing in this module talks to the network or decides policy; it reads and writes DOM.
  */
 
+/**
+ * The `MenuSelect` facet the engagement field is mounted under.
+ *
+ * Read by three places that must agree: the component that renders the control, the inline
+ * pre-paint script that restores the stored choice, and the island that owns every later
+ * switch. `lib/ui/menu-select.ts` looks the control up by this string.
+ */
+export const ENGAGEMENT_FACET = "engagement";
+
 /** Attribute selectors of the board. Change a name here and every caller follows. */
 export const SEL = {
   board: "[data-board]",
@@ -49,8 +58,8 @@ export const SEL = {
   staleBanner: "[data-board-stale]",
   staleText: "[data-board-stale-text]",
   staleAction: "[data-board-stale-action]",
-  engagementSelect: "[data-engagement-select]",
-  engagementOption: "[data-engagement-option]",
+  /** The engagement field: a `MenuSelect`, never a `<select>` (`FRONTEND.md` §10). */
+  engagementControl: `[data-menu-select][data-facet="${ENGAGEMENT_FACET}"]`,
   member: "[data-member]",
   membersMore: "[data-members-more]",
 } as const;
