@@ -154,6 +154,10 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Serves /static/ from the ASGI process. Django only serves static files itself through
+    # `runserver`, and the API runs under uvicorn because SSE needs ASGI — so without this the
+    # admin loads with no CSS and no JS, which is exactly how it failed the first time.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     # Ahead of CommonMiddleware, which is what django-cors-headers requires: a redirect issued by
     # CommonMiddleware (APPEND_SLASH) would otherwise leave the origin without CORS headers, and
@@ -199,6 +203,24 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+
+#: Outside production, WhiteNoise reads through the staticfiles finders, so the admin works from a
+#: clean checkout without anyone remembering to run `collectstatic`. In production that is off and
+#: the manifest storage below takes over, which fingerprints every file and fails loudly on a
+#: missing one instead of serving a 404 into a stylesheet.
+WHITENOISE_USE_FINDERS = not settings.is_production
+WHITENOISE_AUTOREFRESH = not settings.is_production
+
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": (
+            "whitenoise.storage.CompressedManifestStaticFilesStorage"
+            if settings.is_production
+            else "django.contrib.staticfiles.storage.StaticFilesStorage"
+        )
+    },
+}
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 #: Set on day one. Changing it after the first migration means hand-written surgery

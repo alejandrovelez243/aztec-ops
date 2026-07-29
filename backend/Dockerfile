@@ -72,6 +72,16 @@ EXPOSE 8000
 # --- runtime (production) ------------------------------------------------------------
 FROM base AS runtime
 COPY --from=builder --chown=app:app /opt/venv /opt/venv
+
+# Collected at BUILD time, not at start: the manifest storage fingerprints every file and raises
+# on a missing one, so a broken asset fails the build instead of shipping an admin with no CSS.
+# Outside production WHITENOISE_USE_FINDERS serves straight from the finders, so the dev stage
+# needs none of this. A placeholder key is enough — settings are only imported, never used to
+# reach the database.
+RUN DJANGO_SECRET_KEY=build-time-only-not-used-at-runtime \
+    ENVIRONMENT=production \
+    python manage.py collectstatic --noinput --clear
+
 CMD ["uvicorn", "config.asgi:application", "--host", "0.0.0.0", "--port", "8000"]
 
 # --- dev (local compose) -------------------------------------------------------------
