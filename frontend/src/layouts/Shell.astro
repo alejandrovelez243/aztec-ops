@@ -30,14 +30,17 @@ export interface Crumb {
   href?: string;
 }
 
-/** Keys of the sidebar destinations; `active` highlights one. */
+/**
+ * Keys of the sidebar destinations; `active` highlights one. Keys and routes
+ * are English, the labels beside them Spanish (CLAUDE.md §Language).
+ */
 export type NavKey =
-  | "resumen"
-  | "prioridades"
-  | "proyectos"
-  | "tablero"
-  | "equipo"
-  | "actividad";
+  | "overview"
+  | "priorities"
+  | "projects"
+  | "board"
+  | "team"
+  | "activity";
 
 export interface Props {
   /** Document title, rendered as `<title>{title} — Aztec Ops</title>`. */
@@ -51,12 +54,12 @@ export interface Props {
 const { title, active, crumbs = [] } = Astro.props;
 
 const NAV: ReadonlyArray<{ key: NavKey; label: string; href: string; icon: IconName }> = [
-  { key: "resumen", label: "Resumen", href: "/", icon: "home" },
-  { key: "prioridades", label: "Prioridades", href: "/prioridades", icon: "flag" },
-  { key: "proyectos", label: "Proyectos", href: "/proyectos", icon: "folder" },
-  { key: "tablero", label: "Tablero", href: "/tablero", icon: "board" },
-  { key: "equipo", label: "Equipo", href: "/equipo", icon: "users" },
-  { key: "actividad", label: "Actividad", href: "/actividad", icon: "pulse" },
+  { key: "overview", label: "Resumen", href: "/", icon: "home" },
+  { key: "priorities", label: "Prioridades", href: "/priorities", icon: "flag" },
+  { key: "projects", label: "Proyectos", href: "/projects", icon: "folder" },
+  { key: "board", label: "Tablero", href: "/board", icon: "board" },
+  { key: "team", label: "Equipo", href: "/team", icon: "users" },
+  { key: "activity", label: "Actividad", href: "/activity", icon: "pulse" },
 ];
 
 /** Where the back button goes when the tab has no history: the parent crumb. */

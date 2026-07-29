@@ -588,6 +588,38 @@ timer.
 - If the loop only happens with the app open in several tabs, check the per-origin connection cap:
   one connection per tab is expected, one per island is a bug.
 
+## 12b. The frontend container crash-loops with "Another astro dev server is already running"
+
+**Symptom.** `make up` brings everything else up, but `frontend` restarts over and over, logging:
+
+```
+Another astro dev server is already running.
+  URL:  http://localhost:4321
+  PID:  18
+```
+
+The pid is always the same small number, and nothing is actually listening on 4321.
+
+**Cause.** Astro records the dev server's pid in `frontend/.astro/dev.json`. That path is inside
+the bind-mounted source tree, so the file outlives the container that wrote it — a `stop`, a
+crash or a `SIGKILL` never gets to remove it. The next container numbers its own processes from 1
+again, the recorded pid names a live process there, and Astro refuses to start. `restart:
+on-failure:5` turns that refusal into a loop.
+
+**Fix.** Already in the image: the frontend `CMD` deletes `.astro/dev.json` before starting the
+dev server. One container runs exactly one dev server, so a lock present at startup can only be
+stale. If you hit this on an image built before that change, rebuild it:
+
+```bash
+rm -f frontend/.astro/dev.json
+docker compose build frontend && docker compose up -d --force-recreate frontend
+```
+
+**Do not use `astro dev --force` here.** Its remedy is to kill the recorded pid, which inside the
+new container is Astro's own npm parent: the server shuts itself down on startup, exiting with
+`npm error signal SIGTERM` instead of the lock message. That is a worse failure, because it looks
+like an unrelated crash.
+
 ## 13. `loaddata` fails on a foreign key, or appears to duplicate rows
 
 **Symptom A.** `DeserializationError: Problem installing fixture ... matching query does not exist`.

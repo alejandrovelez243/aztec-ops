@@ -6,11 +6,10 @@
 # 20. The container owns the runtime precisely so that mismatch stops being a problem anybody has
 # to solve on their machine.
 #
-# The Astro source does not exist yet. This file is written so it *builds* today anyway: the
-# dependency install is guarded, so an empty frontend/ produces a valid image instead of a broken
-# build, and the failure — if you start it before scaffolding — happens at run time with a message
-# that says exactly what to do. The compose `frontend` service stays commented out until
-# `npm create astro@latest` has run; see the note in docker-compose.yml.
+# One target, `dev`, because this stack is the local stack: `astro build` output is served by a
+# static host in a deploy, not by this image. The start-up sequence lives in docker-entrypoint.sh
+# rather than in a compose `command` — the compose file names the service, the image knows how it
+# starts.
 
 FROM node:22-alpine AS dev
 
@@ -27,21 +26,19 @@ WORKDIR /app
 RUN chown -R node:node /app
 USER node
 
-COPY --chown=node:node . /app
+# Manifest and lockfile first, in their own layer: application code changes far more often than
+# the dependency set, so this layer survives almost every rebuild. `npm ci` and nothing else — the
+# image matches package-lock.json exactly or it does not build.
+COPY --chown=node:node package.json package-lock.json ./
+RUN npm ci
 
-# npm ci when there is a lockfile, npm install when there is only a manifest, nothing when the
-# project has not been scaffolded. `set -e` is implicit in the shell form here: any npm failure
-# still fails the build — the guard skips work that is impossible, it never swallows an error.
-RUN if [ -f package-lock.json ]; then \
-        npm ci; \
-    elif [ -f package.json ]; then \
-        npm install; \
-    else \
-        echo "No package.json in frontend/ — image built without dependencies."; \
-    fi
+# Copied to /usr/local/bin, not left under /app: Compose bind-mounts the host's ./frontend over
+# /app, and a mount hides everything beneath it.
+COPY --chown=node:node docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+COPY --chown=node:node . /app
 
 EXPOSE 4321
 
-# Fails loudly and legibly if the project was never scaffolded, rather than exiting with a bare
-# npm error nobody can act on.
-CMD ["sh", "-c", "test -f package.json || { echo 'frontend/ has no package.json. Run: npm create astro@latest frontend'; exit 1; }; npm run dev -- --host 0.0.0.0 --port 4321"]
+ENTRYPOINT ["docker-entrypoint.sh"]

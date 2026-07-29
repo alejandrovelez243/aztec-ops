@@ -153,7 +153,12 @@ a reviewer should never have to.
 ## Language
 
 All code, comments, documentation, agents, skills, commit messages and identifiers are in
-**English**. User-facing labels stored in the database may be in Spanish; that is data, not code.
+**English**. That includes file and directory names, and **URL paths** — `/projects`,
+`/priorities`, `/board`, never `/proyectos`.
+
+What is in **Spanish** is what a person reads on screen: labels, headings, button text, empty
+states, error copy, and the user-facing labels stored in the database. The rule is one line:
+the machine speaks English, the interface speaks Spanish.
 
 ## Commands
 

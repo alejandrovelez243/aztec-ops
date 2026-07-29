@@ -57,6 +57,14 @@ x-django-env: &django-env
   EVENT_MAX_ATTEMPTS: ${EVENT_MAX_ATTEMPTS:-5}
   EVENT_DRAIN_INTERVAL_SECONDS: ${EVENT_DRAIN_INTERVAL_SECONDS:-5}
   EVENT_DRAIN_BATCH_SIZE: ${EVENT_DRAIN_BATCH_SIZE:-100}
+  # Seed credentials. These MUST be forwarded or `bootstrap`'s seed silently creates no admin and
+  # leaves every seeded member unable to sign in — the README tells people to set them in .env, and
+  # without these four lines that instruction is a lie. Empty defaults on purpose: a default that
+  # works is a hardcoded credential, and this repository is public.
+  SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-}
+  DJANGO_SUPERUSER_USERNAME: ${DJANGO_SUPERUSER_USERNAME:-}
+  DJANGO_SUPERUSER_PASSWORD: ${DJANGO_SUPERUSER_PASSWORD:-}
+  DJANGO_SUPERUSER_EMAIL: ${DJANGO_SUPERUSER_EMAIL:-}
   PYTHONUNBUFFERED: "1"
 
 x-django-depends: &django-depends
@@ -74,8 +82,8 @@ x-django-depends-migrated: &django-depends-migrated
     condition: service_healthy
   redis:
     condition: service_healthy
-  api:
-    condition: service_started
+  bootstrap:
+    condition: service_completed_successfully
 
 # A service that has failed five times running is broken, not unlucky. Stopping makes the failure
 # visible in `docker compose ps` instead of burying it under an endless restart log.
@@ -127,35 +135,47 @@ services:
 
   # --- application -----------------------------------------------------------------------------
 
-  api:
+  # Runs once and exits. Everything else waits for it to exit 0, which is why no service needs a
+  # healthcheck to get the ordering right and why nothing crash-loops against a schema that does
+  # not exist yet. It also means migrations run in exactly one place: if `api` were ever scaled to
+  # two replicas, having it migrate would have both replicas migrating the same database at once.
+  # `&&` so a failed migration fails the bootstrap, and a failed bootstrap stops the whole stack
+  # instead of serving a half-loaded database.
+  bootstrap:
     <<: *django-image
     environment: *django-env
     depends_on: *django-depends
-    # ASGI, not WSGI, and not negotiable: `GET /api/stream` holds a connection open per dashboard,
-    # and a WSGI worker holds a whole thread for each one. Ten open tabs would exhaust the pool.
-    # Migrations run here, once, before the port is bound — so `make up` leaves a schema that is
-    # ready and `&&` means a failed migration stops the container instead of serving a broken one.
-    # Migrate then seed, both before the port is bound, so `make up` leaves a schema that is ready
-    # AND a portfolio that is scored — one command from a clean clone to a usable board. `seed` is
-    # idempotent (fixtures carry stable primary keys, so loaddata upserts), which is what makes it
-    # safe on every restart rather than only the first.
-    # This lives in the compose command and NOT in the Dockerfile CMD on purpose: the production
-    # image must never seed itself on boot.
-    # `&&` means a failed migration or a failed seed stops the container instead of serving a
-    # half-loaded database.
     command: >
       sh -c "python manage.py migrate --noinput &&
-             python manage.py seed &&
-             exec uvicorn config.asgi:application --host 0.0.0.0 --port 8000 --reload"
+             python manage.py seed"
+    volumes:
+      # The same bind mount api, worker and beat use. Without it this service runs the code baked
+      # into the image while every other service runs the working tree, so a new migration or an
+      # edited fixture would need a rebuild to take effect — and the mismatch is invisible, because
+      # the seed still reports success while applying the wrong version.
+      - ./backend:/app
+    restart: "no"
+
+  api:
+    <<: *django-image
+    environment: *django-env
+    depends_on: *django-depends-migrated
+    # ASGI, not WSGI, and not negotiable: `GET /api/stream` holds a connection open per dashboard,
+    # and a WSGI worker holds a whole thread for each one. Ten open tabs would exhaust the pool.
+    # It no longer migrates: `bootstrap` did that and this service does not start until it exited 0.
+    command: >
+      sh -c "exec uvicorn config.asgi:application --host 0.0.0.0 --port 8000 --reload"
     ports:
       - "${API_PORT:-8000}:8000"
     volumes:
       # Source is bind-mounted for --reload. The virtualenv lives at /opt/venv precisely so this
       # mount cannot hide it.
       - ./backend:/app
-    # No container healthcheck. `/api/v1/health/live` and `/api/v1/health/ready` still exist and are
-    # what an orchestrator or a load balancer should probe; Compose does not need to duplicate them
-    # to run the stack locally.
+    # No container healthcheck on purpose. Startup ordering comes from `bootstrap` exiting 0, not
+    # from polling, so nothing here needs one — and the image ships neither curl nor wget, so a
+    # probe would mean adding a package to the runtime for something the ordering already solves.
+    # `/api/v1/health/live`, `/ready` and `/pipeline` still exist and are what a real orchestrator
+    # or load balancer should probe.
     restart: *restart
 
   worker:

@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 32 32">
-  <!-- Aztec Ops mark: three cards on the wall (DESIGN.md, "El Muro"). -->
-  <rect x="3" y="11" width="19" height="14" rx="4" fill="#EAEDFC" />
-  <rect x="7" y="7" width="19" height="14" rx="4" fill="#2545DE" opacity="0.38" />
-  <rect x="11" y="3" width="19" height="14" rx="4" fill="#2545DE" />
-</svg>

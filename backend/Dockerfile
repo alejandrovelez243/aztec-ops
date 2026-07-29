@@ -63,11 +63,22 @@ RUN groupadd --gid 1000 app \
 
 WORKDIR /app
 
+# Copied to /usr/local/bin, not left under /app: Compose bind-mounts the host's ./backend over
+# /app, and a mount hides everything beneath it. An entrypoint that can be shadowed by a mount is
+# an entrypoint that runs a different version than the one this image was built from.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
 COPY --chown=app:app . /app
 
 USER app
 
 EXPOSE 8000
+
+# The image owns the start-up sequence for each role; compose only names the role. `api` migrates
+# and serves, `worker` and `beat` run Celery, anything else is executed verbatim.
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["api"]
 
 # --- runtime (production) ------------------------------------------------------------
 FROM base AS runtime
@@ -82,9 +93,10 @@ RUN DJANGO_SECRET_KEY=build-time-only-not-used-at-runtime \
     ENVIRONMENT=production \
     python manage.py collectstatic --noinput --clear
 
-CMD ["uvicorn", "config.asgi:application", "--host", "0.0.0.0", "--port", "8000"]
-
 # --- dev (local compose) -------------------------------------------------------------
 FROM base AS dev
 COPY --from=builder-dev --chown=app:app /opt/venv /opt/venv
-CMD ["uvicorn", "config.asgi:application", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+# Reload is a property of this image, not of the compose file: the same `command: ["api"]` that
+# hot-reloads here serves without a watcher from the runtime target.
+ENV UVICORN_RELOAD=true
