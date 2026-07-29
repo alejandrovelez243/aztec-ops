@@ -1,0 +1,138 @@
+---
+import type { ProjectPlacement } from "./board-model";
+
+/**
+ * The empty slot at the foot of a band's well: a card-shaped invitation to put a new project
+ * *in this state*.
+ *
+ * A ghost card and not a "+" button, because the rail is a wall of objects: on a wall you do
+ * not press a control to fill a zone, you place a card into it. It has the geometry of
+ * `ProjectCard` — same padding, same radius, same track — drawn as a hairline dashed outline
+ * over the well the band already paints, which is also what makes it read as *the next card*
+ * rather than as a toolbar that wandered into the list. This is DESIGN.md's rule that
+ * expansions happen in place.
+ *
+ * **A blocked band still renders it, visibly dead.** The reason is Spanish, it reaches a
+ * pointer as `title` and a screen reader through `aria-describedby`, and the control is never
+ * hidden: a capability that disappears teaches the operator it does not exist
+ * (`docs/standards/FRONTEND.md` §8, §10).
+ *
+ * Presentational. Pressing it is answered by `islands/BoardCanvas.astro`, which reads the
+ * placement back off these `data-*` attributes and dispatches the create-project event; this
+ * component neither fetches nor decides legality — `placementFor` in `board-model.ts` did.
+ */
+export interface Props {
+  /** The band's answer to "can a new project start here", already decided server-side. */
+  placement: ProjectPlacement;
+  /**
+   * The engagement type this band belongs to, used only to keep the description's `id` unique:
+   * every panel of the rail draws the same state codes, one panel per type.
+   */
+  engagementCode: string;
+  /**
+   * Why creation is off for the whole board — no clients, a failed catalog — or `null`.
+   *
+   * It outranks the placement: with nothing to register a project against, no band can receive
+   * one, and the reason the operator needs is that one and not the workflow's.
+   */
+  blockedReason?: string | null;
+}
+
+const { placement, engagementCode, blockedReason = null } = Astro.props;
+
+const reason =
+  blockedReason ?? (placement.kind === "blocked" ? placement.reason : null);
+const reasonId =
+  reason === null
+    ? undefined
+    : `ghost-${engagementCode}-${placement.stateCode}`;
+
+/**
+ * The one-hop facts, flattened onto the element.
+ *
+ * Discrete attributes rather than a JSON blob, so the island reads strings it can narrow
+ * instead of parsing `unknown` — the only place this codebase tolerates that is the SSE line.
+ */
+const hop = placement.kind === "one-hop" ? placement : null;
+---
+
+<button
+  class="ghost"
+  type="button"
+  data-ghost-card
+  data-placement={placement.kind}
+  data-state-code={placement.stateCode}
+  data-state-label={placement.stateLabel}
+  data-transition-label={hop?.transitionLabel}
+  data-requires-reason={hop === null ? undefined : String(hop.requiresReason)}
+  data-requires-fields={hop?.requiresFields.join(",")}
+  disabled={reason !== null}
+  title={reason}
+  aria-describedby={reasonId}
+  lang="es"
+>
+  <span class="ghost-plus" aria-hidden="true">+</span>
+  Nuevo proyecto aquí
+</button>
+{
+  reason !== null && (
+    <span class="visually-hidden" id={reasonId}>
+      {reason}
+    </span>
+  )
+}
+
+<style>
+  /* The geometry of `ProjectCard`: same inset, same radius, same full-width track — so the
+     slot sits in the stack as the card that is not there yet. Filled with the well's own
+     colour rather than `--carta`: it is a hole in the zone, not a sheet resting on it. */
+  .ghost {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: var(--space-3);
+    border: var(--border-width) dashed var(--hairline);
+    border-radius: var(--radius-card);
+    background-color: var(--pozo);
+    color: var(--tinta-media);
+    font-size: var(--text-small-size);
+    text-align: center;
+    cursor: pointer;
+    transition:
+      border-color var(--motion-micro-duration) var(--motion-micro-ease),
+      color var(--motion-micro-duration) var(--motion-micro-ease);
+  }
+
+  .ghost-plus {
+    font-size: var(--text-title-size);
+    line-height: 1;
+  }
+
+  .ghost:hover:not(:disabled),
+  .ghost:focus-visible {
+    border-color: var(--cobalto);
+    color: var(--cobalto);
+  }
+
+  /* Focus is a border shift, never a shadow (DESIGN.md, Inset-Not-Raised). */
+  .ghost:focus-visible {
+    outline: none;
+    border-style: solid;
+  }
+
+  /* Dead, and still legible: the operator has to be able to read the state that refuses. */
+  .ghost:disabled {
+    border-color: var(--hairline);
+    color: var(--tinta-suave);
+    cursor: not-allowed;
+  }
+
+  /* A carried card owns the well while a drag is in flight; the slot steps back so it is not
+     mistaken for a drop target it cannot be. */
+  :global(html[data-board-dragging="true"]) .ghost {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+</style>

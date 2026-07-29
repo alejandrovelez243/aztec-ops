@@ -2,6 +2,7 @@
 import type { RailSectionModel } from "./board-model";
 import Icon from "../ui/Icon.astro";
 import ProjectCard from "./ProjectCard.astro";
+import ProjectGhostCard from "./ProjectGhostCard.astro";
 
 /**
  * One PROJECT workflow state as a band of the rail: a labelled header over a sunken well of
@@ -27,11 +28,20 @@ import ProjectCard from "./ProjectCard.astro";
  */
 export interface Props {
   section: RailSectionModel;
+  /** The engagement type this band belongs to; only the ghost slot's ids need it. */
+  engagementCode: string;
   /** The project rendered as selected, when it happens to live in this state. */
   selectedCode?: string | null;
+  /** Why no band of this board can receive a new project, when that is the case. */
+  createBlockedReason?: string | null;
 }
 
-const { section, selectedCode = null } = Astro.props;
+const {
+  section,
+  engagementCode,
+  selectedCode = null,
+  createBlockedReason = null,
+} = Astro.props;
 const { state, tone, cards } = section;
 const headingId = `rail-${state.code}`;
 ---
@@ -88,6 +98,17 @@ const headingId = `rail-${state.code}`;
     >
       Sin proyectos en este estado.
     </p>
+    {
+      /* Last in the well, after the empty line so an unoccupied band reads as a sentence and
+        then an invitation rather than as a lone control with no context. Outside
+        `[data-column-body]`: that element is the `grid`, which may own rows and nothing else,
+        and it is also where the runtime appends drop slots. */
+    }
+    <ProjectGhostCard
+      placement={section.placement}
+      engagementCode={engagementCode}
+      blockedReason={createBlockedReason}
+    />
   </div>
 </section>
 

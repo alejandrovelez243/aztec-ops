@@ -2,9 +2,10 @@
  * The live half of `CreateProjectDialog.astro`: the controls that are not form
  * fields, the guards that run before any request, and the one POST.
  *
- * **Nothing is fetched here.** Every option in the sheet was rendered by
- * `/projects` in its frontmatter, so this module has no loading arm and no
- * moment where the operator faces an empty picker — the same contract
+ * **Nothing is fetched here.** Every option in the sheet was rendered by the
+ * page that hosts it — `/projects` or `/board` — in its frontmatter, so this
+ * module has no loading arm and no moment where the operator faces an empty
+ * picker — the same contract
  * `create-task.ts` keeps. What it owns is the four `MenuSelect`s and the two
  * `DateField`s, which report their answers through the DOM rather than through a
  * `name`, so they are read off the control and `FormData` is left to the real
@@ -19,31 +20,69 @@
  * **The opening protocol is one document-level event.** Any surface that wants
  * to offer creation dispatches {@link CREATE_PROJECT_EVENT} or renders a
  * `[data-action='open-create-project']` button; neither has to import this
- * module, and this module does not have to know they exist.
+ * module, and this module does not have to know they exist. The event carries a
+ * {@link CreateProjectPlacement} when the surface has one — a band of the
+ * board's rail does — and creation then becomes two acts: the POST, and one
+ * transition onto the state the operator pressed.
+ *
+ * **The move is re-checked against the record, never against the graph.** The
+ * band was drawn from `GET /api/v1/workflows`, which is configuration; whether
+ * *this* project may take that edge is answered only by its own `transitions`
+ * (`docs/API.md` §2.2). A move the created project does not list is not posted
+ * at all, and every outcome — moved, not moved, unknown — is announced, because
+ * the project exists in all three.
  *
  * **Nothing is inserted optimistically.** A project renders twice on `/projects`
  * — as a card and as a row — and the filter island dedupes by `data-code`, so a
  * hand-built insert would mean re-implementing `presentation.ts` in the browser.
- * The surface is repainted by navigating to itself through the client router,
- * which keeps the SSE connection and every other island alive; `location.reload`
- * would tear both down.
+ * The surface is repainted by navigating through the client router, which keeps
+ * the SSE connection and every other island alive; `location.reload` would tear
+ * both down. From the board that navigation is `/board?project=CODE`, so the
+ * card appears in whichever band the *server* put it in rather than the one this
+ * module hoped for.
  */
 
 import { navigate } from "astro:transitions/client";
 
-import { postProject } from "../../lib/api/client";
-import type { ProjectCreateIn } from "../../lib/api/domain";
+import { postProject, postProjectTransition } from "../../lib/api/client";
+import type { ProjectCreateIn, ProjectDetail } from "../../lib/api/domain";
 import { toast } from "../../lib/toast";
 import { mountMenus } from "../../lib/ui/menu";
+import type { ProjectPlacement } from "../board/board-model";
 import { mountDateFields, renderDateControl } from "../ui/date-field";
 import { setPending } from "./dom";
 import {
   CREATE_PROJECT_CODE_RACE,
   CREATE_PROJECT_INCOMPLETE,
+  CREATE_PROJECT_MOVE_ILLEGAL_TITLE,
+  CREATE_PROJECT_MOVE_REASON_MISSING,
+  CREATE_PROJECT_MOVE_REFUSED_TITLE,
+  CREATE_PROJECT_MOVE_UNKNOWN_DETAIL,
+  CREATE_PROJECT_MOVE_UNKNOWN_TITLE,
   CREATE_PROJECT_VALUE_INVALID,
+  createProjectDestinationTitle,
   createProjectDuplicateWarning,
+  createProjectLandedDetail,
+  createProjectMoveIllegalDetail,
+  createProjectMoveRefusedDetail,
+  createProjectPlacementFields,
+  createProjectPlacementNote,
 } from "./create-project-copy";
 import { failureCopy, joinFields } from "./messages";
+
+/**
+ * Where the surface that opened the sheet wants the project to land.
+ *
+ * Derived from {@link ProjectPlacement} rather than re-declared, so the band that offers the
+ * gesture and the sheet that performs it cannot drift: `blocked` is excluded because a blocked
+ * band never opens this — its ghost card renders dead instead (`board-model.ts`).
+ *
+ * `null` is the ordinary case (`/projects`): create the project and let the workflow decide.
+ */
+export type CreateProjectPlacement = Exclude<
+  ProjectPlacement,
+  { kind: "blocked" }
+>;
 
 /**
  * The document event that opens the sheet.
@@ -52,8 +91,18 @@ import { failureCopy, joinFields } from "./messages";
  * has to import another to offer creation: the page header, the empty state and
  * anything added later all say the same sentence into the room, and exactly one
  * listener answers it.
+ *
+ * Its `detail` is the landing band, or `null` for a surface that has none. Typed through the
+ * augmentation below rather than narrowed at the listener: `CustomEvent.detail` is `any` in
+ * the DOM lib, and casting it back would be exactly the assertion `FRONTEND.md` §1 forbids.
  */
 export const CREATE_PROJECT_EVENT = "aztec:create-project";
+
+declare global {
+  interface DocumentEventMap {
+    [CREATE_PROJECT_EVENT]: CustomEvent<CreateProjectPlacement | null>;
+  }
+}
 
 /** The facets the sheet's pickers are addressed by; the markup's side of the pact. */
 const FACET = {
@@ -115,15 +164,32 @@ export function mountCreateProject(root: HTMLElement): () => void {
    */
   let acknowledged: string | null = null;
 
-  const open = (): void => {
+  /**
+   * The band this sheet was opened for, held for the whole submission.
+   *
+   * Captured at open and never re-read from the DOM: the rail underneath can be repainted by
+   * the stream while the form is being filled in, and a destination that changed under the
+   * operator is a project landing somewhere nobody asked for.
+   */
+  let placement: CreateProjectPlacement | null = null;
+
+  const open = (landing: CreateProjectPlacement | null): void => {
     if (dialog.open) return;
     acknowledged = null;
+    placement = landing;
     resetForm(dialog, form, defaults);
+    applyPlacement(dialog, landing);
     dialog.showModal();
     form.querySelector<HTMLInputElement>("[name='name']")?.focus();
   };
 
-  document.addEventListener(CREATE_PROJECT_EVENT, open, { signal });
+  document.addEventListener(
+    CREATE_PROJECT_EVENT,
+    (event) => {
+      open(event.detail);
+    },
+    { signal },
+  );
 
   document.addEventListener(
     "click",
@@ -132,7 +198,7 @@ export function mountCreateProject(root: HTMLElement): () => void {
       if (!(target instanceof Element)) return;
       if (target.closest("[data-action='open-create-project']") === null)
         return;
-      open();
+      open(null);
     },
     { signal },
   );
@@ -155,7 +221,7 @@ export function mountCreateProject(root: HTMLElement): () => void {
       if (target.closest("[data-action='create-anyway']") !== null) {
         acknowledged = duplicateKey(dialog, form);
         showDuplicate(dialog, null);
-        void submit(dialog, form, acknowledged);
+        void submit(dialog, form, acknowledged, placement);
       }
     },
     { signal },
@@ -165,7 +231,7 @@ export function mountCreateProject(root: HTMLElement): () => void {
     "submit",
     (event) => {
       event.preventDefault();
-      void submit(dialog, form, acknowledged);
+      void submit(dialog, form, acknowledged, placement);
     },
     { signal },
   );
@@ -349,6 +415,7 @@ async function submit(
   dialog: HTMLDialogElement,
   form: HTMLFormElement,
   acknowledged: string | null,
+  placement: CreateProjectPlacement | null,
 ): Promise<void> {
   const name = textValue(form, "name");
   const client = menuValue(dialog, FACET.client);
@@ -363,6 +430,20 @@ async function submit(
   ) {
     showDuplicate(dialog, null);
     showError(dialog, CREATE_PROJECT_INCOMPLETE);
+    return;
+  }
+
+  // Asked here rather than after the POST, because the alternative is a project that exists
+  // and a move refused for a field the form could have collected in the same breath.
+  const moveReason = textValue(form, "move_reason");
+  if (
+    placement !== null &&
+    placement.kind === "one-hop" &&
+    placement.requiresReason &&
+    moveReason === ""
+  ) {
+    showDuplicate(dialog, null);
+    showError(dialog, CREATE_PROJECT_MOVE_REASON_MISSING);
     return;
   }
 
@@ -443,12 +524,165 @@ async function submit(
   // Announced before the navigation, not after: the toast region lives on the
   // shell, which survives a client-router swap, while anything queued after the
   // await would land on a page that has already replaced this script's DOM.
-  toast({
-    kind: "success",
-    title: "Proyecto creado",
-    detail: `${created.code} quedó en ${created.state.label}.`,
+  await land(created, placement, moveReason);
+
+  // Reconciled with the server, never with our guess at where the project ended up: the board
+  // re-reads the queue and draws the card in whichever band it is actually standing in.
+  await navigate(
+    placement === null
+      ? window.location.href
+      : `/board?project=${encodeURIComponent(created.code)}`,
+  );
+}
+
+/**
+ * Puts the created project in the band the operator pressed, and says what happened.
+ *
+ * Legality is re-checked against **the record**, not against the graph the band was drawn
+ * from: `created.transitions` is what this project may do right now, while the workflow
+ * catalog only says which arrows an operator drew (`docs/API.md` §2.2). An absent transition
+ * is therefore not posted at all — a refusal we can see coming is not worth a request.
+ *
+ * Every arm announces, including the ones that failed halfway: the project exists in all of
+ * them, so an operator left without a toast would go looking for a project they were never
+ * told about.
+ */
+async function land(
+  created: ProjectDetail,
+  placement: CreateProjectPlacement | null,
+  reason: string,
+): Promise<void> {
+  if (
+    placement === null ||
+    placement.kind === "initial" ||
+    created.state.code === placement.stateCode
+  ) {
+    toast({
+      kind: "success",
+      title: "Proyecto creado",
+      detail: createProjectLandedDetail(created.code, created.state.label),
+    });
+    return;
+  }
+
+  const move = created.transitions.find(
+    (transition) => transition.to_state.code === placement.stateCode,
+  );
+  if (move === undefined) {
+    toast({
+      kind: "error",
+      title: CREATE_PROJECT_MOVE_ILLEGAL_TITLE,
+      detail: createProjectMoveIllegalDetail(created.code, created.state.label),
+    });
+    return;
+  }
+
+  const moved = await postProjectTransition(created.code, {
+    to_state: placement.stateCode,
+    reason,
   });
-  await navigate(window.location.href);
+  if (moved.ok) {
+    toast({
+      kind: "success",
+      title: "Proyecto creado",
+      detail: createProjectLandedDetail(
+        moved.data.code,
+        moved.data.state.label,
+      ),
+    });
+    return;
+  }
+
+  const error = moved.error;
+  if (error.kind === "network") {
+    toast({
+      kind: "error",
+      title: CREATE_PROJECT_MOVE_UNKNOWN_TITLE,
+      detail: CREATE_PROJECT_MOVE_UNKNOWN_DETAIL,
+    });
+    return;
+  }
+  if (error.kind === "transition_not_allowed") {
+    toast({
+      kind: "error",
+      title: CREATE_PROJECT_MOVE_ILLEGAL_TITLE,
+      detail: createProjectMoveIllegalDetail(created.code, created.state.label),
+    });
+    return;
+  }
+  // A refusal naming fields is the common one — a motive the edge demanded, or an attribute
+  // `requires_fields` names — so what is missing is quoted rather than summarised away.
+  const missing =
+    error.kind === "validation" ? joinFields(Object.keys(error.fields)) : "";
+  toast({
+    kind: "error",
+    title: CREATE_PROJECT_MOVE_REFUSED_TITLE,
+    detail:
+      missing === ""
+        ? `${createProjectMoveRefusedDetail(created.code, created.state.label, "")} ${failureCopy(error).detail}`
+        : createProjectMoveRefusedDetail(
+            created.code,
+            created.state.label,
+            missing,
+          ),
+  });
+}
+
+/**
+ * Paints the destination into the sheet: its heading, its note, and the motive field.
+ *
+ * Everything is reset for `null` rather than left as it was, because one dialog serves both
+ * doors on the board — a ghost card and the ordinary button — and a heading left over from the
+ * previous open would name a band this project is not going to.
+ */
+function applyPlacement(
+  dialog: HTMLDialogElement,
+  placement: CreateProjectPlacement | null,
+): void {
+  const title = dialog.querySelector<HTMLElement>(
+    "[data-field='create-project-title']",
+  );
+  if (title !== null) {
+    title.textContent =
+      placement === null
+        ? (title.dataset["default"] ?? "")
+        : createProjectDestinationTitle(placement.stateLabel);
+  }
+
+  const note = dialog.querySelector<HTMLElement>(
+    "[data-field='create-project-placement']",
+  );
+  if (note !== null) {
+    const sentences =
+      placement === null || placement.kind !== "one-hop"
+        ? []
+        : [
+            createProjectPlacementNote(
+              placement.stateLabel,
+              placement.transitionLabel,
+            ),
+            ...(placement.requiresFields.length === 0
+              ? []
+              : [
+                  createProjectPlacementFields(
+                    placement.stateLabel,
+                    joinFields(placement.requiresFields),
+                  ),
+                ]),
+          ];
+    note.hidden = sentences.length === 0;
+    note.textContent = sentences.join(" ");
+  }
+
+  const field = dialog.querySelector<HTMLElement>(
+    "[data-field='create-project-move-reason']",
+  );
+  if (field !== null) {
+    field.hidden =
+      placement === null ||
+      placement.kind !== "one-hop" ||
+      !placement.requiresReason;
+  }
 }
 
 /** Shows or clears the sheet's inline failure line. */

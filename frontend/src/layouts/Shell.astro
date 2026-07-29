@@ -156,7 +156,7 @@ const appGuard = appGuardScript(
     <a class="visually-hidden skip-link" href="#contenido"
       >Saltar al contenido</a
     >
-    <div class="shell">
+    <div class="shell" data-wide={wide ? "" : undefined}>
       <aside class="sidebar" id="sidebar" transition:persist="sidebar">
         <div class="sidebar-top">
           <a class="brand" href="/" aria-label="Aztec Ops, ir al resumen">
@@ -465,6 +465,23 @@ const appGuard = appGuardScript(
         min-height: 100dvh;
       }
 
+      /*
+       * A `wide` region is a screen that governs itself: its own columns scroll
+       * inside themselves, so the page behind them must not scroll too. `min-height`
+       * lets the shell grow to its content, which on the board put a second,
+       * outer scrollbar on the window and pushed the rail's last card below the
+       * fold where no amount of scrolling inside the rail could reach it — two
+       * scrollbars for one list, and the wrong one holding the end of it.
+       *
+       * `height` pins the shell to the viewport instead, which is what makes the
+       * `flex: 1; min-height: 0` chain below resolve against real space. `dvh`
+       * rather than `vh` so a mobile browser's collapsing chrome does not hide
+       * the bottom of the screen behind itself.
+       */
+      .shell[data-wide] {
+        height: 100dvh;
+      }
+
       .skip-link:focus-visible {
         position: fixed;
         inset: var(--space-2) auto auto var(--space-2);
@@ -626,6 +643,18 @@ const appGuard = appGuardScript(
         flex-direction: column;
       }
 
+      /*
+       * A grid item's `min-height` is `auto`, which means "never smaller than my
+       * content" — so pinning `.shell` to the viewport was not enough on its own:
+       * this column still grew to the full height of the board's rail and pushed
+       * the page into scrolling behind it. `0` lets it be exactly the row it was
+       * given, which is what hands the bounded height down to `.content[data-wide]`
+       * and lets the rail and the task columns scroll inside themselves.
+       */
+      .shell[data-wide] .main-col {
+        min-height: 0;
+      }
+
       .topbar {
         position: sticky;
         top: 0;
@@ -735,6 +764,16 @@ const appGuard = appGuardScript(
       @media (max-width: 1023px) {
         .shell {
           grid-template-columns: 1fr;
+        }
+
+        /*
+         * Lying down, a `wide` region stacks — the board's rail becomes a
+         * horizontal strip above its columns — so the page is the scroller
+         * again and pinning it to the viewport would trap the stack inside one
+         * screen with no way to reach the bottom of it.
+         */
+        .shell[data-wide] {
+          height: auto;
         }
 
         .sidebar {

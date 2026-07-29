@@ -89,3 +89,97 @@ export const CREATE_PROJECT_NO_VALUE_HINT =
 export function createProjectDuplicateWarning(name: string): string {
   return `Ya existe «${name}» para ese cliente. ¿Es un encargo distinto?`;
 }
+
+/* --- Creating into a band of the rail ------------------------------------- */
+
+/**
+ * The sheet's heading when a band of the board asked for the project.
+ *
+ * The destination is named in the head rather than implied by where the operator pressed:
+ * the sheet is a right-anchored surface that covers the rail, so by the time the form is on
+ * screen the band that asked for it is no longer visible.
+ *
+ * @param stateLabel - The band's own label, as the workflow publishes it.
+ */
+export function createProjectDestinationTitle(stateLabel: string): string {
+  return `Nuevo proyecto en «${stateLabel}»`;
+}
+
+/**
+ * What will happen after the project exists, said before it does.
+ *
+ * Two acts, not one — a creation and a transition — and the operator is entitled to know that
+ * before pressing, because the second one can fail on its own and leave the first one standing.
+ */
+export function createProjectPlacementNote(
+  stateLabel: string,
+  transitionLabel: string,
+): string {
+  return `Se creará y se moverá con «${transitionLabel}» hasta «${stateLabel}».`;
+}
+
+/** What that move demands be filled in, when the operator's graph declares requirements. */
+export function createProjectPlacementFields(
+  stateLabel: string,
+  fields: string,
+): string {
+  return `Para llegar a «${stateLabel}» hace falta rellenar: ${fields}.`;
+}
+
+/** Why the form refuses to submit when the landing move demands a written motive. */
+export const CREATE_PROJECT_MOVE_REASON_MISSING =
+  "Escribe el motivo del movimiento: ese paso no se puede dar sin él.";
+
+/** Where the project ended up, named in every outcome — success and failure alike. */
+export function createProjectLandedDetail(
+  code: string,
+  stateLabel: string,
+): string {
+  return `${code} quedó en «${stateLabel}».`;
+}
+
+/**
+ * The move was still configured but the created project does not offer it.
+ *
+ * The graph said the edge exists; the record — which is the only authority on what it may do
+ * right now — did not list it. The project exists either way, so the notice names where it is
+ * and how to finish the job by hand.
+ */
+export const CREATE_PROJECT_MOVE_ILLEGAL_TITLE =
+  "Creamos el proyecto, pero ese movimiento ya no es legal";
+
+export function createProjectMoveIllegalDetail(
+  code: string,
+  stateLabel: string,
+): string {
+  return `${code} quedó en «${stateLabel}». Arrástralo por el carril cuando quieras moverlo.`;
+}
+
+/** The server refused the move on its own terms: a motive or a field it wanted. */
+export const CREATE_PROJECT_MOVE_REFUSED_TITLE =
+  "Creamos el proyecto, pero no pudimos moverlo";
+
+/**
+ * @param missing - Already-Spanish enumeration of what the server named, or `""` when it
+ *   named nothing and the reason has to come from the failure's own copy.
+ */
+export function createProjectMoveRefusedDetail(
+  code: string,
+  stateLabel: string,
+  missing: string,
+): string {
+  const tail = missing === "" ? "" : ` Falta: ${missing}.`;
+  return `${createProjectLandedDetail(code, stateLabel)}${tail}`;
+}
+
+/**
+ * The transition request never came back.
+ *
+ * Deliberately does not assert an outcome: a request that failed in transit may still have
+ * been applied, and telling the operator it was not is a lie the board would contradict.
+ */
+export const CREATE_PROJECT_MOVE_UNKNOWN_TITLE =
+  "Creamos el proyecto, pero no sabemos si se movió";
+
+export const CREATE_PROJECT_MOVE_UNKNOWN_DETAIL =
+  "No sabemos si el movimiento se aplicó. Míralo en el tablero.";
