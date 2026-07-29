@@ -62,8 +62,15 @@ function errorDetail(code: ApiErrorCode): string {
       return "La cola de proyectos no respondió a esta petición.";
     case "validation_error":
       return "El servidor rechazó los parámetros con los que pedimos el tablero.";
+    case "authentication_required":
+    case "invalid_token":
+    case "invalid_credentials":
+      return "Tu sesión ya no es válida. Vuelve a iniciar sesión para ver el tablero.";
+    case "permission_denied":
+      return "Tu cuenta no tiene permiso para leer el portafolio completo.";
     case "transition_not_allowed":
     case "conflicting_state":
+    case "domain_error":
     case "unknown_error":
       return "El servidor respondió con un error inesperado al armar el tablero.";
     default:

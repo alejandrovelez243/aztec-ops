@@ -1,0 +1,190 @@
+---
+/**
+ * The project's work: one row per task, in the server's triage order.
+ *
+ * Read-only by design today. `TaskView` carries no `transitions`, and the only
+ * legal source of a transition control is the API's own list of legal moves
+ * (`docs/API.md` §2.2) — inventing one from the task's state code is exactly
+ * the guess this codebase refuses, so the row shows state and lateness and
+ * stops there.
+ *
+ * A dependency that resolved to no task keeps the operation's own words
+ * (`raw_label`): 61 of the 82 source tasks describe their prerequisite in
+ * prose, so an unresolved reference is the normal case, not a defect.
+ */
+import DueChip from "./DueChip.astro";
+import OwnerBadge from "./OwnerBadge.astro";
+import StateChip from "./StateChip.astro";
+import type { TaskItem } from "../../lib/api/domain";
+
+export interface Props {
+  projectCode: string;
+  tasks: readonly TaskItem[];
+  /** The project read's `updated_at`; the floor for live patches on the rows. */
+  updatedAt: string;
+}
+
+const { projectCode, tasks, updatedAt } = Astro.props;
+---
+
+<div class="tasks" data-tasks data-project-code={projectCode}>
+  <p class="empty small" data-tasks-empty hidden={tasks.length > 0}>
+    Este proyecto todavía no tiene tareas registradas.
+  </p>
+
+  <div class="table-wrap card" data-tasks-wrap hidden={tasks.length === 0}>
+    <table>
+      <caption class="visually-hidden">Tareas del proyecto</caption>
+      <thead>
+        <tr>
+          <th class="label" scope="col">Tarea</th>
+          <th class="label" scope="col">Estado</th>
+          <th class="label" scope="col">Responsable</th>
+          <th class="label" scope="col">Vence</th>
+          <th class="label" scope="col">Depende de</th>
+        </tr>
+      </thead>
+      <tbody data-task-rows>
+        {
+          tasks.map((task) => (
+            <tr data-task-row data-code={task.code} data-updated-at={updatedAt}>
+              <td class="col-title">
+                <span class="title" data-field="task-title">
+                  {task.title}
+                </span>
+                <span class="chip chip-code">{task.code}</span>
+              </td>
+              <td>
+                <StateChip
+                  label={task.state.label}
+                  category={task.state.category}
+                  color={task.state.color ?? null}
+                />
+              </td>
+              <td>
+                <OwnerBadge
+                  alias={task.assignee?.alias ?? null}
+                  label={task.assignee?.label ?? null}
+                  compact
+                />
+              </td>
+              <td class="col-due">
+                <DueChip date={task.due_date ?? null} />
+                <span class="chip tone-rojo" data-field="overdue" hidden={!task.is_overdue}>
+                  vencida
+                </span>
+              </td>
+              <td class="col-deps" data-field="dependencies">
+                {task.dependencies.length === 0 && <span class="small">—</span>}
+                {task.dependencies.map((dependency) => (
+                  <span class="chip chip-code dep" title={dependency.raw_label}>
+                    {dependency.task_code ?? dependency.raw_label}
+                  </span>
+                ))}
+              </td>
+            </tr>
+          ))
+        }
+      </tbody>
+    </table>
+  </div>
+
+  {/* One home for the row markup; the island clones it when a task is created
+      while the page is open. */}
+  <template data-template="task">
+    <tr data-task-row>
+      <td class="col-title">
+        <span class="title" data-field="task-title"></span>
+        <span class="chip chip-code" data-field="task-code"></span>
+      </td>
+      <td>
+        <span class="chip tone-piedra" data-state-chip>
+          <span class="dot" aria-hidden="true"></span>
+          <span data-field="state-label"></span>
+        </span>
+      </td>
+      <td><span class="small" data-field="task-owner"></span></td>
+      <td class="col-due">
+        <span class="chip tone-piedra" data-due-chip><span data-field="due-label"></span></span>
+        <span class="chip tone-rojo" data-field="overdue" hidden>vencida</span>
+      </td>
+      <td class="col-deps" data-field="dependencies"></td>
+    </tr>
+  </template>
+</div>
+
+<script>
+  import { onPage } from "./island";
+  import { mountTasks } from "./tasks";
+
+  onPage("[data-tasks]", mountTasks);
+</script>
+
+<style>
+  .table-wrap {
+    overflow-x: auto;
+    padding: 0;
+  }
+
+  .table-wrap[hidden],
+  .empty[hidden] {
+    display: none;
+  }
+
+  table {
+    width: 100%;
+    min-width: 640px;
+  }
+
+  thead th {
+    text-align: left;
+    padding: var(--space-3);
+    border-bottom: var(--border-width) solid var(--hairline);
+  }
+
+  tbody tr {
+    border-bottom: var(--border-width) solid var(--hairline);
+  }
+
+  tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  td {
+    padding: var(--space-3);
+    vertical-align: middle;
+  }
+
+  .col-title {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+    min-width: 220px;
+  }
+
+  .col-due {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    white-space: nowrap;
+  }
+
+  .col-deps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1);
+    max-width: 260px;
+  }
+
+  .dep {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: inline-block;
+  }
+
+  .chip[hidden] {
+    display: none;
+  }
+</style>

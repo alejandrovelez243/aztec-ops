@@ -134,25 +134,79 @@ export function moveErrorCopy(
         title: `${projectCode} ya no está en el portafolio`,
         detail: "Actualiza el tablero para ver el estado real.",
       };
+    case "auth":
+      return {
+        title: "Tu sesión ya no es válida",
+        detail: `${projectCode} sigue donde estaba. Vuelve a iniciar sesión para mover trabajo.`,
+      };
+    case "permission_denied":
+      return {
+        title: "No tienes permiso para este movimiento",
+        detail: `Requiere la capacidad ${capabilityName(error.required)}. Pídesela a quien administra el portafolio.`,
+      };
     case "network":
       return {
         title: "Sin conexión con el servidor",
         detail: `El movimiento de ${projectCode} no se guardó. Vuelve a intentarlo.`,
       };
     case "unknown":
-      return unknownCopy(error.backendCode, error.details, projectCode);
+      return unknownCopy(error.backendCode, projectCode);
     default:
       return exhausted(error);
   }
 }
 
 /**
- * The `error` arm of a moves lookup, worded the same way as a refused move so the menu and
- * the drag never explain the same failure differently.
+ * Spanish name of a capability the API named in a 403.
+ *
+ * `ops_lead` is the only one the product has today; anything else renders under its wire
+ * name, because inventing a translation for a capability we do not know is how a refusal
+ * stops being actionable.
+ */
+function capabilityName(required: string): string {
+  return required === "ops_lead" ? "«líder de operaciones»" : `«${required}»`;
+}
+
+/**
+ * Words a failed *lookup* — asking a project what it may do, not asking it to do something.
+ *
+ * Kept apart from {@link moveErrorCopy} because the two failures are different sentences: one
+ * says a move was refused, the other says we never learned which moves exist.
+ */
+function lookupErrorCopy(error: ApiError): MoveErrorCopy {
+  switch (error.kind) {
+    case "network":
+      return {
+        title: "Sin conexión con el servidor",
+        detail:
+          "No pudimos consultar los movimientos legales de este proyecto. Vuelve a intentarlo.",
+      };
+    case "not_found":
+      return {
+        title: "El proyecto ya no está en el portafolio",
+        detail: "Actualiza el tablero para ver el estado real.",
+      };
+    case "auth":
+      return {
+        title: "Tu sesión ya no es válida",
+        detail: "Vuelve a iniciar sesión para consultar y mover trabajo.",
+      };
+    default:
+      return {
+        title: "No pudimos consultar los movimientos",
+        detail:
+          "El servidor no devolvió las transiciones legales, así que el tablero no puede ofrecer ninguna.",
+      };
+  }
+}
+
+/**
+ * The `error` arm of a moves lookup, plus the legality of every transition the project
+ * reported: legal in the workflow, and satisfiable with the data the project has today.
  */
 function toMovesResult(result: Result<ProjectDetail>): MovesResult {
   if (!result.ok) {
-    const copy = moveErrorCopy(result.error, "El proyecto", "otro estado");
+    const copy = lookupErrorCopy(result.error);
     return { kind: "error", title: copy.title, detail: copy.detail };
   }
   const project = result.data;
@@ -215,18 +269,8 @@ function validationDetail(fields: Record<string, string[]>): string {
 
 function unknownCopy(
   backendCode: string | null,
-  details: Record<string, unknown>,
   projectCode: string,
 ): MoveErrorCopy {
-  if (backendCode === "permission_denied") {
-    const required = details["required"];
-    const capability =
-      required === "ops_lead" ? "líder de operaciones" : "un permiso adicional";
-    return {
-      title: "No tienes permiso para este movimiento",
-      detail: `Necesitas el rol de ${capability}. Pídeselo a quien administra el portafolio.`,
-    };
-  }
   if (backendCode === "conflicting_state") {
     return {
       title: `${projectCode} cambió mientras lo movías`,

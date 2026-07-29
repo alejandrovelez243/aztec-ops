@@ -881,17 +881,21 @@ const staleSentence =
      */
     async function performMove(request: MoveRequest): Promise<void> {
       const { card, code, option, targetLabel, placement } = request;
+      // Pending from the first instant, dialog included: a card sitting in a column it has
+      // not been accepted into must never look settled.
+      setPending(card, true);
+
       let reason = "";
       if (option.requiresReason) {
         const given = await askReason(code, targetLabel);
         if (given === null) {
+          setPending(card, false);
           if (placement.kind === "moved") moveCard(card, placement.from, "travel");
           return;
         }
         reason = given;
       }
 
-      setPending(card, true);
       const pending: PendingMove = {
         card,
         code,
@@ -1014,7 +1018,8 @@ const staleSentence =
     function dropFromBoard(
       card: HTMLElement,
       code: string,
-      stateLabel: string,
+      /** The state's label when we have one; its bare code when the envelope is all we got. */
+      stateName: string,
     ): void {
       const column = columnOf(card);
       const siblings =
@@ -1028,7 +1033,7 @@ const staleSentence =
       toast({
         kind: "info",
         title: `${code} salió del tablero`,
-        detail: `Pasó a ${stateLabel}, un estado que hoy no tiene columna. Actualiza el tablero para verlo.`,
+        detail: `Pasó a ${stateName}, un estado que hoy no tiene columna. Actualiza el tablero para verlo.`,
       });
     }
 

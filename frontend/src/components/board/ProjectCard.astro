@@ -183,7 +183,16 @@ const blockerLabel =
     border-radius: var(--radius-full);
     border: 2px solid var(--cobalto-papel);
     border-top-color: var(--cobalto);
-    animation: spin 700ms linear infinite;
+    animation: gira 700ms linear infinite;
+  }
+
+  /* Declared here rather than borrowed from base.css: a scoped block renames the
+     keyframes it owns, and an animation that silently resolves to nothing is worse
+     than a duplicated four-line rule. */
+  @keyframes gira {
+    to {
+      transform: rotate(1turn);
+    }
   }
 
   .pcard-title {

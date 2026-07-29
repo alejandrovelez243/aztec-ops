@@ -23,7 +23,8 @@ import BrandMark from "../components/ui/BrandMark.astro";
 import Icon from "../components/ui/Icon.astro";
 import type { IconName } from "../components/ui/Icon.astro";
 import ConnectionBadge from "../islands/ConnectionBadge.astro";
-import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
+import { appGuardScript } from "../lib/auth/guard-inline";
+import { SESSION_COOKIE_NAME, SESSION_STORAGE_KEY } from "../lib/auth/tokens";
 
 /** One breadcrumb; the last one renders as the current page (no link). */
 export interface Crumb {
@@ -68,6 +69,17 @@ const backFallback =
   crumbs.length > 1 ? (crumbs[crumbs.length - 2]?.href ?? "/") : "/";
 
 const LOGIN_PATH = "/login";
+
+/**
+ * Runs before paint, ahead of any bundle, so a signed-out visitor never sees a
+ * frame of the app. The middleware is the authoritative guard; this only spares
+ * the flash, and both read the same cookie on purpose (`lib/auth/guard-inline.ts`).
+ */
+const appGuard = appGuardScript(
+  SESSION_COOKIE_NAME,
+  SESSION_STORAGE_KEY,
+  LOGIN_PATH,
+);
 ---
 
 <!doctype html>
@@ -75,18 +87,8 @@ const LOGIN_PATH = "/login";
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script is:inline define:vars={{ key: SESSION_STORAGE_KEY, login: LOGIN_PATH }}>
-      // Route guard, before paint: without a stored session, app pages bounce
-      // to the login screen carrying where the visitor was headed.
-      try {
-        if (window.localStorage.getItem(key) === null) {
-          window.location.replace(
-            `${login}?next=${encodeURIComponent(window.location.pathname + window.location.search)}`,
-          );
-        }
-      } catch {
-        /* storage disabled: the API's 401s will answer instead */
-      }
+    <script is:inline set:html={appGuard}></script>
+    <script is:inline>
       // Sidebar state, before paint, so the rail never flashes open.
       try {
         document.documentElement.dataset.sidebar =

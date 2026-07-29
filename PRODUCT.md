@@ -66,11 +66,19 @@ activity is surfaced as a risk rather than sitting quietly at the bottom of a li
 - Prioritized queue with an explainable score, plus manual override with a reason.
 - Configurable taxonomies and workflows, editable from the Django admin without a deploy.
 - Load per person, computed from tasks rather than stored.
-- Real authentication: `POST /auth/token` exchanges credentials for an access/refresh pair; the
-  access token also travels as an HttpOnly cookie so the SSE stream can authenticate. A route
-  guard keeps signed-out visitors on the login screen. Overriding the ranking and rebuilding the
-  portfolio require the ops-lead capability, which the API reports at sign-in — the frontend
-  renders those controls from that answer, never by decoding the token.
+- Real authentication. `POST /auth/token` exchanges username and password for an access/refresh
+  pair and also sets the access token as an HttpOnly cookie, because `EventSource` cannot send a
+  header and the live stream would otherwise be unauthenticated. Writes present the token as
+  `Authorization: Bearer`; the cookie is honoured on safe methods only, so no cross-origin page
+  can forge a state change. Access tokens are short-lived and renewed silently through
+  `POST /auth/token/refresh`; signing out clears the cookie and the local session.
+- **Permissions are two levels, not a matrix.** This is a collaborative tool: any authenticated
+  member may act on any project or task — transition it, raise or resolve a blocker, add a note.
+  "Lo mío" is a filter, never a permission. Exactly three actions need the ops-lead capability,
+  because all three overrule the engine: setting a priority override, clearing it, and rebuilding
+  the whole portfolio's scores. Recomputing a single project is not gated. The API reports
+  `is_ops_lead` at sign-in, so the interface renders those controls from the server's answer and
+  never by decoding the token; the server refuses them regardless of what the UI shows.
 - Direct manipulation on the board: work moves between states by dragging its card — always
   through the workflow's legal transitions; illegal targets are visibly locked, and every drag
   has a keyboard/menu equivalent.
@@ -115,6 +123,9 @@ typography are available or assumed, and none may be invented.
 6. **Every action gets an answer.** Hover, press, in-flight, success and failure are all
    visibly acknowledged, and a change caused by someone else arrives as visible motion, not a
    silent re-render. Silent success is a bug; silent failure is a defect.
+7. **The account is the author.** Every write is attributed to a verified account, never to a
+   claimed name, which is what makes the activity trail evidence instead of a story. A refusal
+   states which capability was missing rather than pretending the action never happened.
 
 ## Accessibility & Inclusion
 

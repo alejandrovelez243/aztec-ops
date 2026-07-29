@@ -43,7 +43,7 @@ the Spanish label; the label is data and an operator may rename it from the admi
 `EngagementType` also drives which workflow a project follows, through `WorkflowBinding`. A
 Diagnostic can have a shorter lifecycle than a recurring maintenance engagement.
 
-## 3. The three operational conditions (§3.3 invariants)
+## 3. The three operational conditions (§4.4 invariants)
 
 These are the definitions. Do not re-derive them locally in a view or a serializer; they live
 as specifications in `backend/apps/prioritization` / risk domain code (§5) and everything else reads

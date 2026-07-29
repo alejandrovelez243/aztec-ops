@@ -17,11 +17,13 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
+    "@astrojs/node": "^11.0.3",
     "astro": "^7.1.5"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
     "@eslint/js": "^10.0.1",
+    "@types/node": "^26.1.2",
     "eslint": "^10.8.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-astro": "^3.0.1",

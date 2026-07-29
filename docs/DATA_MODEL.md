@@ -22,7 +22,7 @@ Apps in dependency order: `catalog` → `accounts` → `workflow` → `portfolio
 
 ## 1. `backend/apps/catalog` — taxonomies
 
-Six tables the operation edits from the admin without a deploy (`ARCHITECTURE` §3.1). They share
+Six tables the operation edits from the admin without a deploy (`ARCHITECTURE` §4.2). They share
 an abstract base, so the first five columns are identical everywhere.
 
 ### `TaxonomyBase` (abstract, no table)
@@ -171,7 +171,7 @@ inherited. Added on top:
 | `weekly_capacity_points` | `smallint` | no | `20` | — | Denominator of owner load, constrained `> 0`. The numerator is computed from `work_task`, never stored here. |
 
 There is no `portfolio_teammember`. Whoever is assigned a task is whoever signs in to move it, so
-they are one row (`ARCHITECTURE` §3.3b). `is_active` comes from `AbstractUser` rather than being
+they are one row (`ARCHITECTURE` §4.1). `is_active` comes from `AbstractUser` rather than being
 duplicated. Seed users are created with `set_unusable_password()`: they are real assignees who
 simply have no password yet.
 

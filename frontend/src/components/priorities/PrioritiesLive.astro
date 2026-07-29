@@ -753,6 +753,7 @@ const { renderedAt } = Astro.props;
         subscribe("project.priority.recalculated", (envelope) => {
           pending = pending
             .then(() => applyRecalculation(root, board, envelope))
+            // One failed patch must not stall every envelope behind it.
             .catch(() => undefined);
         }),
       );

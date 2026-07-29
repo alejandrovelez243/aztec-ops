@@ -60,7 +60,58 @@ that **reversed an earlier one**; the ADR is where the reversal is argued.
 
 ## 3. The shape of the system
 
-### 3.1 Deployment topology
+### 3.1 Containers, and the path a push takes
+
+Everything runs on one Compose network. Two things published to the host are what a person
+actually touches — the Astro dev server on 4321 and the API on 8000 — and PostgreSQL and Redis are
+published too (55433, 56379), deliberately off their default ports so they cannot collide with
+whatever the developer already runs.
+
+The numbered edges are one live update travelling from a write to a pixel. That path is the whole
+product: everything else here exists to make step 4 arrive.
+
+```mermaid
+flowchart TB
+  BROWSER["Operator's browser<br/>fetch for reads and writes<br/>EventSource for the live feed"]
+
+  subgraph net["Docker Compose network"]
+    FE["frontend - Astro 7<br/>published on 4321<br/>SSR for first paint, islands for the live parts"]
+    API["api - uvicorn ASGI<br/>published on 8000<br/>REST /api/v1 and SSE /api/stream"]
+    W["worker - celery<br/>drains the outbox, runs every handler,<br/>executes the scheduled ticks"]
+    B["beat - celery beat<br/>holds the schedule, executes nothing"]
+    PG[("postgres 16 - published on 55433<br/>aggregates, the outbox, ProcessedEvent,<br/>task results, the Beat schedule")]
+    RD[("redis 7 - published on 56379<br/>Celery broker and the aztec.sse channel")]
+  end
+
+  BROWSER -->|"HTML on first load"| FE
+  FE -->|"SSR reads, INTERNAL_API_URL = http://api:8000"| API
+  BROWSER -->|"reads and writes, PUBLIC_API_URL = http://localhost:8000"| API
+  BROWSER -->|"EventSource with the cookie, held open"| API
+
+  API -->|"1 - aggregate, ActivityRecord and OutboxEvent in ONE transaction"| PG
+  API -.->|"2 - on_commit queues a drain"| RD
+  RD -->|"delivers the task"| W
+  W -->|"3 - claims the row with SKIP LOCKED, runs the handlers"| PG
+  W -->|"4 - PUBLISH aztec.sse"| RD
+  RD -.->|"5 - the api is SUBSCRIBEd and writes the SSE frame"| API
+
+  B -->|"enqueues drain-outbox and the two clock ticks"| RD
+  API -.->|"service_healthy gates both"| W
+  API -.->|"service_healthy gates both"| B
+```
+
+Two details in that picture are load-bearing and easy to miss.
+
+**The frontend calls the API by two different names.** Server-side rendering happens inside the
+network and reaches `http://api:8000`; the browser reaches the same service through the published
+port at `http://localhost:8000`. One URL cannot serve both callers, which is why
+`INTERNAL_API_URL` and `PUBLIC_API_URL` both exist.
+
+**The push never leaves PostgreSQL's guarantee to reach Redis.** Step 1 commits the event with the
+change, so a crash anywhere in steps 2 to 5 loses nothing — Beat's sweep finds the unpublished row
+and the path resumes. Redis carries the delivery, never the truth.
+
+### 3.2 Process roles
 
 **Three long-running application processes** and two backing services. There is one worker, and it
 is simultaneously the outbox drain, every event handler and the executor of the scheduled ticks.
@@ -112,7 +163,7 @@ job systems doing one job. One queue per handler is a throughput answer to a pro
 does not have. If a handler ever needs isolating, the honest version is `--queues` plus a routing
 rule for that handler alone, and a measurement in the commit message.
 
-### 3.2 Bounded contexts
+### 3.3 Bounded contexts
 
 Eight Django apps, plus one shared kernel that is **not** a context. An arrow means *may import*.
 
@@ -180,7 +231,7 @@ What the graph is asserting:
   `portfolio.services.read_project_detail` calls `read_project_priority` to attach the score and
   the flags to a project detail. Neither writes into the other's tables.
 
-### 3.3 Layers inside a context
+### 3.4 Layers inside a context
 
 ```
 backend/apps/<context>/
@@ -261,7 +312,7 @@ Two more rules that have no arrow to cross out:
   reading twelve attributes off an object they were handed. This is a projection of self, not a
   business rule, so it does not violate "models.py holds persistence only".
 
-### 3.4 What is stored and what is computed
+### 3.5 What is stored and what is computed
 
 Stated once, here, because it is a deliberate asymmetry that a reader will otherwise diagnose as an
 inconsistency.
@@ -312,7 +363,7 @@ alternative, a profile table joined on every read, buys purity paid for on every
 Two things did **not** move into `accounts`:
 
 - **Owner load.** `weekly_capacity_points` describes the person; the numerator is an aggregation
-  over `work.Task`. That query stays in `portfolio/repositories.py` (§3.2).
+  over `work.Task`. That query stays in `portfolio/repositories.py` (§3.3).
 - **`ActivityRecord.actor`.** It stays a string rather than a foreign key, precisely so the engine
   and the handlers can write records as `system` without a fake user row existing to satisfy a
   constraint. `Note.author` is a string for the same reason, plus one more: a note must survive its
@@ -428,7 +479,7 @@ Hard rules:
 
 **There is no person model here.** `Project.owner`, `Task.assignee` and `Blocker.owner` are foreign
 keys to `AUTH_USER_MODEL`. What stays in `portfolio` is the *question* about a person that only
-this context can answer — `owner_load_for_codes` (§3.2).
+this context can answer — `owner_load_for_codes` (§3.3).
 
 Domain invariants:
 
@@ -840,7 +891,7 @@ one row holding columns from two deliveries while `last_event_id` claims a singl
 | `GET /api/v1/queue` | `ProjectSnapshot` | A list of 22 rows must not pay for a six-table join with per-row aggregates. One index scan: `portfolio_snap_queue` on `(is_archived, -priority_score)` matches the sort, so the plan carries no sort node |
 | `GET /api/v1/projects/{code}` | **the write side** | A single project must not be rendered from a projection a consumer has not rebuilt yet. An operator who has just moved a project and lands on its detail page has to see the move |
 | `GET /api/v1/projects/{code}/tasks` | the write side | Two queries whatever the filters: one `COUNT(*)`, one windowed scan |
-| `GET /api/v1/team/load` | the write side | Aggregated from `work.Task` at read time, never denormalized onto the person (§3.4) |
+| `GET /api/v1/team/load` | the write side | Aggregated from `work.Task` at read time, never denormalized onto the person (§3.5) |
 
 **The snapshot denormalizes facts, never conclusions.** There is no `risk_flags` column and no
 `health` column: both are derived from the row's own counts and dates on every read, so a row nobody
@@ -1010,7 +1061,7 @@ The spreadsheet is converted **once** into Django fixtures committed under
 the runtime path.
 
 **Seeding is not a separate step.** The `api` container runs `migrate` and then `seed` before it
-binds its port, and `worker` and `beat` wait for its healthcheck (§3.1). So `make up` is the whole
+binds its port, and `worker` and `beat` wait for its healthcheck (§3.2). So `make up` is the whole
 bootstrap. That also means `DJANGO_SUPERUSER_USERNAME`,
 `DJANGO_SUPERUSER_PASSWORD`, `DJANGO_SUPERUSER_EMAIL` and `SEED_USER_PASSWORD` must be set in `.env`
 before the first `make up` — they ship empty on purpose, because a default that works is still a
@@ -1105,7 +1156,7 @@ make up                # build, start, migrate, seed, wait on healthchecks
   action or `POST /api/v1/recompute`. A make target would be a third caller that only works from a
   checkout.
 - No `make relay`, no `make outbox`, no `make consumer`: there is no relay and no consumer process
-  any more (§3.1), and `/admin/events/outboxevent/` already filters pending, dispatched and
+  any more (§3.2), and `/admin/events/outboxevent/` already filters pending, dispatched and
   dead-lettered, searches by entity and correlation id, and offers the re-queue action. Three counts
   in a terminal are strictly less than that.
 

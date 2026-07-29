@@ -12,8 +12,13 @@
  * rather than recomputed inside a keystroke handler that runs over every row.
  */
 
-import type { Override, ProjectDetail, QueueItem } from "../../lib/api/domain";
-import { formatInstant } from "./format";
+import type {
+  Blocker,
+  Override,
+  ProjectDetail,
+  QueueItem,
+} from "../../lib/api/domain";
+import { formatInstant, relativeTime } from "./format";
 import { categoryLabel } from "./tone";
 
 /** One project as every list surface renders it. */
@@ -142,6 +147,24 @@ export function overrideSummary(forced: Override | null): string {
       ? `Posición ${forced.position}`
       : `Impulso ${forced.boost ?? ""}`;
   return `${amount} · ${forced.actor} · ${formatInstant(forced.created_at) ?? ""}`;
+}
+
+/**
+ * Who owns an open blocker, since when, and how long it has been open.
+ *
+ * Shared by the server render and by the island that rebuilds the list after a
+ * write, so the two cannot phrase the same fact differently.
+ */
+export function blockerMeta(blocker: Blocker): string {
+  const owner = blocker.owner?.label ?? "Sin responsable";
+  const raised = relativeTime(blocker.raised_at) ?? "";
+  return `${owner} · ${raised} · ${blocker.age_days} d abierto`;
+}
+
+/** When a blocker was cleared, and how long it had been standing. */
+export function resolvedBlockerMeta(blocker: Blocker): string {
+  const resolved = relativeTime(blocker.resolved_at ?? null) ?? "";
+  return `Resuelto ${resolved} · ${blocker.age_days} d abierto`;
 }
 
 /**

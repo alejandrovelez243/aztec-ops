@@ -25,6 +25,17 @@ import { assertNever, toViewState } from "../lib/view-state";
 import type { ViewState } from "../lib/view-state";
 
 /**
+ * Rendered per request, never prerendered.
+ *
+ * The queue is fetched in frontmatter and the session travels as a cookie the
+ * middleware reads off the request — neither exists at build time. Prerendered, this
+ * route bakes one operator's queue into HTML and the guard redirects everybody to
+ * `/login`, which is exactly what the dev server warns about when
+ * `Astro.request.headers` is touched on a static route.
+ */
+export const prerender = false;
+
+/**
  * One page holds the whole portfolio, so the rank plate means what it says.
  *
  * The queue is a ranking: split it across pages and "puesto 03" on page two is a lie

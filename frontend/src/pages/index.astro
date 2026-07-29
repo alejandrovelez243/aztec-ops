@@ -34,8 +34,6 @@ import { getQueue, getTeamLoad } from "../lib/api/client";
 import { toViewState } from "../lib/view-state";
 import "../components/overview/overview.css";
 
-export const prerender = false;
-
 /** One reference instant for the whole render, so two cards cannot straddle midnight. */
 const now = new Date();
 

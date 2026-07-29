@@ -11,7 +11,11 @@ import "../styles/tokens.css";
 import "../styles/base.css";
 import BrandMark from "../components/ui/BrandMark.astro";
 import Icon from "../components/ui/Icon.astro";
-import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
+import { loginGuardScript } from "../lib/auth/guard-inline";
+import { SESSION_COOKIE_NAME, SESSION_STORAGE_KEY } from "../lib/auth/tokens";
+
+/** Runs before paint: see `lib/auth/guard-inline.ts` for why it reads the cookie. */
+const loginGuard = loginGuardScript(SESSION_COOKIE_NAME, SESSION_STORAGE_KEY);
 ---
 
 <!doctype html>
@@ -19,21 +23,7 @@ import { SESSION_STORAGE_KEY } from "../lib/auth/tokens";
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script is:inline define:vars={{ key: SESSION_STORAGE_KEY }}>
-      // Inverse guard: an existing session skips the door entirely.
-      try {
-        if (window.localStorage.getItem(key) !== null) {
-          const next = new URLSearchParams(window.location.search).get("next");
-          const safe =
-            next !== null && next.startsWith("/") && !next.startsWith("//")
-              ? next
-              : "/";
-          window.location.replace(safe);
-        }
-      } catch {
-        /* storage disabled: stay on the form */
-      }
-    </script>
+    <script is:inline set:html={loginGuard}></script>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
